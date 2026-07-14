@@ -1,0 +1,1 @@
+"""THUFootball integration package."""
