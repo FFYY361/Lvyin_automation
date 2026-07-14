@@ -26,12 +26,14 @@ from .models import (
     HeadToHeadSummary,
     MatchResult,
     TeamGameResult,
+    TeamTournamentOutcome,
     TournamentSnapshot,
 )
 from .policy import (
     BLACKLISTED_TOURNAMENT_IDS,
     blacklisted_tournament_ids,
 )
+from .rankings import load_static_outcome_catalog
 
 
 @dataclass(frozen=True)
@@ -522,6 +524,56 @@ class THUFootballQueryService:
             key=lambda result: (result.game.kickoff_local, result.game.game_id),
             reverse=True,
         )
+
+    async def query_team_outcomes(
+        self,
+        team_id: int,
+        tournament_ids: Sequence[int] | None = None,
+    ) -> list[TeamTournamentOutcome]:
+        team_id = _positive_id(team_id, "team_id")
+        catalog = load_static_outcome_catalog()
+        team_names = catalog.team_names_by_id.get(team_id)
+        if team_names is None:
+            raise _validation_error("team_id is not present in the supported team catalog")
+
+        if tournament_ids is None:
+            selected_tournament_ids = catalog.tournament_ids
+        else:
+            selected_tournament_ids = _normalise_sequence_ids(
+                tournament_ids, "tournament_ids"
+            )
+            if not selected_tournament_ids:
+                raise _validation_error("tournament_ids must not be empty")
+            unsupported_ids = tuple(
+                tournament_id
+                for tournament_id in selected_tournament_ids
+                if tournament_id not in catalog.tournaments_by_id
+            )
+            if unsupported_ids:
+                raise _validation_error(
+                    f"tournament_ids contains unsupported IDs {unsupported_ids}"
+                )
+
+        outcomes: list[TeamTournamentOutcome] = []
+        seen: set[tuple[str, int]] = set()
+        for tournament_id in selected_tournament_ids:
+            tournament = catalog.tournaments_by_id[tournament_id]
+            for team_name in team_names:
+                rank = tournament.ranks.get(team_name)
+                identity = (team_name, tournament_id)
+                if rank is None or identity in seen:
+                    continue
+                seen.add(identity)
+                outcomes.append(
+                    TeamTournamentOutcome(
+                        team_name=team_name,
+                        tournament_id=tournament_id,
+                        tournament_name=tournament.name,
+                        season=tournament.season,
+                        rank=rank,
+                    )
+                )
+        return outcomes
 
     async def query_team_to_team_matches(
         self,
