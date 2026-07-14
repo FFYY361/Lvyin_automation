@@ -1,0 +1,2106 @@
+{
+  "merged_teams": [
+    {
+      "team_name": "社会科学学院男足",
+      "team_ids": [
+        254,
+        80
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "社会科学学院",
+            "社会科学学院-心理与认知科学系男子足球队"
+          ],
+          "team_id": 254,
+          "tournament_ids": [
+            122,
+            99
+          ]
+        },
+        {
+          "source_names": [
+            "社会科学学院男子足球队"
+          ],
+          "team_id": 80,
+          "tournament_ids": [
+            89
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "计算机科学与技术系男足",
+      "team_ids": [
+        33
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "计算机科学与技术系-全球创新学院男子足球队",
+            "计算机科学与技术系男子足球队"
+          ],
+          "team_id": 33,
+          "tournament_ids": [
+            122,
+            100,
+            89
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "工程物理系男足",
+      "team_ids": [
+        45
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "工程物理系-安全科学学院男子足球队",
+            "工程物理系男子足球队"
+          ],
+          "team_id": 45,
+          "tournament_ids": [
+            122,
+            99,
+            89
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "建筑学院男足",
+      "team_ids": [
+        53,
+        287
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "建筑学院男子足球队"
+          ],
+          "team_id": 53,
+          "tournament_ids": [
+            122,
+            89
+          ]
+        },
+        {
+          "source_names": [
+            "建筑学院男子足球队"
+          ],
+          "team_id": 287,
+          "tournament_ids": [
+            99
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "公共管理学院男足",
+      "team_ids": [
+        282,
+        59
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "公共管理学院",
+            "公共管理学院男子足球队"
+          ],
+          "team_id": 282,
+          "tournament_ids": [
+            124,
+            99
+          ]
+        },
+        {
+          "source_names": [
+            "公共管理学院男子足球队"
+          ],
+          "team_id": 59,
+          "tournament_ids": [
+            88
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "人文学院男足",
+      "team_ids": [
+        79,
+        251
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "人文学院男子足球队"
+          ],
+          "team_id": 79,
+          "tournament_ids": [
+            124,
+            88
+          ]
+        },
+        {
+          "source_names": [
+            "外国语言文学系-人文学院-语言教学中心男子足球队"
+          ],
+          "team_id": 251,
+          "tournament_ids": [
+            100
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "新雅书院男足",
+      "team_ids": [
+        132,
+        244
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "新雅书院男子足球队"
+          ],
+          "team_id": 132,
+          "tournament_ids": [
+            124,
+            88
+          ]
+        },
+        {
+          "source_names": [
+            "新雅书院男子足球队"
+          ],
+          "team_id": 244,
+          "tournament_ids": [
+            100
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "医药卫健男足",
+      "team_ids": [
+        1986,
+        54
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "医药卫健男子足球队",
+            "基础医学院-临床医学院（北京清华长庚医院）-生物医学工程学院-药学院-万科公共卫生与健康学院男子足球队"
+          ],
+          "team_id": 1986,
+          "tournament_ids": [
+            124,
+            100
+          ]
+        },
+        {
+          "source_names": [
+            "医学院-药学院-卫健学院男子足球队"
+          ],
+          "team_id": 54,
+          "tournament_ids": [
+            88
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "物理系男足",
+      "team_ids": [
+        46
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "物理系-天文系-高等研究院男子足球队",
+            "物理系男子足球队"
+          ],
+          "team_id": 46,
+          "tournament_ids": [
+            124,
+            100,
+            88
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "求真书院男足",
+      "team_ids": [
+        215,
+        278
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "求真书院男子足球队"
+          ],
+          "team_id": 215,
+          "tournament_ids": [
+            124,
+            88
+          ]
+        },
+        {
+          "source_names": [
+            "求真书院男子足球队"
+          ],
+          "team_id": 278,
+          "tournament_ids": [
+            101
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "笃实书院男足",
+      "team_ids": [
+        1987
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "笃实书院男子足球队",
+            "笃实书院男足"
+          ],
+          "team_id": 1987,
+          "tournament_ids": [
+            126,
+            101,
+            100
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "美术学院男足",
+      "team_ids": [
+        43,
+        247
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "美术学院男子足球队"
+          ],
+          "team_id": 43,
+          "tournament_ids": [
+            126
+          ]
+        },
+        {
+          "source_names": [
+            "美术学院男子足球队"
+          ],
+          "team_id": 247,
+          "tournament_ids": [
+            101
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "秀钟书院男足",
+      "team_ids": [
+        1943
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "秀钟书院",
+            "秀钟书院男子足球队"
+          ],
+          "team_id": 1943,
+          "tournament_ids": [
+            126,
+            101
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "五道口金融学院男足",
+      "team_ids": [
+        255,
+        62
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "五道口金融学院",
+            "五道口金融学院男子足球队"
+          ],
+          "team_id": 255,
+          "tournament_ids": [
+            126,
+            101
+          ]
+        },
+        {
+          "source_names": [
+            "五道口金融学院男子足球队"
+          ],
+          "team_id": 62,
+          "tournament_ids": [
+            88
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "计算机科学与技术系女足",
+      "team_ids": [
+        65
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "计算机科学与技术系-全球创新学院女子足球队",
+            "计算机科学与技术系女子足球队"
+          ],
+          "team_id": 65,
+          "tournament_ids": [
+            123,
+            102,
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "医药卫健学院女足",
+      "team_ids": [
+        1989,
+        221
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "医药卫健学院",
+            "基础医学院-临床医学院（清华长庚医院）-生物医学工程学院-药学院-万科公共卫生与健康学院女子足球队"
+          ],
+          "team_id": 1989,
+          "tournament_ids": [
+            123,
+            102
+          ]
+        },
+        {
+          "source_names": [
+            "医学院与药学院女子足球队"
+          ],
+          "team_id": 221,
+          "tournament_ids": [
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "社科-心理女足",
+      "team_ids": [
+        1990,
+        95
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "社会科学学院-心理与认知科学系女子足球队",
+            "社科-心理女足"
+          ],
+          "team_id": 1990,
+          "tournament_ids": [
+            123,
+            102
+          ]
+        },
+        {
+          "source_names": [
+            "社会科学学院女子足球队"
+          ],
+          "team_id": 95,
+          "tournament_ids": [
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "人文学院女足",
+      "team_ids": [
+        78
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "人文学院女子足球队",
+            "外国语言文学系-人文学院-语言教学中心女子足球队"
+          ],
+          "team_id": 78,
+          "tournament_ids": [
+            123,
+            102,
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "法学院女足",
+      "team_ids": [
+        249,
+        75
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "法学院女子足球队"
+          ],
+          "team_id": 249,
+          "tournament_ids": [
+            123
+          ]
+        },
+        {
+          "source_names": [
+            "法学院女子足球队"
+          ],
+          "team_id": 75,
+          "tournament_ids": [
+            102,
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "致理书院女足",
+      "team_ids": [
+        1988
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "致理书院女子足球队",
+            "致理书院女足队"
+          ],
+          "team_id": 1988,
+          "tournament_ids": [
+            123,
+            102
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "新闻与传播学院男足",
+      "team_ids": [
+        253,
+        56
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "新闻与传播学院男子足球队"
+          ],
+          "team_id": 253,
+          "tournament_ids": [
+            101
+          ]
+        },
+        {
+          "source_names": [
+            "新闻与传播学院男子足球队"
+          ],
+          "team_id": 56,
+          "tournament_ids": [
+            88
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "网络科学与网络空间研究院男足",
+      "team_ids": [
+        201
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "网络研究院男子足球队",
+            "网络科学与网络空间研究院男子足球队"
+          ],
+          "team_id": 201,
+          "tournament_ids": [
+            101,
+            88
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "建筑学院女足",
+      "team_ids": [
+        287,
+        77
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "建筑学院女子足球队"
+          ],
+          "team_id": 287,
+          "tournament_ids": [
+            102
+          ]
+        },
+        {
+          "source_names": [
+            "建筑学院女子足球队"
+          ],
+          "team_id": 77,
+          "tournament_ids": [
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "新闻与传播学院女足",
+      "team_ids": [
+        253,
+        94
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "新闻与传播学院女子足球队"
+          ],
+          "team_id": 253,
+          "tournament_ids": [
+            102
+          ]
+        },
+        {
+          "source_names": [
+            "新闻与传播学院女子足球队"
+          ],
+          "team_id": 94,
+          "tournament_ids": [
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "化学系五人制",
+      "team_ids": [
+        51
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "化学系",
+            "化学系男子足球队"
+          ],
+          "team_id": 51,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "材料学院五人制",
+      "team_ids": [
+        38
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "材料学院",
+            "材料学院男子足球队"
+          ],
+          "team_id": 38,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "车辆与运载学院五人制",
+      "team_ids": [
+        48
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "车辆与运载学院",
+            "车辆与运载学院男子足球队"
+          ],
+          "team_id": 48,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "化学工程系五人制",
+      "team_ids": [
+        52
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "化学工程系",
+            "化学工程系男子足球队"
+          ],
+          "team_id": 52,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "法学院五人制",
+      "team_ids": [
+        50,
+        249
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "法学院男子足球队"
+          ],
+          "team_id": 50,
+          "tournament_ids": [
+            128,
+            111
+          ]
+        },
+        {
+          "source_names": [
+            "法学院"
+          ],
+          "team_id": 249,
+          "tournament_ids": [
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "笃实书院五人制",
+      "team_ids": [
+        1987
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "笃实书院",
+            "笃实书院男足"
+          ],
+          "team_id": 1987,
+          "tournament_ids": [
+            128,
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "电子工程系五人制",
+      "team_ids": [
+        34
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "电子工程系",
+            "电子工程系男子足球队"
+          ],
+          "team_id": 34,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "电机工程与应用电子技术系五人制",
+      "team_ids": [
+        35
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "电机工程与应用电子技术系",
+            "电机工程与应用电子技术系男子足球队"
+          ],
+          "team_id": 35,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "工程物理系五人制",
+      "team_ids": [
+        45
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "工程物理系",
+            "工程物理系男子足球队"
+          ],
+          "team_id": 45,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "集成电路学院五人制",
+      "team_ids": [
+        57
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "集成电路学院",
+            "集成电路学院男子足球队"
+          ],
+          "team_id": 57,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "公共管理学院五人制",
+      "team_ids": [
+        59,
+        282
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "公共管理学院男子足球队"
+          ],
+          "team_id": 59,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "公共管理学院",
+            "公管学院"
+          ],
+          "team_id": 282,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "环境学院五人制",
+      "team_ids": [
+        31
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "环境学院",
+            "环境学院男子足球队"
+          ],
+          "team_id": 31,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "工业工程系五人制",
+      "team_ids": [
+        61
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "工业工程系",
+            "工业工程系男子足球队"
+          ],
+          "team_id": 61,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "机械工程系五人制",
+      "team_ids": [
+        36
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "机械工程系",
+            "机械工程系男子足球队"
+          ],
+          "team_id": 36,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "计算机科学与技术系五人制",
+      "team_ids": [
+        33
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "计算机科学与技术系",
+            "计算机系",
+            "计算机系男子足球队"
+          ],
+          "team_id": 33,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "交叉信息研究院五人制",
+      "team_ids": [
+        60
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "交叉信息研究院",
+            "交叉信息研究院男子足球队"
+          ],
+          "team_id": 60,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "精密仪器系五人制",
+      "team_ids": [
+        49
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "精密仪器系",
+            "精密仪器系男子足球队"
+          ],
+          "team_id": 49,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "人文学院五人制",
+      "team_ids": [
+        79,
+        251
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "人文学院男子足球队"
+          ],
+          "team_id": 79,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "人文学院-语言教学中心",
+            "外国语言文学系- 人文学院-语言教学中心"
+          ],
+          "team_id": 251,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "能源与动力工程系五人制",
+      "team_ids": [
+        41
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "能源与动力工程系",
+            "能源与动力工程系男子足球队"
+          ],
+          "team_id": 41,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "日新书院五人制",
+      "team_ids": [
+        270,
+        227,
+        252
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "日新书院男子足球队"
+          ],
+          "team_id": 270,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "日新书院五人制足球队"
+          ],
+          "team_id": 227,
+          "tournament_ids": [
+            111
+          ]
+        },
+        {
+          "source_names": [
+            "日新书院"
+          ],
+          "team_id": 252,
+          "tournament_ids": [
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "求真书院五人制",
+      "team_ids": [
+        215,
+        278
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "求真书院男子足球队"
+          ],
+          "team_id": 215,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "求真书院"
+          ],
+          "team_id": 278,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "软件学院五人制",
+      "team_ids": [
+        55
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "软件学院",
+            "软件学院男子足球队"
+          ],
+          "team_id": 55,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "水利水电工程系五人制",
+      "team_ids": [
+        40,
+        190
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "水利水电工程系",
+            "水利水电工程系男子足球队"
+          ],
+          "team_id": 40,
+          "tournament_ids": [
+            128,
+            93
+          ]
+        },
+        {
+          "source_names": [
+            "水利水电工程系五人制足球队"
+          ],
+          "team_id": 190,
+          "tournament_ids": [
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "苏世民书院五人制",
+      "team_ids": [
+        119,
+        231,
+        246
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "苏世民书院男子足球队"
+          ],
+          "team_id": 119,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "苏世民书院五人制足球队"
+          ],
+          "team_id": 231,
+          "tournament_ids": [
+            111
+          ]
+        },
+        {
+          "source_names": [
+            "苏世民书院"
+          ],
+          "team_id": 246,
+          "tournament_ids": [
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "社会科学学院五人制",
+      "team_ids": [
+        80,
+        254
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "社会科学学院男子足球队"
+          ],
+          "team_id": 80,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "社会科学学院",
+            "社会科学学院-心理与认知科学系"
+          ],
+          "team_id": 254,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "生命科学学院五人制",
+      "team_ids": [
+        39,
+        200
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "生命科学学院",
+            "生命科学学院男子足球队"
+          ],
+          "team_id": 39,
+          "tournament_ids": [
+            128,
+            93
+          ]
+        },
+        {
+          "source_names": [
+            "生命科学学院五人制足球队"
+          ],
+          "team_id": 200,
+          "tournament_ids": [
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "为先书院五人制",
+      "team_ids": [
+        268
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "为先书院",
+            "为先书院男子足球队"
+          ],
+          "team_id": 268,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "土木建管系五人制",
+      "team_ids": [
+        47,
+        191
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "土木工程系暨建设管理系男子足球队",
+            "土木建管系"
+          ],
+          "team_id": 47,
+          "tournament_ids": [
+            128,
+            93
+          ]
+        },
+        {
+          "source_names": [
+            "土木建管系五人制足球队"
+          ],
+          "team_id": 191,
+          "tournament_ids": [
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "未央书院五人制",
+      "team_ids": [
+        163,
+        194
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "未央书院",
+            "未央书院男子足球队"
+          ],
+          "team_id": 163,
+          "tournament_ids": [
+            128,
+            93
+          ]
+        },
+        {
+          "source_names": [
+            "未央书院五人制足球队"
+          ],
+          "team_id": 194,
+          "tournament_ids": [
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "行健书院五人制",
+      "team_ids": [
+        164
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "行健书院",
+            "行健书院男子足球队"
+          ],
+          "team_id": 164,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "新雅书院五人制",
+      "team_ids": [
+        132,
+        244
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "新雅书院男子足球队"
+          ],
+          "team_id": 132,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "新雅书院"
+          ],
+          "team_id": 244,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "五道口金融学院五人制",
+      "team_ids": [
+        62,
+        255
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "五道口金融学院男子足球队"
+          ],
+          "team_id": 62,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "五道口金融学院"
+          ],
+          "team_id": 255,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "探微书院五人制",
+      "team_ids": [
+        165
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "探微书院",
+            "探微书院男子足球队"
+          ],
+          "team_id": 165,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "致理书院五人制",
+      "team_ids": [
+        162
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "致理书院",
+            "致理书院男子足球队"
+          ],
+          "team_id": 162,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "自动化系五人制",
+      "team_ids": [
+        42
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "自动化系",
+            "自动化系男子足球队"
+          ],
+          "team_id": 42,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "医药卫健五人制",
+      "team_ids": [
+        1986,
+        229
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "医药卫健男子足球队",
+            "基础医学院-临床医学院 （清华长庚医院）-生物 医学工程学院-药学院 -万科公共卫生与健康学院"
+          ],
+          "team_id": 1986,
+          "tournament_ids": [
+            128,
+            111
+          ]
+        },
+        {
+          "source_names": [
+            "医学院-药学院-卫健学院"
+          ],
+          "team_id": 229,
+          "tournament_ids": [
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "核能与新能源技术研究院五人制",
+      "team_ids": [
+        37,
+        289
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "核能与新能源技术研究院男子足球队"
+          ],
+          "team_id": 37,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "核能与新能源技术研究院"
+          ],
+          "team_id": 289,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "航天航空学院五人制",
+      "team_ids": [
+        32
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "航天航空学院男子足球队",
+            "航空航天学院"
+          ],
+          "team_id": 32,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "数学科学系五人制",
+      "team_ids": [
+        58
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "数学科学系",
+            "数学科学系男子足球队",
+            "数学系"
+          ],
+          "team_id": 58,
+          "tournament_ids": [
+            128,
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "经济管理学院五人制",
+      "team_ids": [
+        44,
+        245
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "经济管理学院男子足球队"
+          ],
+          "team_id": 44,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "经济管理学院"
+          ],
+          "team_id": 245,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "美术学院五人制",
+      "team_ids": [
+        43,
+        247
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "美术学院男子足球队"
+          ],
+          "team_id": 43,
+          "tournament_ids": [
+            128
+          ]
+        },
+        {
+          "source_names": [
+            "清华大学美术学院足球队"
+          ],
+          "team_id": 247,
+          "tournament_ids": [
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "教育研究院五人制",
+      "team_ids": [
+        235,
+        293
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "教育研究院五人制足球队"
+          ],
+          "team_id": 235,
+          "tournament_ids": [
+            111
+          ]
+        },
+        {
+          "source_names": [
+            "教育研究院"
+          ],
+          "team_id": 293,
+          "tournament_ids": [
+            93
+          ]
+        }
+      ]
+    },
+    {
+      "team_name": "物理系五人制",
+      "team_ids": [
+        46
+      ],
+      "observations": [
+        {
+          "source_names": [
+            "物理系-天文系-高等研究院",
+            "物理系男子足球队"
+          ],
+          "team_id": 46,
+          "tournament_ids": [
+            111,
+            93
+          ]
+        }
+      ]
+    }
+  ],
+  "shared_team_ids": [
+    {
+      "team_id": 31,
+      "institution": "环境学院",
+      "team_names": [
+        "环境学院男足",
+        "环境学院五人制"
+      ]
+    },
+    {
+      "team_id": 32,
+      "institution": "航天航空学院",
+      "team_names": [
+        "航天航空学院男足",
+        "航天航空学院五人制"
+      ]
+    },
+    {
+      "team_id": 33,
+      "institution": "计算机科学与技术系",
+      "team_names": [
+        "计算机科学与技术系男足",
+        "计算机科学与技术系五人制"
+      ]
+    },
+    {
+      "team_id": 34,
+      "institution": "电子工程系",
+      "team_names": [
+        "电子工程系男足",
+        "电子工程系五人制"
+      ]
+    },
+    {
+      "team_id": 35,
+      "institution": "电机工程与应用电子技术系",
+      "team_names": [
+        "电机工程与应用电子技术系男足",
+        "电机工程与应用电子技术系五人制"
+      ]
+    },
+    {
+      "team_id": 36,
+      "institution": "机械工程系",
+      "team_names": [
+        "机械工程系男足",
+        "机械工程系五人制"
+      ]
+    },
+    {
+      "team_id": 37,
+      "institution": "核能与新能源技术研究院",
+      "team_names": [
+        "核能与新能源技术研究院男足",
+        "核能与新能源技术研究院五人制"
+      ]
+    },
+    {
+      "team_id": 38,
+      "institution": "材料学院",
+      "team_names": [
+        "材料学院男足",
+        "材料学院五人制"
+      ]
+    },
+    {
+      "team_id": 39,
+      "institution": "生命科学学院",
+      "team_names": [
+        "生命科学学院男足",
+        "生命科学学院五人制"
+      ]
+    },
+    {
+      "team_id": 40,
+      "institution": "水利水电工程系",
+      "team_names": [
+        "水利水电工程系男足",
+        "水利水电工程系五人制"
+      ]
+    },
+    {
+      "team_id": 41,
+      "institution": "能源与动力工程系",
+      "team_names": [
+        "能源与动力工程系男足",
+        "能源与动力工程系五人制"
+      ]
+    },
+    {
+      "team_id": 42,
+      "institution": "自动化系",
+      "team_names": [
+        "自动化系男足",
+        "自动化系五人制"
+      ]
+    },
+    {
+      "team_id": 43,
+      "institution": "美术学院",
+      "team_names": [
+        "美术学院男足",
+        "美术学院五人制"
+      ]
+    },
+    {
+      "team_id": 44,
+      "institution": "经济管理学院",
+      "team_names": [
+        "经济管理学院男足",
+        "经济管理学院五人制"
+      ]
+    },
+    {
+      "team_id": 45,
+      "institution": "工程物理系",
+      "team_names": [
+        "工程物理系男足",
+        "工程物理系五人制"
+      ]
+    },
+    {
+      "team_id": 46,
+      "institution": "物理系",
+      "team_names": [
+        "物理系男足",
+        "物理系五人制"
+      ]
+    },
+    {
+      "team_id": 47,
+      "institution": "土木建管系",
+      "team_names": [
+        "土木建管系男足",
+        "土木建管系五人制"
+      ]
+    },
+    {
+      "team_id": 48,
+      "institution": "车辆与运载学院",
+      "team_names": [
+        "车辆与运载学院男足",
+        "车辆与运载学院五人制"
+      ]
+    },
+    {
+      "team_id": 49,
+      "institution": "精密仪器系",
+      "team_names": [
+        "精密仪器系男足",
+        "精密仪器系五人制"
+      ]
+    },
+    {
+      "team_id": 50,
+      "institution": "法学院",
+      "team_names": [
+        "法学院男足",
+        "法学院五人制"
+      ]
+    },
+    {
+      "team_id": 51,
+      "institution": "化学系",
+      "team_names": [
+        "化学系男足",
+        "化学系五人制"
+      ]
+    },
+    {
+      "team_id": 52,
+      "institution": "化学工程系",
+      "team_names": [
+        "化学工程系男足",
+        "化学工程系五人制"
+      ]
+    },
+    {
+      "team_id": 55,
+      "institution": "软件学院",
+      "team_names": [
+        "软件学院男足",
+        "软件学院五人制"
+      ]
+    },
+    {
+      "team_id": 57,
+      "institution": "集成电路学院",
+      "team_names": [
+        "集成电路学院男足",
+        "集成电路学院五人制"
+      ]
+    },
+    {
+      "team_id": 58,
+      "institution": "数学科学系",
+      "team_names": [
+        "数学科学系男足",
+        "数学科学系五人制"
+      ]
+    },
+    {
+      "team_id": 59,
+      "institution": "公共管理学院",
+      "team_names": [
+        "公共管理学院男足",
+        "公共管理学院五人制"
+      ]
+    },
+    {
+      "team_id": 60,
+      "institution": "交叉信息研究院",
+      "team_names": [
+        "交叉信息研究院男足",
+        "交叉信息研究院五人制"
+      ]
+    },
+    {
+      "team_id": 61,
+      "institution": "工业工程系",
+      "team_names": [
+        "工业工程系男足",
+        "工业工程系五人制"
+      ]
+    },
+    {
+      "team_id": 62,
+      "institution": "五道口金融学院",
+      "team_names": [
+        "五道口金融学院男足",
+        "五道口金融学院五人制"
+      ]
+    },
+    {
+      "team_id": 79,
+      "institution": "人文学院",
+      "team_names": [
+        "人文学院男足",
+        "人文学院五人制"
+      ]
+    },
+    {
+      "team_id": 80,
+      "institution": "社会科学学院",
+      "team_names": [
+        "社会科学学院男足",
+        "社会科学学院五人制"
+      ]
+    },
+    {
+      "team_id": 119,
+      "institution": "苏世民书院",
+      "team_names": [
+        "苏世民书院男足",
+        "苏世民书院五人制"
+      ]
+    },
+    {
+      "team_id": 132,
+      "institution": "新雅书院",
+      "team_names": [
+        "新雅书院男足",
+        "新雅书院五人制"
+      ]
+    },
+    {
+      "team_id": 162,
+      "institution": "致理书院",
+      "team_names": [
+        "致理书院男足",
+        "致理书院五人制"
+      ]
+    },
+    {
+      "team_id": 163,
+      "institution": "未央书院",
+      "team_names": [
+        "未央书院男足",
+        "未央书院五人制"
+      ]
+    },
+    {
+      "team_id": 164,
+      "institution": "行健书院",
+      "team_names": [
+        "行健书院男足",
+        "行健书院五人制"
+      ]
+    },
+    {
+      "team_id": 165,
+      "institution": "探微书院",
+      "team_names": [
+        "探微书院男足",
+        "探微书院五人制"
+      ]
+    },
+    {
+      "team_id": 201,
+      "institution": "网络科学与网络空间研究院",
+      "team_names": [
+        "网络科学与网络空间研究院男足",
+        "网络科学与网络空间研究院五人制"
+      ]
+    },
+    {
+      "team_id": 215,
+      "institution": "求真书院",
+      "team_names": [
+        "求真书院男足",
+        "求真书院五人制"
+      ]
+    },
+    {
+      "team_id": 244,
+      "institution": "新雅书院",
+      "team_names": [
+        "新雅书院男足",
+        "新雅书院五人制"
+      ]
+    },
+    {
+      "team_id": 247,
+      "institution": "美术学院",
+      "team_names": [
+        "美术学院男足",
+        "美术学院五人制"
+      ]
+    },
+    {
+      "team_id": 249,
+      "institution": "法学院",
+      "team_names": [
+        "法学院女足",
+        "法学院五人制"
+      ]
+    },
+    {
+      "team_id": 251,
+      "institution": "人文学院",
+      "team_names": [
+        "人文学院男足",
+        "人文学院五人制"
+      ]
+    },
+    {
+      "team_id": 253,
+      "institution": "新闻与传播学院",
+      "team_names": [
+        "新闻与传播学院男足",
+        "新闻与传播学院女足",
+        "新闻与传播学院五人制"
+      ]
+    },
+    {
+      "team_id": 254,
+      "institution": "社会科学学院",
+      "team_names": [
+        "社会科学学院男足",
+        "社会科学学院五人制"
+      ]
+    },
+    {
+      "team_id": 255,
+      "institution": "五道口金融学院",
+      "team_names": [
+        "五道口金融学院男足",
+        "五道口金融学院五人制"
+      ]
+    },
+    {
+      "team_id": 268,
+      "institution": "为先书院",
+      "team_names": [
+        "为先书院男足",
+        "为先书院五人制"
+      ]
+    },
+    {
+      "team_id": 270,
+      "institution": "日新书院",
+      "team_names": [
+        "日新书院男足",
+        "日新书院五人制"
+      ]
+    },
+    {
+      "team_id": 278,
+      "institution": "求真书院",
+      "team_names": [
+        "求真书院男足",
+        "求真书院五人制"
+      ]
+    },
+    {
+      "team_id": 282,
+      "institution": "公共管理学院",
+      "team_names": [
+        "公共管理学院男足",
+        "公共管理学院五人制"
+      ]
+    },
+    {
+      "team_id": 287,
+      "institution": "建筑学院",
+      "team_names": [
+        "建筑学院男足",
+        "建筑学院女足"
+      ]
+    },
+    {
+      "team_id": 1943,
+      "institution": "秀钟书院",
+      "team_names": [
+        "秀钟书院男足",
+        "秀钟书院五人制"
+      ]
+    },
+    {
+      "team_id": 1944,
+      "institution": "马克思主义学院",
+      "team_names": [
+        "马克思主义学院男足",
+        "马克思主义学院五人制"
+      ]
+    },
+    {
+      "team_id": 1986,
+      "institution": "医药卫健",
+      "team_names": [
+        "医药卫健男足",
+        "医药卫健五人制"
+      ]
+    },
+    {
+      "team_id": 1987,
+      "institution": "笃实书院",
+      "team_names": [
+        "笃实书院男足",
+        "笃实书院五人制"
+      ]
+    },
+    {
+      "team_id": 2041,
+      "institution": "新闻与传播学院-马克思主义学院",
+      "team_names": [
+        "新闻与传播学院-马克思主义学院男足",
+        "新闻与传播学院-马克思主义学院五人制"
+      ]
+    },
+    {
+      "team_id": 2042,
+      "institution": "无穹书院",
+      "team_names": [
+        "无穹书院男足",
+        "无穹书院五人制"
+      ]
+    },
+    {
+      "team_id": 2043,
+      "institution": "自强书院",
+      "team_names": [
+        "自强书院男足",
+        "自强书院五人制"
+      ]
+    },
+    {
+      "team_id": 2044,
+      "institution": "紫荆书院",
+      "team_names": [
+        "紫荆书院男足",
+        "紫荆书院五人制"
+      ]
+    }
+  ]
+}

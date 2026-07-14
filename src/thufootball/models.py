@@ -142,6 +142,15 @@ class HeadToHeadHistory:
 
 
 @dataclass(frozen=True)
+class TeamTournamentOutcome:
+    team_name: str
+    tournament_id: int
+    tournament_name: str
+    season: str
+    rank: str
+
+
+@dataclass(frozen=True)
 class GameEvent:
     event_id: int
     tournament_team_id: int

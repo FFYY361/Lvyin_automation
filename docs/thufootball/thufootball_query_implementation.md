@@ -42,12 +42,12 @@ src/thufootball/
   client.py       # HTTP、鉴权、重试、响应校验
   models.py       # 领域对象和枚举
   mappers.py      # API 原始字段到领域对象的白名单映射
-  queries.py      # 比赛、球队赛果和交锋查询
-  outcomes.py     # 排名和淘汰赛成绩推断
-  rules.py        # 赛事规则及配置加载
+  queries.py      # 比赛、最终成绩、球队赛果和交锋查询
+  rankings.py     # 人工维护的静态最终成绩加载与校验
+  notes/          # 支持赛事、球队别名、身份审计和逐赛事排名
 ```
 
-`client.py` 不计算业务结果，`outcomes.py` 不发送 HTTP 请求。原始响应只能进入 `mappers.py`，上层不使用未经筛选的 `dict`。
+`client.py` 不计算业务结果。原始响应只能进入 `mappers.py`，上层不使用未经筛选的 `dict`；最终成绩查询只读取本地静态名单，不发送 HTTP 请求。
 
 ### 2.1 比赛状态与结果
 
@@ -64,12 +64,6 @@ class MatchResult(StrEnum):
     DRAW = "draw"
     LOSS = "loss"
     UNKNOWN = "unknown"
-
-
-class OutcomeState(StrEnum):
-    FINAL = "final"
-    PROVISIONAL = "provisional"
-    UNDETERMINED = "undetermined"
 ```
 
 无效或无法解释的比赛统一映射为 `UNKNOWN`，不额外扩展 `GameStatus`。
@@ -160,7 +154,7 @@ class TournamentSnapshot:
     invalid_game_ids: tuple[int, ...] = ()
 ```
 
-API 返回的 `rank <= 0` 映射为 `reported_rank=None`。非零排名也只作为证据；最终成绩仍须结合赛事规则和比赛结果验证。
+API 返回的 `rank <= 0` 映射为 `reported_rank=None`。非零排名也只作为人工核对证据；运行时最终成绩以已提交的逐赛事静态排名文件为准。
 
 ### 2.4 查询结果与成绩规则
 
@@ -198,48 +192,15 @@ class HeadToHeadHistory:
 
 
 @dataclass(frozen=True)
-class OutcomeRuleSet:
-    tournament_id: int
-    version: str
-    format: Literal["league", "group", "knockout", "group_knockout"]
-    win_points: int = 3
-    draw_points: int = 1
-    loss_points: int = 0
-    tie_breakers: tuple[str, ...] = (
-        "points",
-        "goal_difference",
-        "goals_for",
-    )
-    stage_aliases: Mapping[str, str] = field(default_factory=dict)
-    group_membership_override: Mapping[int, str] = field(default_factory=dict)
-    relegation_positions: Mapping[str, tuple[int, ...]] = field(
-        default_factory=dict
-    )
-    has_third_place_match: bool = False
-    completion_mode: Literal[
-        "all_expected_games_finished",
-        "final_finished",
-    ] = "all_expected_games_finished"
-    expected_game_count: int | None = None
-
-
-@dataclass(frozen=True)
 class TeamTournamentOutcome:
-    team_id: int
+    team_name: str
     tournament_id: int
-    state: OutcomeState
-    labels: tuple[str, ...]
-    overall_rank: int | None
-    group_name: str | None
-    group_rank: int | None
-    stage_reached: str | None
-    relegated: bool | None
-    evidence_game_ids: tuple[int, ...]
-    rules_version: str | None
-    warnings: tuple[str, ...]
+    tournament_name: str
+    season: str
+    rank: str
 ```
 
-分组优先从 `games[].group_name` 和 `registered_teams[].group_place` 推导，`group_membership_override` 只用于修正缺失或错误数据。
+复杂赛制不在运行时代码中推断。`TeamTournamentOutcome` 来自人工核对快照后提交的逐赛事排名文件。
 
 ## 3. 功能与公共接口
 
@@ -291,14 +252,13 @@ async def query_games(self, query: GameQuery) -> list[GameSummary]: ...
 async def query_team_outcomes(
     self,
     team_id: int,
-    tournament_ids: Sequence[int],
-    rules: Mapping[int, OutcomeRuleSet],
+    tournament_ids: Sequence[int] | None = None,
 ) -> list[TeamTournamentOutcome]: ...
 ```
 
-3.3 暂未实现；在赛事排名和淘汰赛决定办法确定前，不提供 `OutcomeRuleSet`、排名推断或最终成绩接口。
+3.3 只支持 `notes/tourns.json` 中列出的 14 项近三年马杯男足、女足和五人制赛事。省略 `tournament_ids` 时按文件顺序查询全部支持赛事；显式列表不能为空，重复 ID 按首次出现顺序去重，不支持的赛事返回 `QueryValidationError`。
 
-逐赛事返回结果，不合并不同赛事的名次。赛事未结束返回 `PROVISIONAL`；规则或数据不足返回 `UNDETERMINED`。缺少某项赛事规则时不得猜测结果。
+`team_id` 通过 `notes/teams.json` 解析为一个或多个规范球队名称。同一 ID 可以属于同院系不同项目球队；查询返回所选赛事中全部命中成绩，并由 `team_name` 区分。已知球队未参加所选赛事时返回空列表。该方法不访问 HTTP、不计算积分或淘汰赛结果，也不产生比赛数据 warning。
 
 ### 3.4 球队全部赛果
 
@@ -377,30 +337,17 @@ kickoff_local = kickoff_utc.astimezone(ZoneInfo("Asia/Shanghai"))
 - 本地黑名单 `BLACKLISTED_TOURNAMENT_IDS={6, 28}` 优先于 API 目录：自动全赛事查询静默排除这些赛事；显式查询其中任一 ID 时在发送赛事请求前抛出 `QueryValidationError`，不产生 `InvalidGameDataWarning`。`GetCurrentGames` 的结果也会过滤这些赛事，按比赛 ID 读取到黑名单赛事详情时不向调用方返回领域对象。
 - `GetCurrentGames(type="all")` 是否扩大数据范围未得到当前账号验证，调用方不得把 `all` 理解为所有私有比赛。
 - `season_ids` 可以帮助发现同系列其他赛季，但跨赛事查询仍必须显式形成赛事 ID 列表。
+- 最终成绩身份表以“院系+项目”为单位；同院系男足、女足、五人制是不同规范名称，但允许共享 API `team_id`。
+- `notes/identity_audit.json` 完整记录历史名称/ID 合并及所有跨名称重号。未登记重号、未知排名球队或损坏静态文件返回 `ConfigurationError`。
 
 ### 4.4 最终成绩
 
-联赛或小组赛：
-
-1. 只使用有效、已结束且比分合法的比赛。
-2. 按 `OutcomeRuleSet` 计算积分和同分排序。
-3. 支持 `points`、`goal_difference`、`goals_for`、`head_to_head_points`、`head_to_head_goal_difference`。
-4. 同分规则用尽仍无法区分时返回 `UNDETERMINED`，不得使用球队 ID 或名称强行排序。
-5. 名次命中配置的降级位置时追加“降级”标签。
-
-淘汰赛：
-
-- 决赛胜者为冠军，负者为亚军。
-- 存在三四名决赛时区分第三和第四，否则半决赛负者统一为四强。
-- 四分之一决赛负者为八强，八分之一决赛负者为十六强。
-- 原始中文阶段名必须先通过 `stage_aliases` 规范化；未知阶段不按轮次数字猜测。
-
-完成状态：
-
-- `final_finished`：规范决赛已结束且能够确定胜者。
-- `all_expected_games_finished`：有效比赛均已结束，并满足 `expected_game_count` 等赛事完整性规则。
-- `tourn_info.end` 只作为辅助证据，不作为赛事完成的硬性前提。
-- 条件尚未满足返回 `PROVISIONAL`；赛事应已结束但证据不足返回 `UNDETERMINED`。
+- `notes/tourns.json` 是 3.3 的唯一赛事范围，当前包含 14 项赛事。
+- `notes/teams.json` 使用 `规范球队名 -> team_id 列表`；同一项目的历史别名合并，不同项目保留不同名称。
+- `notes/ranks/<tournament_id>.json` 使用 `规范球队名 -> rank 字符串`，是运行时唯一最终成绩来源。
+- 排名由白名单 `TournamentSnapshot` 人工核对后维护。无三四名赛时半决赛负者记为“四强”；五人制首轮按实际赛事规模记为 `N强`；升降级附加队可记为“升级”“未升级”“保级”或“降级”。
+- API 中从未出场的占位记录（测试球队、AC 米兰、曼联）不进入规范球队或排名文件。
+- 运行时代码不包含赛制规则、积分排序、同分比较、淘汰赛推断或 provisional 状态。
 
 ## 5. 实现约束与验收
 
@@ -431,12 +378,13 @@ BatchQueryError
 
 损坏比赛使用标准 `warnings.warn` 发出可捕获的 `InvalidGameDataWarning`；它不是请求异常，也不会携带原始响应。
 
-`PROVISIONAL` 和 `UNDETERMINED` 是领域结果，不作为异常。
+最终成绩静态文件损坏或审计不一致时返回 `ConfigurationError`，不回退到运行时猜测。
 
 ### 5.2 数据安全
 
 - 使用字段白名单映射响应，领域对象不得包含 `session_key`、OpenID、登录令牌、手机号、证件标识或无关人员资料。
 - 不缓存或持久化完整 `GetUserInfo`、`GetTournInfo`、`GetGameInfo` 原始响应。
+- 人工排名阶段只把白名单 `TournamentSnapshot` 保存到被 Git 忽略的 `tmp/thufootball/snapshots/`，不保存原始响应。
 - 日志不记录完整查询串、Cookie、凭据、人员对象或完整敏感响应。
 - `GetGameInfo` 只为已入选且缺少所需字段的比赛调用，不批量读取无关评论、人员和事件。
 
@@ -446,7 +394,7 @@ BatchQueryError
 2. 使用已验证响应建立固定样本，完成 UTC 时间、两级球队 ID、状态和比分映射测试。
 3. 实现只读客户端、鉴权探针、超时和错误映射。
 4. 实现 `query_games`、球队赛果和交锋查询。
-5. 实现赛事规则加载、排名和淘汰赛成绩推断。
+5. 人工核对近三年 14 项赛事快照，维护球队身份审计和逐赛事静态排名，并实现只读加载查询。
 6. 最后执行真实只读探针，不调用任何写 API。
 
 ### 5.4 最小验收
@@ -457,7 +405,8 @@ BatchQueryError
 - 无效比赛、未结束比赛和异常比分不进入积分统计。
 - 主客场球队视角、点球大战和交锋汇总正确。
 - 五人制单方弃赛按 `5:0`、其他人数按 `3:0` 归一化；损坏记录按一次调用一个 warning 聚合报告。
-- 3.3 后续实现后才验收冠军、亚军、四强、八强、小组名次、联赛名次和降级；证据不足时不得猜测。
+- 3.3 的 14 份排名文件完整覆盖真实参赛球队；历史别名和跨项目重号得到稳定、可审计的查询结果。
+- 冠军、亚军、季军、第四名、四强、八强、各轮淘汰、小组名次、升级、未升级、保级和降级均有真实样例验收。
 - 多赛事请求部分失败时返回包含失败赛事 ID 的 `BatchQueryError`。
 - 测试日志和领域结果不包含凭据或人员敏感信息。
 
@@ -472,6 +421,16 @@ python test\thufootball\test_client_queries.py --team-id 48
 # 单赛事球队比赛
 python test\thufootball\test_client_queries.py --tournament-id 122 --team-id 48
 
+# 静态最终成绩；省略赛事时查询全部 14 项支持赛事，不访问 API
+python test\thufootball\test_client_queries.py --outcomes --team-id 48
+
+# 多项指定赛事的静态最终成绩
+python test\thufootball\test_client_queries.py `
+  --outcomes `
+  --team-id 48 `
+  --tournament-id 128 `
+  --tournament-id 122
+
 # 省略赛事：查询全部可访问赛事中的两队交锋
 python test\thufootball\test_client_queries.py --team-id 48 --opponent-id 163
 
@@ -484,4 +443,6 @@ python test\thufootball\test_client_queries.py `
   --include-unfinished
 ```
 
-球队查询模式不能与 `--match-date` 同时使用。省略 `--tournament-id` 且未指定日期时查询 `GetMyTournaments` 返回且不在本地黑名单中的全部赛事；显式日期仍走全局日期查询。单队模式最多指定一个赛事，两队交锋模式可以重复传入多个赛事。摘要同时输出 API 目录数量和排除黑名单后的可查询赛事数量。`--full-output` 输出完整白名单领域对象，否则只输出计数、交锋汇总和被 warning 报告的比赛 ID。
+球队比赛查询模式不能与 `--match-date` 同时使用。省略 `--tournament-id` 且未指定日期时查询 `GetMyTournaments` 返回且不在本地黑名单中的全部赛事；显式日期仍走全局日期查询。单队比赛模式最多指定一个赛事，两队交锋模式可以重复传入多个赛事。
+
+`--outcomes` 必须与 `--team-id` 一起使用，可以重复指定赛事，并且不能与 `--opponent-id`、`--match-date`、`--include-unfinished` 或 `--game-id` 同时使用。该模式完全读取本地静态文件；摘要输出命中的规范球队、赛事和排名，`--full-output` 输出完整 `TeamTournamentOutcome` 对象。
