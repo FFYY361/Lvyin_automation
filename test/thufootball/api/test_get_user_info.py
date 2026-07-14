@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from thufootball.api.get_user_info import (
     THUFootballRequestError,
-    _load_env_file,
     get_user_info,
 )
 
@@ -38,32 +34,7 @@ class _Response:
 
 
 class GetUserInfoTests(unittest.TestCase):
-    def test_loads_credentials_from_env_file_without_overwriting_environment(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            env_file = Path(directory) / ".env"
-            env_file.write_text(
-                "THUFOOTBALL_OPENID=file-openid\n"
-                "THUFOOTBALL_SESSION_KEY='a+b/c=='\n"
-                "IGNORED=value\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict(
-                os.environ,
-                {"THUFOOTBALL_OPENID": "environment-openid"},
-                clear=True,
-            ):
-                _load_env_file(env_file)
-
-                self.assertEqual(
-                    os.environ["THUFOOTBALL_OPENID"], "environment-openid"
-                )
-                self.assertEqual(
-                    os.environ["THUFOOTBALL_SESSION_KEY"], "a+b/c=="
-                )
-                self.assertNotIn("IGNORED", os.environ)
-
-    @patch("thufootball.api.get_user_info.urlopen")
+    @patch("thufootball.api.utils.urlopen")
     def test_returns_response_and_preserves_special_characters(self, mock_urlopen) -> None:
         mock_urlopen.return_value = _Response(
             {
@@ -82,7 +53,7 @@ class GetUserInfoTests(unittest.TestCase):
         self.assertEqual(query["session_key"], ["a+b/c=="])
         mock_urlopen.assert_called_once_with(request, timeout=15.0)
 
-    @patch("thufootball.api.get_user_info.urlopen")
+    @patch("thufootball.api.utils.urlopen")
     def test_rejects_missing_credentials_without_requesting(self, mock_urlopen) -> None:
         with self.assertRaisesRegex(ValueError, "openid"):
             get_user_info("", "session-key")
@@ -92,7 +63,7 @@ class GetUserInfoTests(unittest.TestCase):
 
         mock_urlopen.assert_not_called()
 
-    @patch("thufootball.api.get_user_info.urlopen")
+    @patch("thufootball.api.utils.urlopen")
     def test_rejects_non_object_json(self, mock_urlopen) -> None:
         mock_urlopen.return_value = _Response(["unexpected"])
 
