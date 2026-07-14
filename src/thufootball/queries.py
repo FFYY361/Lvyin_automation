@@ -3,18 +3,35 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import warnings
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from types import MappingProxyType
 
 from .client import THUFootballClient
 from .errors import (
     BatchQueryError,
     DataConflict,
+    InvalidGameDataWarning,
     InvalidResponse,
     QueryValidationError,
     THUFootballError,
 )
-from .models import GameQuery, GameStatus, GameSummary, TournamentSnapshot
+from .models import (
+    GameQuery,
+    GameStatus,
+    GameSummary,
+    HeadToHeadHistory,
+    HeadToHeadSummary,
+    MatchResult,
+    TeamGameResult,
+    TournamentSnapshot,
+)
+from .policy import (
+    BLACKLISTED_TOURNAMENT_IDS,
+    blacklisted_tournament_ids,
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +41,12 @@ class _ValidatedGameQuery:
     team_ids: tuple[int, ...]
     team_match: str
     include_unfinished: bool
+
+
+@dataclass(frozen=True)
+class _ResolvedGame:
+    game: GameSummary
+    home_result: MatchResult
 
 
 def _validation_error(message: str) -> QueryValidationError:
@@ -44,20 +67,223 @@ def _normalise_ids(values: object, name: str) -> tuple[int, ...]:
     return tuple(result)
 
 
+def _normalise_sequence_ids(values: object, name: str) -> tuple[int, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise _validation_error(f"{name} must be a sequence of positive integers")
+    return _normalise_ids(tuple(values), name)
+
+
+def _positive_id(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise _validation_error(f"{name} must be a positive integer")
+    return value
+
+
+def _include_unfinished(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise _validation_error("include_unfinished must be a boolean")
+    return value
+
+
+def _reject_blacklisted_tournaments(tournament_ids: tuple[int, ...]) -> None:
+    blocked_ids = blacklisted_tournament_ids(tournament_ids)
+    if blocked_ids:
+        raise _validation_error(
+            f"tournament_ids contains blacklisted IDs {blocked_ids}"
+        )
+
+
+def _opposite_result(result: MatchResult) -> MatchResult:
+    if result is MatchResult.WIN:
+        return MatchResult.LOSS
+    if result is MatchResult.LOSS:
+        return MatchResult.WIN
+    return result
+
+
+def _resolve_finished_game(
+    game: GameSummary,
+    *,
+    players_per_side: int,
+) -> _ResolvedGame | None:
+    if (
+        game.status is not GameStatus.FINISHED
+        or not game.record_active
+        or not game.valid
+    ):
+        return None
+
+    home_abandon = game.home_abandon is True
+    away_abandon = game.away_abandon is True
+    if home_abandon and away_abandon:
+        return None
+    if home_abandon or away_abandon:
+        awarded_goals = 5 if players_per_side == 5 else 3
+        home_score = 0 if home_abandon else awarded_goals
+        away_score = 0 if away_abandon else awarded_goals
+        normalised = replace(
+            game,
+            home_score=home_score,
+            away_score=away_score,
+            result_text=f"{home_score}:{away_score}",
+            penalty_shootout=False,
+            home_penalty=None,
+            away_penalty=None,
+        )
+        return _ResolvedGame(
+            game=normalised,
+            home_result=(
+                MatchResult.LOSS if home_abandon else MatchResult.WIN
+            ),
+        )
+
+    home_score = game.home_score
+    away_score = game.away_score
+    if home_score is None or away_score is None:
+        return None
+    if home_score != away_score:
+        normalised = replace(
+            game,
+            result_text=f"{home_score}:{away_score}",
+            penalty_shootout=False,
+            home_penalty=None,
+            away_penalty=None,
+        )
+        return _ResolvedGame(
+            game=normalised,
+            home_result=(
+                MatchResult.WIN if home_score > away_score else MatchResult.LOSS
+            ),
+        )
+
+    if not game.penalty_shootout:
+        normalised = replace(
+            game,
+            result_text=f"{home_score}:{away_score}",
+            home_penalty=None,
+            away_penalty=None,
+        )
+        return _ResolvedGame(game=normalised, home_result=MatchResult.DRAW)
+
+    home_penalty = game.home_penalty
+    away_penalty = game.away_penalty
+    if (
+        home_penalty is None
+        or away_penalty is None
+        or home_penalty == away_penalty
+    ):
+        return None
+    normalised = replace(
+        game,
+        result_text=(
+            f"{home_score}({home_penalty}):{away_score}({away_penalty})"
+        ),
+    )
+    return _ResolvedGame(
+        game=normalised,
+        home_result=(
+            MatchResult.WIN
+            if home_penalty > away_penalty
+            else MatchResult.LOSS
+        ),
+    )
+
+
+def _team_game_result(
+    game: GameSummary,
+    *,
+    team_id: int,
+    home_result: MatchResult | None,
+) -> TeamGameResult:
+    is_home = game.home_team_id == team_id
+    if is_home:
+        opponent_id = game.away_team_id
+        opponent_name = game.away_team_name
+        venue = "home"
+    else:
+        opponent_id = game.home_team_id
+        opponent_name = game.home_team_name
+        venue = "away"
+
+    if home_result is None:
+        return TeamGameResult(
+            game=game,
+            team_id=team_id,
+            opponent_id=opponent_id,
+            opponent_name=opponent_name,
+            venue=venue,
+            goals_for=None,
+            goals_against=None,
+            penalty_goals_for=None,
+            penalty_goals_against=None,
+            score_text=None,
+            result=MatchResult.UNKNOWN,
+        )
+
+    assert game.home_score is not None and game.away_score is not None
+    goals_for = game.home_score if is_home else game.away_score
+    goals_against = game.away_score if is_home else game.home_score
+    if game.penalty_shootout:
+        assert game.home_penalty is not None and game.away_penalty is not None
+        penalty_for = game.home_penalty if is_home else game.away_penalty
+        penalty_against = game.away_penalty if is_home else game.home_penalty
+        score_text = (
+            f"{goals_for}({penalty_for}):{goals_against}({penalty_against})"
+        )
+    else:
+        penalty_for = None
+        penalty_against = None
+        score_text = f"{goals_for}:{goals_against}"
+    return TeamGameResult(
+        game=game,
+        team_id=team_id,
+        opponent_id=opponent_id,
+        opponent_name=opponent_name,
+        venue=venue,
+        goals_for=goals_for,
+        goals_against=goals_against,
+        penalty_goals_for=penalty_for,
+        penalty_goals_against=penalty_against,
+        score_text=score_text,
+        result=home_result if is_home else _opposite_result(home_result),
+    )
+
+
+def _warn_invalid_games(game_ids: list[int]) -> None:
+    if not game_ids:
+        return
+    unique_ids = tuple(dict.fromkeys(game_ids))
+    warnings.warn(InvalidGameDataWarning(unique_ids), stacklevel=3)
+
+
+def _summary(counts: list[int]) -> HeadToHeadSummary:
+    return HeadToHeadSummary(
+        team_a_wins=counts[0],
+        draws=counts[1],
+        team_b_wins=counts[2],
+    )
+
+
+def _record_result(counts: list[int], result: MatchResult) -> None:
+    if result is MatchResult.WIN:
+        counts[0] += 1
+    elif result is MatchResult.DRAW:
+        counts[1] += 1
+    elif result is MatchResult.LOSS:
+        counts[2] += 1
+
+
 def _validate_query(query: object) -> _ValidatedGameQuery:
     if not isinstance(query, GameQuery):
         raise _validation_error("query must be a GameQuery")
     tournament_ids = _normalise_ids(query.tournament_ids, "tournament_ids")
+    _reject_blacklisted_tournaments(tournament_ids)
     team_ids = _normalise_ids(query.team_ids, "team_ids")
     match_date = query.match_date
     if match_date is not None and (
         isinstance(match_date, datetime) or not isinstance(match_date, date)
     ):
         raise _validation_error("match_date must be a date")
-    if not tournament_ids and match_date is None:
-        raise _validation_error(
-            "at least one of tournament_ids or match_date is required"
-        )
     if len(team_ids) > 2:
         raise _validation_error("team_ids may contain at most two distinct IDs")
     if query.team_match not in {"any", "all"}:
@@ -119,9 +345,20 @@ class THUFootballQueryService:
         self._client = client
         self._max_concurrency = max_concurrency
 
+    async def _all_accessible_tournament_ids(self) -> tuple[int, ...]:
+        tournaments = await self._client.get_accessible_tournaments()
+        return tuple(
+            tournament_id
+            for tournament_id in dict.fromkeys(
+                tournament.tournament_id for tournament in tournaments
+            )
+            if tournament_id not in BLACKLISTED_TOURNAMENT_IDS
+        )
+
     async def _read_tournaments(
         self, tournament_ids: tuple[int, ...]
     ) -> tuple[TournamentSnapshot, ...]:
+        _reject_blacklisted_tournaments(tournament_ids)
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def read(tournament_id: int) -> TournamentSnapshot:
@@ -172,15 +409,29 @@ class THUFootballQueryService:
 
     async def query_games(self, query: GameQuery) -> list[GameSummary]:
         validated = _validate_query(query)
+        invalid_game_ids: list[int] = []
         if validated.tournament_ids:
             snapshots = await self._read_tournaments(validated.tournament_ids)
             games = [game for snapshot in snapshots for game in snapshot.games]
-        else:
-            assert validated.match_date is not None
+            invalid_game_ids = [
+                game_id
+                for snapshot in snapshots
+                for game_id in snapshot.invalid_game_ids
+            ]
+        elif validated.match_date is not None:
             games = await self._client.get_current_games(
                 history_bound=validated.match_date - timedelta(days=1),
                 future_bound=validated.match_date + timedelta(days=1),
             )
+        else:
+            tournament_ids = await self._all_accessible_tournament_ids()
+            snapshots = await self._read_tournaments(tournament_ids)
+            games = [game for snapshot in snapshots for game in snapshot.games]
+            invalid_game_ids = [
+                game_id
+                for snapshot in snapshots
+                for game_id in snapshot.invalid_game_ids
+            ]
 
         filtered: list[GameSummary] = []
         requested_teams = set(validated.team_ids)
@@ -202,7 +453,165 @@ class THUFootballQueryService:
                     continue
             filtered.append(game)
 
+        _warn_invalid_games(invalid_game_ids)
         return sorted(
             filtered,
             key=lambda game: (game.kickoff_local, game.tournament_id, game.game_id),
+        )
+
+    async def query_team_matches(
+        self,
+        team_id: int,
+        tournament_id: int | None = None,
+        *,
+        include_unfinished: bool = False,
+    ) -> list[TeamGameResult]:
+        team_id = _positive_id(team_id, "team_id")
+        include_unfinished = _include_unfinished(include_unfinished)
+        if tournament_id is None:
+            tournament_ids = await self._all_accessible_tournament_ids()
+            snapshots = await self._read_tournaments(tournament_ids)
+        else:
+            tournament_id = _positive_id(tournament_id, "tournament_id")
+            _reject_blacklisted_tournaments((tournament_id,))
+            snapshots = (await self._client.get_tournament_info(tournament_id),)
+
+        players_per_tournament = {
+            snapshot.tournament_id: snapshot.players_per_side
+            for snapshot in snapshots
+        }
+        games = self._deduplicate(
+            [game for snapshot in snapshots for game in snapshot.games]
+        )
+
+        results: list[TeamGameResult] = []
+        invalid_game_ids = [
+            game_id
+            for snapshot in snapshots
+            for game_id in snapshot.invalid_game_ids
+        ]
+        for game in games:
+            if team_id not in {game.home_team_id, game.away_team_id}:
+                continue
+            if not game.record_active or not game.valid:
+                invalid_game_ids.append(game.game_id)
+                continue
+            if game.status is GameStatus.FINISHED:
+                resolved = _resolve_finished_game(
+                    game,
+                    players_per_side=players_per_tournament[game.tournament_id],
+                )
+                if resolved is None:
+                    invalid_game_ids.append(game.game_id)
+                    continue
+                results.append(
+                    _team_game_result(
+                        resolved.game,
+                        team_id=team_id,
+                        home_result=resolved.home_result,
+                    )
+                )
+            elif include_unfinished:
+                results.append(
+                    _team_game_result(game, team_id=team_id, home_result=None)
+                )
+
+        _warn_invalid_games(invalid_game_ids)
+        return sorted(
+            results,
+            key=lambda result: (result.game.kickoff_local, result.game.game_id),
+            reverse=True,
+        )
+
+    async def query_team_to_team_matches(
+        self,
+        team_a_id: int,
+        team_b_id: int,
+        tournament_ids: Sequence[int] | None = None,
+        *,
+        include_unfinished: bool = False,
+    ) -> HeadToHeadHistory:
+        team_a_id = _positive_id(team_a_id, "team_a_id")
+        team_b_id = _positive_id(team_b_id, "team_b_id")
+        if team_a_id == team_b_id:
+            raise _validation_error("team_a_id and team_b_id must be different")
+        include_unfinished = _include_unfinished(include_unfinished)
+
+        if tournament_ids is None:
+            normalised_tournament_ids = (
+                await self._all_accessible_tournament_ids()
+            )
+        else:
+            normalised_tournament_ids = _normalise_sequence_ids(
+                tournament_ids, "tournament_ids"
+            )
+            if not normalised_tournament_ids:
+                raise _validation_error("tournament_ids must not be empty")
+            _reject_blacklisted_tournaments(normalised_tournament_ids)
+
+        snapshots = await self._read_tournaments(normalised_tournament_ids)
+        players_per_tournament = {
+            snapshot.tournament_id: snapshot.players_per_side
+            for snapshot in snapshots
+        }
+        games = self._deduplicate(
+            [game for snapshot in snapshots for game in snapshot.games]
+        )
+        overall_counts = [0, 0, 0]
+        tournament_counts = {
+            tournament_id: [0, 0, 0]
+            for tournament_id in normalised_tournament_ids
+        }
+        matches: list[GameSummary] = []
+        invalid_game_ids = [
+            game_id
+            for snapshot in snapshots
+            for game_id in snapshot.invalid_game_ids
+        ]
+        requested_teams = {team_a_id, team_b_id}
+
+        for game in games:
+            if {game.home_team_id, game.away_team_id} != requested_teams:
+                continue
+            if not game.record_active or not game.valid:
+                invalid_game_ids.append(game.game_id)
+                continue
+            if game.status is GameStatus.FINISHED:
+                resolved = _resolve_finished_game(
+                    game,
+                    players_per_side=players_per_tournament[game.tournament_id],
+                )
+                if resolved is None:
+                    invalid_game_ids.append(game.game_id)
+                    continue
+                matches.append(resolved.game)
+                team_a_result = (
+                    resolved.home_result
+                    if game.home_team_id == team_a_id
+                    else _opposite_result(resolved.home_result)
+                )
+                _record_result(overall_counts, team_a_result)
+                _record_result(
+                    tournament_counts[game.tournament_id], team_a_result
+                )
+            elif include_unfinished:
+                matches.append(game)
+
+        _warn_invalid_games(invalid_game_ids)
+        matches.sort(
+            key=lambda game: (game.kickoff_local, game.game_id), reverse=True
+        )
+        by_tournament = MappingProxyType(
+            {
+                tournament_id: _summary(tournament_counts[tournament_id])
+                for tournament_id in normalised_tournament_ids
+            }
+        )
+        return HeadToHeadHistory(
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            tournament_ids=normalised_tournament_ids,
+            matches=tuple(matches),
+            summary=_summary(overall_counts),
+            by_tournament=by_tournament,
         )

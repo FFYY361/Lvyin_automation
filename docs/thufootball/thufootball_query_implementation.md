@@ -153,9 +153,11 @@ class TournamentSnapshot:
     season: str
     begin_date: date
     end_date: date
+    players_per_side: int
     season_ids: Mapping[str, int]
     teams: tuple[TournamentTeam, ...]
     games: tuple[GameSummary, ...]
+    invalid_game_ids: tuple[int, ...] = ()
 ```
 
 API 返回的 `rank <= 0` 映射为 `reported_rank=None`。非零排名也只作为证据；最终成绩仍须结合赛事规则和比赛结果验证。
@@ -172,6 +174,9 @@ class TeamGameResult:
     venue: Literal["home", "away"]
     goals_for: int | None
     goals_against: int | None
+    penalty_goals_for: int | None
+    penalty_goals_against: int | None
+    score_text: str | None
     result: MatchResult
 
 
@@ -276,8 +281,9 @@ async def query_games(self, query: GameQuery) -> list[GameSummary]: ...
 | 仅赛事 | 并发调用对应赛事的 `GetTournInfo` |
 | 仅日期 | 调用 `GetCurrentGames` 后按北京时间精确过滤 |
 | 赛事和日期 | 调用对应赛事的 `GetTournInfo` 后按北京时间过滤 |
+| 赛事和日期均省略 | 读取 `GetMyTournaments`，并发查询全部可访问赛事 |
 
-`tournament_ids` 和 `match_date` 至少提供一项。`team_ids` 最多包含两个不同的全局球队 ID；`team_match="any"` 表示任一球队参赛，`all` 表示所有指定球队同时参赛。输出默认包含未完赛比赛并按本地开球时间升序。
+`tournament_ids` 和 `match_date` 均省略时查询当前凭据可访问的全部赛事。`team_ids` 最多包含两个不同的全局球队 ID；`team_match="any"` 表示任一球队参赛，`all` 表示所有指定球队同时参赛。输出默认包含未完赛比赛并按本地开球时间升序。
 
 ### 3.3 球队最终成绩
 
@@ -290,36 +296,38 @@ async def query_team_outcomes(
 ) -> list[TeamTournamentOutcome]: ...
 ```
 
+3.3 暂未实现；在赛事排名和淘汰赛决定办法确定前，不提供 `OutcomeRuleSet`、排名推断或最终成绩接口。
+
 逐赛事返回结果，不合并不同赛事的名次。赛事未结束返回 `PROVISIONAL`；规则或数据不足返回 `UNDETERMINED`。缺少某项赛事规则时不得猜测结果。
 
 ### 3.4 球队全部赛果
 
 ```python
-async def query_team_results(
+async def query_team_matches(
     self,
     team_id: int,
-    tournament_id: int,
+    tournament_id: int | None = None,
     *,
     include_unfinished: bool = False,
 ) -> list[TeamGameResult]: ...
 ```
 
-默认只返回 `FINISHED` 比赛。目标球队无论主客场均转换为球队视角的进球、失球和胜平负；结果按时间倒序。
+`tournament_id=None` 时先读取赛事目录，再查询全部可访问赛事；显式传入 ID 时只查询该赛事。默认只返回 `FINISHED` 比赛。目标球队无论主客场均转换为球队视角的进球、失球、点球比分、规范比分文本和胜平负；结果按 `(kickoff_local, game_id)` 倒序。`include_unfinished=True` 时保留有效未完赛比赛，其比分、点球比分和比分文本均为 `None`，结果为 `UNKNOWN`。
 
 ### 3.5 多赛事交锋
 
 ```python
-async def query_head_to_head(
+async def query_team_to_team_matches(
     self,
     team_a_id: int,
     team_b_id: int,
-    tournament_ids: Sequence[int],
+    tournament_ids: Sequence[int] | None = None,
     *,
     include_unfinished: bool = False,
 ) -> HeadToHeadHistory: ...
 ```
 
-两个球队 ID 必须不同，且均为全局 `team_id`。正反主客场都计入；默认仅统计 `FINISHED` 比赛，按时间倒序，并返回跨赛事和分赛事汇总。没有交锋时返回空比赛集合和全零汇总。
+两个球队 ID 必须不同，且均为全局 `team_id`。省略 `tournament_ids` 时查询全部可访问赛事；显式赛事列表不能为空，重复 ID 按首次出现顺序去重。正反主客场、点球大战和弃赛赛果都计入；默认仅返回 `FINISHED` 比赛，按 `(kickoff_local, game_id)` 倒序，并返回跨赛事和分赛事汇总。`by_tournament` 包含实际查询的每一项赛事，无交锋赛事使用全零汇总；完全没有交锋时返回空比赛集合和全零总汇总。
 
 ## 4. 功能细节澄清
 
@@ -350,20 +358,23 @@ kickoff_local = kickoff_utc.astimezone(ZoneInfo("Asia/Shanghai"))
 4. 尚未开始且本地开球时间在当前时间之后：`SCHEDULED`。
 5. 其余情况：`UNKNOWN`。
 
-判断是否完赛不得依赖 `game_time_metadata`、`minute` 或 `stoppage_minute`。只有 `FINISHED` 且比分字段合法的比赛才能进入积分和普通胜平负统计。
+判断是否完赛不得依赖 `game_time_metadata`、`minute` 或 `stoppage_minute`。只有 `FINISHED` 且能够按下列顺序归一化的比赛才进入球队赛果和交锋汇总：
 
-淘汰赛胜者按以下顺序判断：
+1. 单方弃赛：五人制将未弃赛方判为 `5:0`，其他人数判为 `3:0`；返回的 `GameSummary` 副本覆盖比分和 `result_text`，保留弃赛标记，并清除点球字段。
+2. 双方弃赛、无效记录、比分缺失或非法：排除该比赛，并加入本次调用的聚合 warning。
+3. 常规比分不同：按常规比分判断胜负，使用普通 `主队比分:客队比分` 文本，并清除无实际意义的点球字段。
+4. 常规比分相同且 `penalty_shootout` 为假：判为平局。
+5. 常规比分相同、`penalty_shootout` 为真且点球比分合法并不相等：按点球判断胜负，主客视角文本规范为 `2(3):2(4)`；`TeamGameResult` 再将比分和点球字段转换为目标球队视角。
+6. 常规比分相同但点球比分缺失、相等或损坏：排除该比赛，并加入聚合 warning，不猜测胜负。
 
-1. 有明确弃赛信息时按赛事规则处理；规则未配置则结果为 `UNKNOWN`。
-2. 主客队常规最终进球不同，按 `home_goal`、`away_goal` 判断。
-3. 常规最终进球相同且存在有效点球大战数据，按 `home_penalty`、`away_penalty` 判断。
-4. 仍无法区分时，不推断晋级球队。
+`include_unfinished=True` 时，有效未完赛比赛可进入返回列表，但不进入交锋汇总。旧赛事中 `penalty_shootout=null` 按未进入点球处理，`valid=null` 按无效比赛处理；缺失嵌套球队对象时只允许按同赛事的 `tournament_team_id` 确定性回填。两级球队 ID 都缺失的比赛进入 `TournamentSnapshot.invalid_game_ids` 并被排除，不猜测球队身份。每个基于赛事快照的公共查询每次最多发出一次 `InvalidGameDataWarning`，其 `game_ids` 包含本次被跳过的全部比赛 ID。
 
 ### 4.3 球队身份与赛事范围
 
 - 跨赛事球队身份只使用嵌套球队对象的 `team_id`。
 - `tourn_team_id` 只在单项赛事内关联比赛、报名球员和事件。
 - `GetMyTournaments` 只用于发现可访问赛事，不代表“我的赛事”。
+- 本地黑名单 `BLACKLISTED_TOURNAMENT_IDS={6, 28}` 优先于 API 目录：自动全赛事查询静默排除这些赛事；显式查询其中任一 ID 时在发送赛事请求前抛出 `QueryValidationError`，不产生 `InvalidGameDataWarning`。`GetCurrentGames` 的结果也会过滤这些赛事，按比赛 ID 读取到黑名单赛事详情时不向调用方返回领域对象。
 - `GetCurrentGames(type="all")` 是否扩大数据范围未得到当前账号验证，调用方不得把 `all` 理解为所有私有比赛。
 - `season_ids` 可以帮助发现同系列其他赛季，但跨赛事查询仍必须显式形成赛事 ID 列表。
 
@@ -418,6 +429,8 @@ DataConflict
 BatchQueryError
 ```
 
+损坏比赛使用标准 `warnings.warn` 发出可捕获的 `InvalidGameDataWarning`；它不是请求异常，也不会携带原始响应。
+
 `PROVISIONAL` 和 `UNDETERMINED` 是领域结果，不作为异常。
 
 ### 5.2 数据安全
@@ -443,6 +456,32 @@ BatchQueryError
 - `SCHEDULED`、`STARTED`、`FINISHED`、`UNKNOWN` 四种状态映射正确。
 - 无效比赛、未结束比赛和异常比分不进入积分统计。
 - 主客场球队视角、点球大战和交锋汇总正确。
-- 可输出冠军、亚军、四强、八强、小组名次、联赛名次和降级；证据不足时不猜测。
+- 五人制单方弃赛按 `5:0`、其他人数按 `3:0` 归一化；损坏记录按一次调用一个 warning 聚合报告。
+- 3.3 后续实现后才验收冠军、亚军、四强、八强、小组名次、联赛名次和降级；证据不足时不得猜测。
 - 多赛事请求部分失败时返回包含失败赛事 ID 的 `BatchQueryError`。
 - 测试日志和领域结果不包含凭据或人员敏感信息。
+
+### 5.5 真实只读冒烟
+
+直接运行测试文件时，默认只执行一项真实只读冒烟；自动发现和 `--unit-tests` 不访问真实 API：
+
+```powershell
+# 省略赛事：查询全部可访问赛事中的球队比赛
+python test\thufootball\test_client_queries.py --team-id 48
+
+# 单赛事球队比赛
+python test\thufootball\test_client_queries.py --tournament-id 122 --team-id 48
+
+# 省略赛事：查询全部可访问赛事中的两队交锋
+python test\thufootball\test_client_queries.py --team-id 48 --opponent-id 163
+
+# 多赛事两队交锋；--tournament-id 可重复
+python test\thufootball\test_client_queries.py `
+  --tournament-id 122 `
+  --tournament-id 123 `
+  --team-id 48 `
+  --opponent-id 163 `
+  --include-unfinished
+```
+
+球队查询模式不能与 `--match-date` 同时使用。省略 `--tournament-id` 且未指定日期时查询 `GetMyTournaments` 返回且不在本地黑名单中的全部赛事；显式日期仍走全局日期查询。单队模式最多指定一个赛事，两队交锋模式可以重复传入多个赛事。摘要同时输出 API 目录数量和排除黑名单后的可查询赛事数量。`--full-output` 输出完整白名单领域对象，否则只输出计数、交锋汇总和被 warning 报告的比赛 ID。

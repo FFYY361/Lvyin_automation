@@ -76,6 +76,14 @@ class DataConflict(THUFootballError):
     """Raised when duplicate identifiers carry conflicting core data."""
 
 
+class InvalidGameDataWarning(UserWarning):
+    """Warn that corrupt game records were excluded from query results."""
+
+    def __init__(self, game_ids: tuple[int, ...]) -> None:
+        self.game_ids = game_ids
+        super().__init__(f"Skipped invalid game data for IDs {game_ids}")
+
+
 class BatchQueryError(THUFootballError):
     """Raised when at least one tournament in a multi-read batch fails."""
 
