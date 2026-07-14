@@ -16,6 +16,13 @@ class GameStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class MatchResult(StrEnum):
+    WIN = "win"
+    DRAW = "draw"
+    LOSS = "loss"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class GameQuery:
     tournament_ids: tuple[int, ...] = ()
@@ -95,9 +102,43 @@ class TournamentSnapshot:
     season: str
     begin_date: date
     end_date: date
+    players_per_side: int
     season_ids: Mapping[str, int]
     teams: tuple[TournamentTeam, ...]
     games: tuple[GameSummary, ...]
+    invalid_game_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class TeamGameResult:
+    game: GameSummary
+    team_id: int
+    opponent_id: int
+    opponent_name: str
+    venue: Literal["home", "away"]
+    goals_for: int | None
+    goals_against: int | None
+    penalty_goals_for: int | None
+    penalty_goals_against: int | None
+    score_text: str | None
+    result: MatchResult
+
+
+@dataclass(frozen=True)
+class HeadToHeadSummary:
+    team_a_wins: int
+    draws: int
+    team_b_wins: int
+
+
+@dataclass(frozen=True)
+class HeadToHeadHistory:
+    team_a_id: int
+    team_b_id: int
+    tournament_ids: tuple[int, ...]
+    matches: tuple[GameSummary, ...]
+    summary: HeadToHeadSummary
+    by_tournament: Mapping[int, HeadToHeadSummary]
 
 
 @dataclass(frozen=True)

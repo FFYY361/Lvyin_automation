@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 import unittest
+import warnings
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime
@@ -20,26 +21,36 @@ if str(_SRC_ROOT) not in sys.path:
 
 from thufootball import (
     AuthenticationError,
+    BLACKLISTED_TOURNAMENT_IDS,
     BatchQueryError,
     ConfigurationError,
     DataConflict,
     GameQuery,
     GameStatus,
+    InvalidGameDataWarning,
     InvalidResponse,
+    MatchResult,
     QueryValidationError,
     SchemaError,
     THUFootballClient,
     THUFootballQueryService,
     Timeout,
 )
-from thufootball.mappers import map_game_detail, map_game_summary
+from thufootball.mappers import (
+    map_game_detail,
+    map_game_summary,
+    map_tournament_snapshot,
+)
 
 
 @dataclass(frozen=True)
 class _LiveSmokeConfig:
-    tournament_id: int | None
+    tournament_ids: tuple[int, ...]
     game_id: int | None
     match_date: date | None
+    team_id: int | None
+    opponent_id: int | None
+    include_unfinished: bool
     full_output: bool
 
 
@@ -96,6 +107,11 @@ def _game(
     away_tournament_team_id: int = 1202,
     home_goal: object = 2,
     away_goal: object = 1,
+    penalty_shootout: int = 1,
+    home_penalty: object = 5,
+    away_penalty: object = 4,
+    home_abandon: object = None,
+    away_abandon: object = 0,
 ) -> dict[str, Any]:
     return {
         "id": game_id,
@@ -130,11 +146,11 @@ def _game(
         "home_goal": home_goal,
         "away_goal": away_goal,
         "result": f"{home_goal}:{away_goal}",
-        "penalty_shootout": 1,
-        "home_penalty": 5,
-        "away_penalty": 4,
-        "home_abandon": None,
-        "away_abandon": 0,
+        "penalty_shootout": penalty_shootout,
+        "home_penalty": home_penalty,
+        "away_penalty": away_penalty,
+        "home_abandon": home_abandon,
+        "away_abandon": away_abandon,
         "field_info": {"id": 1, "name": "测试球场", "brief_name": "测试场"},
     }
 
@@ -166,6 +182,8 @@ def _team(
 def _tournament_payload(
     tournament_id: int,
     games: list[dict[str, Any]] | None = None,
+    *,
+    players_per_side: int = 11,
 ) -> dict[str, Any]:
     return {
         "success": True,
@@ -177,6 +195,7 @@ def _tournament_payload(
             "season": "2025~2026",
             "begin": "2025-09-01",
             "end": "2026-08-01",
+            "players": players_per_side,
         },
         "season_ids": {"2025~2026": tournament_id},
         "registered_teams": [
@@ -244,30 +263,65 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
             )
 
         query_date = config.match_date
-        if config.tournament_id is None and query_date is None:
-            query_date = date.today()
+        if config.tournament_ids:
+            query_scope = "specified_tournaments"
+        elif query_date is not None:
+            query_scope = "all_tournaments_on_date"
+        else:
+            query_scope = "all_accessible_tournaments"
 
         async with THUFootballClient() as client:
             probe = await client.get_user_info()
             tournaments = await client.get_accessible_tournaments()
             service = THUFootballQueryService(client)
-            games = await service.query_games(
-                GameQuery(
-                    tournament_ids=(config.tournament_id,)
-                    if config.tournament_id is not None
-                    else (),
-                    match_date=query_date,
-                )
-            )
+            games = []
+            team_matches = []
+            team_to_team_matches = None
+            with warnings.catch_warnings(record=True) as caught_warnings:
+                warnings.simplefilter("always", InvalidGameDataWarning)
+                if config.team_id is None:
+                    games = await service.query_games(
+                        GameQuery(
+                            tournament_ids=config.tournament_ids,
+                            match_date=query_date,
+                        )
+                    )
+                elif config.opponent_id is None:
+                    team_matches = await service.query_team_matches(
+                        config.team_id,
+                        (
+                            config.tournament_ids[0]
+                            if config.tournament_ids
+                            else None
+                        ),
+                        include_unfinished=config.include_unfinished,
+                    )
+                else:
+                    team_to_team_matches = (
+                        await service.query_team_to_team_matches(
+                            config.team_id,
+                            config.opponent_id,
+                            config.tournament_ids or None,
+                            include_unfinished=config.include_unfinished,
+                        )
+                    )
             detail = (
                 await client.get_game_info(config.game_id)
                 if config.game_id is not None
                 else None
             )
 
+        warning_game_ids = [
+            game_id
+            for warning in caught_warnings
+            if isinstance(warning.message, InvalidGameDataWarning)
+            for game_id in warning.message.game_ids
+        ]
+
         self.assertIsInstance(probe.user_registered, bool)
         self.assertIsInstance(tournaments, list)
         self.assertIsInstance(games, list)
+        self.assertIsInstance(team_matches, list)
         if config.game_id is not None:
             self.assertIsNotNone(detail)
             assert detail is not None
@@ -276,13 +330,29 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
         if config.full_output:
             output: dict[str, object] = {
                 "query": {
-                    "tournament_id": config.tournament_id,
+                    "scope": query_scope,
+                    "tournament_ids": config.tournament_ids,
                     "game_id": config.game_id,
                     "match_date": query_date,
+                    "team_id": config.team_id,
+                    "opponent_id": config.opponent_id,
+                    "include_unfinished": (
+                        True
+                        if config.team_id is None
+                        else config.include_unfinished
+                    ),
                 },
                 "user_probe": probe,
                 "accessible_tournament_count": len(tournaments),
+                "queryable_tournament_count": sum(
+                    tournament.tournament_id
+                    not in BLACKLISTED_TOURNAMENT_IDS
+                    for tournament in tournaments
+                ),
                 "games": games,
+                "team_matches": team_matches,
+                "team_to_team_matches": team_to_team_matches,
+                "warning_game_ids": warning_game_ids,
                 "game_detail": detail,
             }
         else:
@@ -290,9 +360,29 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "authenticated": True,
                 "user_registered": probe.user_registered,
                 "accessible_tournament_count": len(tournaments),
-                "query_tournament_id": config.tournament_id,
+                "queryable_tournament_count": sum(
+                    tournament.tournament_id
+                    not in BLACKLISTED_TOURNAMENT_IDS
+                    for tournament in tournaments
+                ),
+                "query_scope": query_scope,
+                "query_tournament_ids": config.tournament_ids,
                 "query_match_date": query_date,
                 "query_game_count": len(games),
+                "team_id": config.team_id,
+                "opponent_id": config.opponent_id,
+                "team_match_count": len(team_matches),
+                "team_to_team_match_count": (
+                    len(team_to_team_matches.matches)
+                    if team_to_team_matches is not None
+                    else 0
+                ),
+                "team_to_team_summary": (
+                    team_to_team_matches.summary
+                    if team_to_team_matches is not None
+                    else None
+                ),
+                "warning_game_ids": warning_game_ids,
                 "requested_game_id": config.game_id,
                 "detail_loaded": detail is not None,
                 "detail_event_count": len(detail.events) if detail else 0,
@@ -337,6 +427,48 @@ class MapperTests(unittest.TestCase):
         )
         self.assertIsNone(summary.home_score)
         self.assertIsNone(summary.away_score)
+
+    def test_legacy_tournament_fields_are_mapped_safely(self) -> None:
+        game = _game(
+            1,
+            10,
+            started=True,
+            ended=True,
+            valid=None,
+            penalty_shootout=None,
+            home_tournament_team_id=1001,
+            away_tournament_team_id=1002,
+            home_team_id=101,
+            away_team_id=102,
+        )
+        game["home_tourn_team_info"] = None
+        game["away_tourn_team_info"] = None
+        payload = _tournament_payload(10, [game], players_per_side=0)
+        payload["season_ids"] = {"": 10}
+        payload["registered_teams"][0]["draw"] = -1
+
+        snapshot = map_tournament_snapshot(payload)
+
+        self.assertEqual(snapshot.players_per_side, 0)
+        self.assertEqual(dict(snapshot.season_ids), {})
+        self.assertEqual(snapshot.teams[0].draws, 0)
+        self.assertEqual(snapshot.games[0].home_team_id, 101)
+        self.assertEqual(snapshot.games[0].away_team_id, 102)
+        self.assertFalse(snapshot.games[0].valid)
+        self.assertFalse(snapshot.games[0].penalty_shootout)
+        self.assertEqual(snapshot.invalid_game_ids, ())
+
+        unresolved = _game(2, 10, penalty_shootout=None)
+        unresolved["home_tourn_team_id"] = None
+        unresolved["away_tourn_team_id"] = None
+        unresolved["home_tourn_team_info"] = None
+        unresolved["away_tourn_team_info"] = None
+        unresolved_payload = _tournament_payload(10, [unresolved])
+
+        unresolved_snapshot = map_tournament_snapshot(unresolved_payload)
+
+        self.assertEqual(unresolved_snapshot.games, ())
+        self.assertEqual(unresolved_snapshot.invalid_game_ids, (2,))
 
     def test_game_detail_is_a_sensitive_field_whitelist(self) -> None:
         detail = map_game_detail(_detail_payload(), expected_game_id=1001)
@@ -445,6 +577,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refs[0].name, "完整赛事名")
         self.assertEqual(refs[0].season, "")
         self.assertFalse(refs[0].visible)
+        self.assertEqual(snapshot.players_per_side, 11)
         self.assertIsNone(snapshot.teams[0].reported_rank)
         self.assertEqual(snapshot.teams[1].reported_rank, 2)
         self.assertEqual(snapshot.games[0].home_team_id, 101)
@@ -538,6 +671,47 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.aclose()
 
+    async def test_blacklisted_tournament_is_rejected_without_request(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("blacklisted tournament must not be requested")
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http:
+            client = THUFootballClient(
+                openid="openid", session_key="session", http_client=http
+            )
+            with self.assertRaises(QueryValidationError):
+                await client.get_tournament_info(6)
+
+    async def test_blacklisted_games_are_not_returned_by_other_reads(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("GetCurrentGames"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "current_games": [_game(1, 6), _game(2, 10)],
+                    },
+                    request=request,
+                )
+            payload = _detail_payload()
+            payload["game_info"]["tourn_id"] = 6
+            payload["tourn_info"]["id"] = 6
+            return httpx.Response(200, json=payload, request=request)
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http:
+            client = THUFootballClient(
+                openid="openid", session_key="session", http_client=http
+            )
+            games = await client.get_current_games()
+            with self.assertRaises(QueryValidationError):
+                await client.get_game_info(1001)
+
+        self.assertEqual([game.game_id for game in games], [2])
+
     async def test_injected_http_client_is_not_closed(self) -> None:
         http = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: None))
         client = THUFootballClient(load_environment=False, http_client=http)
@@ -595,6 +769,150 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(seen[0].url.path.endswith("GetCurrentGames"))
         self.assertEqual(seen[0].url.params["history_bound"], "2026-07-13")
         self.assertEqual(seen[0].url.params["future_bound"], "2026-07-15")
+
+    async def test_omitted_tournaments_discover_all_accessible(self) -> None:
+        discovery_calls = 0
+        tournament_reads: list[int] = []
+        games_by_tournament = {
+            10: [
+                _game(
+                    1,
+                    10,
+                    kickoff="2026-07-14 08:00:00",
+                    started=True,
+                    ended=True,
+                    home_goal=2,
+                    away_goal=1,
+                    penalty_shootout=0,
+                )
+            ],
+            20: [
+                _game(
+                    2,
+                    20,
+                    kickoff="2026-07-14 09:00:00",
+                    started=True,
+                    ended=True,
+                    home_team_id=202,
+                    away_team_id=101,
+                    home_goal=1,
+                    away_goal=0,
+                    penalty_shootout=0,
+                )
+            ],
+        }
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal discovery_calls
+            if request.url.path.endswith("GetMyTournaments"):
+                discovery_calls += 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "tourns": [
+                            {
+                                "id": tournament_id,
+                                "name": f"赛事{tournament_id}",
+                                "brief_name": f"赛{tournament_id}",
+                                "season": "2025~2026",
+                                "begin": "2025-09-01",
+                                "end": "2026-08-01",
+                                "status": True,
+                                "visible": True,
+                            }
+                            for tournament_id in (6, 10, 28, 20)
+                        ],
+                    },
+                    request=request,
+                )
+            tournament_id = int(request.url.params["tourn_id"])
+            tournament_reads.append(tournament_id)
+            return httpx.Response(
+                200,
+                json=_tournament_payload(
+                    tournament_id, games_by_tournament[tournament_id]
+                ),
+                request=request,
+            )
+
+        http, service = await self._service(handler)
+        try:
+            games = await service.query_games(GameQuery())
+            team_matches = await service.query_team_matches(101)
+            history = await service.query_team_to_team_matches(101, 202)
+        finally:
+            await http.aclose()
+
+        self.assertEqual(discovery_calls, 3)
+        self.assertEqual(
+            sorted(tournament_reads), [10, 10, 10, 20, 20, 20]
+        )
+        self.assertEqual([game.game_id for game in games], [1, 2])
+        self.assertEqual(
+            [match.game.game_id for match in team_matches], [2, 1]
+        )
+        self.assertEqual(history.tournament_ids, (10, 20))
+        self.assertEqual([game.game_id for game in history.matches], [2, 1])
+        self.assertEqual(history.summary.team_a_wins, 1)
+        self.assertEqual(history.summary.team_b_wins, 1)
+
+    async def test_blacklisted_query_scope_is_rejected_without_request(
+        self,
+    ) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("blacklisted tournament must not be requested")
+
+        http, service = await self._service(handler)
+        try:
+            calls = (
+                service.query_games(GameQuery(tournament_ids=(6,))),
+                service.query_team_matches(101, 28),
+                service.query_team_to_team_matches(101, 202, [10, 28]),
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                for call in calls:
+                    with self.assertRaises(QueryValidationError):
+                        await call
+        finally:
+            await http.aclose()
+
+        self.assertEqual(caught, [])
+
+    async def test_unresolved_legacy_games_warn_without_aborting(self) -> None:
+        game = _game(91, 10, penalty_shootout=None)
+        game["home_tourn_team_id"] = None
+        game["away_tourn_team_id"] = None
+        game["home_tourn_team_info"] = None
+        game["away_tourn_team_info"] = None
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_tournament_payload(10, [game]),
+                request=request,
+            )
+
+        http, service = await self._service(handler)
+        try:
+            with warnings.catch_warnings(record=True) as team_warnings:
+                warnings.simplefilter("always", InvalidGameDataWarning)
+                team_matches = await service.query_team_matches(101, 10)
+            with warnings.catch_warnings(record=True) as game_warnings:
+                warnings.simplefilter("always", InvalidGameDataWarning)
+                games = await service.query_games(
+                    GameQuery(tournament_ids=(10,))
+                )
+        finally:
+            await http.aclose()
+
+        self.assertEqual(team_matches, [])
+        self.assertEqual(games, [])
+        self.assertEqual(len(team_warnings), 1)
+        self.assertEqual(len(game_warnings), 1)
+        self.assertEqual(team_warnings[0].message.game_ids, (91,))
+        self.assertEqual(game_warnings[0].message.game_ids, (91,))
 
     async def test_tournament_and_date_route_only_uses_tournament_api(self) -> None:
         paths: list[str] = []
@@ -727,7 +1045,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         http, service = await self._service(handler, max_concurrency=4)
         try:
             result = await service.query_games(
-                GameQuery(tournament_ids=(1, 2, 3, 4, 5, 6))
+                GameQuery(tournament_ids=(1, 2, 3, 4, 5, 7))
             )
         finally:
             await http.aclose()
@@ -752,11 +1070,15 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(BatchQueryError) as caught:
                 await service.query_games(GameQuery(tournament_ids=(1, 2, 3)))
+            with self.assertRaises(BatchQueryError) as h2h_caught:
+                await service.query_team_to_team_matches(101, 202, [1, 2, 3])
         finally:
             await http.aclose()
 
         self.assertEqual(caught.exception.failed_tournament_ids, (2,))
         self.assertIsInstance(caught.exception.failures[2], InvalidResponse)
+        self.assertEqual(h2h_caught.exception.failed_tournament_ids, (2,))
+        self.assertIsInstance(h2h_caught.exception.failures[2], InvalidResponse)
 
     async def test_single_failure_is_not_wrapped(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -770,6 +1092,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(InvalidResponse):
                 await service.query_games(GameQuery(tournament_ids=(1,)))
+            with self.assertRaises(InvalidResponse):
+                await service.query_team_matches(101, 1)
         finally:
             await http.aclose()
 
@@ -799,6 +1123,331 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await http.aclose()
 
+    async def test_query_team_matches_normalises_results_and_warns(self) -> None:
+        games = [
+            _game(
+                10,
+                10,
+                kickoff="2026-07-14 06:00:00",
+                started=True,
+                ended=True,
+                home_goal=1,
+                away_goal=1,
+                penalty_shootout=0,
+            ),
+            _game(
+                9,
+                10,
+                kickoff="2026-07-14 07:00:00",
+                started=True,
+                ended=True,
+                home_team_id=202,
+                away_team_id=101,
+                home_goal=2,
+                away_goal=1,
+                penalty_shootout=0,
+            ),
+            _game(
+                1,
+                10,
+                kickoff="2026-07-14 08:00:00",
+                started=True,
+                ended=True,
+                home_goal=3,
+                away_goal=1,
+                penalty_shootout=0,
+                home_penalty=0,
+                away_penalty=0,
+            ),
+            _game(
+                2,
+                10,
+                kickoff="2026-07-14 09:00:00",
+                started=True,
+                ended=True,
+                home_team_id=202,
+                away_team_id=101,
+                home_goal=2,
+                away_goal=2,
+                penalty_shootout=1,
+                home_penalty=3,
+                away_penalty=4,
+            ),
+            _game(
+                3,
+                10,
+                kickoff="2026-07-14 10:00:00",
+                started=True,
+                ended=True,
+                home_goal=8,
+                away_goal=8,
+                penalty_shootout=0,
+                home_penalty=None,
+                away_penalty=None,
+                away_abandon=1,
+            ),
+            _game(
+                4,
+                10,
+                kickoff="2026-07-14 11:00:00",
+                started=True,
+                ended=False,
+                penalty_shootout=0,
+                home_penalty=0,
+                away_penalty=0,
+            ),
+            _game(
+                5,
+                10,
+                kickoff="2026-07-14 12:00:00",
+                started=True,
+                ended=True,
+                home_goal=2,
+                away_goal=2,
+                penalty_shootout=1,
+                home_penalty=0,
+                away_penalty=0,
+            ),
+            _game(
+                6,
+                10,
+                kickoff="2026-07-14 13:00:00",
+                started=True,
+                ended=True,
+                home_abandon=1,
+                away_abandon=1,
+            ),
+            _game(
+                7,
+                10,
+                kickoff="2026-07-14 14:00:00",
+                started=True,
+                ended=True,
+                home_goal=None,
+                away_goal=1,
+                penalty_shootout=0,
+            ),
+            _game(
+                8,
+                10,
+                kickoff="2026-07-14 15:00:00",
+                started=True,
+                ended=True,
+                active=False,
+            ),
+        ]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_tournament_payload(10, games),
+                request=request,
+            )
+
+        http, service = await self._service(handler)
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", InvalidGameDataWarning)
+                results = await service.query_team_matches(101, 10)
+            with warnings.catch_warnings(record=True) as unfinished_caught:
+                warnings.simplefilter("always", InvalidGameDataWarning)
+                with_unfinished = await service.query_team_matches(
+                    101, 10, include_unfinished=True
+                )
+            no_matches = await service.query_team_matches(999, 10)
+        finally:
+            await http.aclose()
+
+        self.assertEqual(len(caught), 1)
+        self.assertEqual(len(unfinished_caught), 1)
+        self.assertIsInstance(caught[0].message, InvalidGameDataWarning)
+        self.assertEqual(caught[0].message.game_ids, (5, 6, 7, 8))
+        self.assertEqual(
+            [item.game.game_id for item in results], [3, 2, 1, 9, 10]
+        )
+        by_game_id = {item.game.game_id: item for item in results}
+        self.assertEqual(by_game_id[9].score_text, "1:2")
+        self.assertEqual(by_game_id[9].result, MatchResult.LOSS)
+        self.assertEqual(by_game_id[10].score_text, "1:1")
+        self.assertEqual(by_game_id[10].result, MatchResult.DRAW)
+        self.assertEqual(results[0].score_text, "3:0")
+        self.assertEqual(results[0].game.result_text, "3:0")
+        self.assertEqual(results[0].result, MatchResult.WIN)
+        self.assertEqual(results[1].venue, "away")
+        self.assertEqual(results[1].score_text, "2(4):2(3)")
+        self.assertEqual(results[1].game.result_text, "2(3):2(4)")
+        self.assertEqual(results[1].penalty_goals_for, 4)
+        self.assertEqual(results[1].penalty_goals_against, 3)
+        self.assertEqual(results[1].result, MatchResult.WIN)
+        self.assertEqual(with_unfinished[0].game.game_id, 4)
+        self.assertEqual(with_unfinished[0].result, MatchResult.UNKNOWN)
+        self.assertIsNone(with_unfinished[0].score_text)
+        self.assertEqual(no_matches, [])
+
+    async def test_query_team_matches_uses_five_goal_forfeit(self) -> None:
+        game = _game(
+            1,
+            10,
+            started=True,
+            ended=True,
+            home_goal=0,
+            away_goal=0,
+            penalty_shootout=0,
+            away_abandon=1,
+        )
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_tournament_payload(10, [game], players_per_side=5),
+                request=request,
+            )
+
+        http, service = await self._service(handler)
+        try:
+            result = await service.query_team_matches(101, 10)
+        finally:
+            await http.aclose()
+
+        self.assertEqual(result[0].goals_for, 5)
+        self.assertEqual(result[0].goals_against, 0)
+        self.assertEqual(result[0].score_text, "5:0")
+
+    async def test_query_team_to_team_matches_summarises_all_tournaments(self) -> None:
+        games_by_tournament = {
+            10: [
+                _game(
+                    11,
+                    10,
+                    kickoff="2026-07-14 08:00:00",
+                    started=True,
+                    ended=True,
+                    home_goal=1,
+                    away_goal=0,
+                    penalty_shootout=0,
+                ),
+                _game(
+                    12,
+                    10,
+                    kickoff="2026-07-14 09:00:00",
+                    started=True,
+                    ended=True,
+                    home_team_id=202,
+                    away_team_id=101,
+                    home_goal=2,
+                    away_goal=2,
+                    penalty_shootout=0,
+                ),
+            ],
+            20: [
+                _game(
+                    21,
+                    20,
+                    kickoff="2026-07-14 10:00:00",
+                    started=True,
+                    ended=True,
+                    home_team_id=202,
+                    away_team_id=101,
+                    home_goal=2,
+                    away_goal=2,
+                    penalty_shootout=1,
+                    home_penalty=3,
+                    away_penalty=4,
+                ),
+                _game(
+                    22,
+                    20,
+                    kickoff="2026-07-14 11:00:00",
+                    started=True,
+                    ended=True,
+                    penalty_shootout=0,
+                    away_abandon=1,
+                ),
+                _game(
+                    23,
+                    20,
+                    kickoff="2026-07-14 12:00:00",
+                    started=True,
+                    ended=False,
+                    penalty_shootout=0,
+                ),
+                _game(
+                    24,
+                    20,
+                    kickoff="2026-07-14 13:00:00",
+                    started=True,
+                    ended=True,
+                    home_abandon=1,
+                    away_abandon=1,
+                ),
+            ],
+            30: [],
+        }
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            tournament_id = int(request.url.params["tourn_id"])
+            return httpx.Response(
+                200,
+                json=_tournament_payload(
+                    tournament_id, games_by_tournament[tournament_id]
+                ),
+                request=request,
+            )
+
+        http, service = await self._service(handler)
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", InvalidGameDataWarning)
+                history = await service.query_team_to_team_matches(
+                    101,
+                    202,
+                    [10, 20, 30, 10],
+                    include_unfinished=True,
+                )
+            empty = await service.query_team_to_team_matches(101, 202, [30])
+        finally:
+            await http.aclose()
+
+        self.assertEqual(len(caught), 1)
+        self.assertIsInstance(caught[0].message, InvalidGameDataWarning)
+        self.assertEqual(caught[0].message.game_ids, (24,))
+        self.assertEqual(history.tournament_ids, (10, 20, 30))
+        self.assertEqual(
+            [game.game_id for game in history.matches], [23, 22, 21, 12, 11]
+        )
+        self.assertEqual(history.matches[2].result_text, "2(3):2(4)")
+        self.assertEqual(history.matches[1].result_text, "3:0")
+        self.assertEqual(history.summary.team_a_wins, 3)
+        self.assertEqual(history.summary.draws, 1)
+        self.assertEqual(history.summary.team_b_wins, 0)
+        self.assertEqual(history.by_tournament[10].team_a_wins, 1)
+        self.assertEqual(history.by_tournament[10].draws, 1)
+        self.assertEqual(history.by_tournament[20].team_a_wins, 2)
+        self.assertEqual(history.by_tournament[30].team_a_wins, 0)
+        self.assertEqual(empty.matches, ())
+        self.assertEqual(empty.summary.team_a_wins, 0)
+        self.assertEqual(empty.by_tournament[30].draws, 0)
+
+    async def test_new_query_validation(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("invalid queries must not make requests")
+
+        http, service = await self._service(handler)
+        try:
+            calls = (
+                service.query_team_matches(True, 1),
+                service.query_team_matches(1, 0),
+                service.query_team_matches(1, 1, include_unfinished=1),
+                service.query_team_to_team_matches(1, 1, [10]),
+                service.query_team_to_team_matches(1, 2, []),
+                service.query_team_to_team_matches(1, 2, [True]),
+            )
+            for call in calls:
+                with self.assertRaises(QueryValidationError):
+                    await call
+        finally:
+            await http.aclose()
+
     async def test_query_validation(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("invalid queries must not make requests")
@@ -806,7 +1455,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         http, service = await self._service(handler)
         try:
             invalid_queries = (
-                GameQuery(),
                 GameQuery(tournament_ids=(True,)),
                 GameQuery(match_date=datetime(2026, 7, 14)),
                 GameQuery(tournament_ids=(1,), team_ids=(1, 2, 3)),
@@ -830,7 +1478,9 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tournament-id",
         type=_positive_cli_id,
-        help="按赛事 ID 查询比赛",
+        action="append",
+        default=[],
+        help="赛事 ID；交锋时可重复传入，省略则查询全部可访问赛事",
     )
     parser.add_argument(
         "--game-id",
@@ -841,6 +1491,21 @@ def _argument_parser() -> argparse.ArgumentParser:
         "--match-date",
         type=_cli_date,
         help="按北京时间自然日过滤，格式为 YYYY-MM-DD",
+    )
+    parser.add_argument(
+        "--team-id",
+        type=_positive_cli_id,
+        help="查询该全局球队 ID 的比赛",
+    )
+    parser.add_argument(
+        "--opponent-id",
+        type=_positive_cli_id,
+        help="与 --team-id 组合查询两队交锋",
+    )
+    parser.add_argument(
+        "--include-unfinished",
+        action="store_true",
+        help="球队比赛或交锋中包含有效未完赛比赛",
     )
     parser.add_argument(
         "--full-output",
@@ -856,17 +1521,30 @@ def _argument_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _argument_parser().parse_args(argv)
+    parser = _argument_parser()
+    args = parser.parse_args(argv)
     runner = unittest.TextTestRunner(verbosity=2)
     if args.unit_tests:
         suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
         return 0 if runner.run(suite).wasSuccessful() else 1
 
+    tournament_ids = tuple(dict.fromkeys(args.tournament_id))
+    if args.opponent_id is not None and args.team_id is None:
+        parser.error("--opponent-id 必须与 --team-id 一起使用")
+    if args.team_id is not None and args.match_date is not None:
+        parser.error("球队比赛或交锋查询不能与 --match-date 同时使用")
+    if args.team_id is not None and args.opponent_id is None:
+        if len(tournament_ids) > 1:
+            parser.error("球队比赛查询最多指定一个 --tournament-id")
+
     global _LIVE_SMOKE_CONFIG
     _LIVE_SMOKE_CONFIG = _LiveSmokeConfig(
-        tournament_id=args.tournament_id,
+        tournament_ids=tournament_ids,
         game_id=args.game_id,
         match_date=args.match_date,
+        team_id=args.team_id,
+        opponent_id=args.opponent_id,
+        include_unfinished=args.include_unfinished,
         full_output=args.full_output,
     )
     suite = unittest.TestSuite([LiveSmokeTests("test_live_smoke")])

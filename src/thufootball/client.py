@@ -32,6 +32,7 @@ from .models import (
     TournamentSnapshot,
     UserProbe,
 )
+from .policy import BLACKLISTED_TOURNAMENT_IDS
 
 
 DEFAULT_BASE_URL = "https://api.thufootball.tech"
@@ -307,12 +308,20 @@ class THUFootballClient:
             parameters,
             authentication_required=False,
         )
-        return map_current_games(payload)
+        return [
+            game
+            for game in map_current_games(payload)
+            if game.tournament_id not in BLACKLISTED_TOURNAMENT_IDS
+        ]
 
     async def get_tournament_info(
         self, tournament_id: int
     ) -> TournamentSnapshot:
         tournament_id = _positive_id(tournament_id, "tournament_id")
+        if tournament_id in BLACKLISTED_TOURNAMENT_IDS:
+            raise _query_error(
+                f"tournament_id {tournament_id} is blacklisted"
+            )
         payload = await self._request_json(
             "GetTournInfo",
             {"tourn_id": tournament_id},
@@ -329,4 +338,9 @@ class THUFootballClient:
             {"game_id": game_id},
             authentication_required=True,
         )
-        return map_game_detail(payload, expected_game_id=game_id)
+        detail = map_game_detail(payload, expected_game_id=game_id)
+        if detail.game.tournament_id in BLACKLISTED_TOURNAMENT_IDS:
+            raise _query_error(
+                f"game_id {game_id} belongs to a blacklisted tournament"
+            )
+        return detail
