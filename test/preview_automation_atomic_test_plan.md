@@ -63,17 +63,18 @@ THUFootball 侧的接口输入依据见 [THUFootball 比赛 API 使用说明](./
 ```text
 TargetDate
   -> THUFootballGateway
-  -> MatchAssembler
-  -> MatchBundle
+  -> 上游编排/写作流程
+  -> PreviewSourceData JSON
 
 PublishedArticleRef
   -> ArticleSourceReader
   -> HtmlNormalizer
-  -> TemplateCompiler
-  -> ArticleTemplate
+  -> PreviewTemplate
 
-MatchBundle + ArticleTemplate + EditorialInput
-  -> TemplateRenderer
+PreviewSourceData JSON
+  -> StrictPreviewDecoder
+  -> PreviewSourceData
+  -> PreviewTemplate.render(source)
   -> RenderedArticle
   -> MediaPublisher
   -> DraftPayloadBuilder
@@ -90,9 +91,10 @@ MatchBundle + ArticleTemplate + EditorialInput
 | `GameSnapshot` | 单场比赛的展示信息和比赛状态 |
 | `TeamForm` | 某队近期比赛及聚合结果 |
 | `HeadToHead` | 两队历史交手及数据覆盖范围说明 |
-| `MatchBundle` | 单场前瞻所需的完整、可序列化数据 |
+| `PreviewSourceData` | 多场前瞻的干净事实、结构化赛果和纯文本写作内容 |
+| `PreviewColumnConfig` | 嵌套在 `PreviewSourceData.column` 中的男足、女足或五人制栏目身份 |
 | `ArticleSource` | 正文 HTML、标题、来源 URL、媒体引用清单 |
-| `ArticleTemplate` | 模板版本、占位符契约、静态布局和样式 |
+| `PreviewTemplate` | 只接受类型化前瞻源数据的静态布局和安全模板 |
 | `RenderedArticle` | 已填充、已清理但尚未上传媒体的正文 |
 | `DraftPayload` | 符合草稿适配器输入约束的文章数据 |
 | `DraftReceipt` | 草稿标识、内容指纹、创建时间和追踪 ID |
@@ -103,7 +105,7 @@ MatchBundle + ArticleTemplate + EditorialInput
 - `THUFootballGateway`：只负责请求和响应映射，不负责近期战绩计算。
 - `ArticleSourceReader`：只负责取得来源，不负责模板推断。
 - `HtmlNormalizer`：只负责确定性清理和标准化。
-- `TemplateRenderer`：只接受已定义的占位符契约。
+- `PreviewTemplate`：直接接受 `PreviewSourceData` 与栏目配置，不读取旧展示 DTO。
 - `MediaPublisher`：负责图片上传及 URL 替换。
 - `WechatDraftGateway`：只负责草稿操作，不暴露发布操作。
 
@@ -433,6 +435,7 @@ InsufficientHistoryCoverage
 SourceAccessBlocked
 UnsafeHtml
 TemplateContractError
+PreviewValidationError
 MediaUploadError
 DraftValidationError
 DraftWriteError

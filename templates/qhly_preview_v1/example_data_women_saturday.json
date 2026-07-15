@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "column": {
+    "competition_full_name": "马约翰杯女子足球赛",
+    "competition_short_name": "马杯女足"
+  },
+  "preview_date": "2026-04-11",
+  "headline": "女足周六测试前瞻",
+  "weather": {
+    "forecast_date": "2026-04-11",
+    "low_c": 12,
+    "high_c": 23,
+    "wind_direction": "南风",
+    "wind_level": "1级"
+  },
+  "matches": [
+    {
+      "game_id": -1,
+      "competition_name": "女子组",
+      "stage": "小组赛",
+      "kickoff": "2026-04-11T15:30:00+08:00",
+      "venue": "紫荆操场",
+      "home": {
+        "team_id": 1990,
+        "name": "社会科学学院-心理与认知科学系女足",
+        "short_name": "社科-心理女足",
+        "previous_outcomes": [],
+        "current_results": []
+      },
+      "away": {
+        "team_id": 72,
+        "name": "经济管理学院女足",
+        "short_name": "经管女足",
+        "previous_outcomes": [],
+        "current_results": []
+      },
+      "head_to_head": [],
+      "preview_paragraphs": [
+        "前瞻文章"
+      ],
+      "writers": [
+        "测试作者"
+      ]
+    }
+  ],
+  "credits": {
+    "editors": [
+      "测试编辑"
+    ],
+    "reviewers": [
+      "测试责编"
+    ],
+    "approvers": [
+      "测试审核"
+    ]
+  }
+}

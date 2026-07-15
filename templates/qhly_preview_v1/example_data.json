@@ -1,0 +1,467 @@
+{
+  "schema_version": 1,
+  "column": {
+    "competition_full_name": "马约翰杯男子足球赛",
+    "competition_short_name": "马杯男足"
+  },
+  "preview_date": "2026-04-11",
+  "headline": "落日熔金，危崖试翼",
+  "weather": {
+    "forecast_date": "2026-04-11",
+    "low_c": 11,
+    "high_c": 24,
+    "wind_direction": "南风",
+    "wind_level": "1级"
+  },
+  "matches": [
+    {
+      "game_id": -1,
+      "competition_name": "甲级淘汰赛",
+      "stage": "三四名决赛",
+      "kickoff": "2026-04-11T15:30:00+08:00",
+      "venue": "紫荆操场",
+      "home": {
+        "team_id": 254,
+        "name": "社会科学学院-心理与认知科学系",
+        "short_name": "社科-心理",
+        "previous_outcomes": [
+          {
+            "season": "24-25",
+            "competition_label": "甲",
+            "outcome": "亚军"
+          },
+          {
+            "season": "23-24",
+            "competition_label": "甲",
+            "outcome": "冠军"
+          },
+          {
+            "season": "22-23",
+            "competition_label": "甲",
+            "outcome": "冠军"
+          }
+        ],
+        "current_results": [
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 254,
+              "name": "社会科学学院-心理与认知科学系",
+              "short_name": "社科-心理"
+            },
+            "away": {
+              "team_id": 45,
+              "name": "工物-安全联队",
+              "short_name": "工物-安全"
+            },
+            "home_score": 4,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 254,
+              "name": "社会科学学院-心理与认知科学系",
+              "short_name": "社科-心理"
+            },
+            "away": {
+              "team_id": 50,
+              "name": "法学院",
+              "short_name": "法学"
+            },
+            "home_score": 3,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 254,
+              "name": "社会科学学院-心理与认知科学系",
+              "short_name": "社科-心理"
+            },
+            "away": {
+              "team_id": 52,
+              "name": "化学工程系",
+              "short_name": "化工"
+            },
+            "home_score": 3,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 254,
+              "name": "社会科学学院-心理与认知科学系",
+              "short_name": "社科-心理"
+            },
+            "away": {
+              "team_id": 61,
+              "name": "工业工程系-统计学研究中心联队",
+              "short_name": "工工-统计"
+            },
+            "home_score": 4,
+            "away_score": 3
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 254,
+              "name": "社会科学学院-心理与认知科学系",
+              "short_name": "社科-心理"
+            },
+            "away": {
+              "team_id": 48,
+              "name": "车辆与运载学院",
+              "short_name": "车辆"
+            },
+            "home_score": 0,
+            "away_score": 3
+          }
+        ]
+      },
+      "away": {
+        "team_id": 44,
+        "name": "经济管理学院-国际与地区研究院",
+        "short_name": "经管-地研",
+        "previous_outcomes": [
+          {
+            "season": "24-25",
+            "competition_label": "甲",
+            "outcome": "第四名"
+          },
+          {
+            "season": "23-24",
+            "competition_label": "甲",
+            "outcome": "季军"
+          },
+          {
+            "season": "22-23",
+            "competition_label": "甲",
+            "outcome": "八强"
+          }
+        ],
+        "current_results": [
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 44,
+              "name": "经济管理学院-国际与地区研究院",
+              "short_name": "经管-地研"
+            },
+            "away": {
+              "team_id": 38,
+              "name": "材料学院",
+              "short_name": "材料"
+            },
+            "home_score": 5,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 44,
+              "name": "经济管理学院-国际与地区研究院",
+              "short_name": "经管-地研"
+            },
+            "away": {
+              "team_id": 34,
+              "name": "电子工程系",
+              "short_name": "电子"
+            },
+            "home_score": 3,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 44,
+              "name": "经济管理学院-国际与地区研究院",
+              "short_name": "经管-地研"
+            },
+            "away": {
+              "team_id": 53,
+              "name": "建筑学院",
+              "short_name": "建筑"
+            },
+            "home_score": 5,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 44,
+              "name": "经济管理学院-国际与地区研究院",
+              "short_name": "经管-地研"
+            },
+            "away": {
+              "team_id": 33,
+              "name": "计算机系-GIX联队",
+              "short_name": "计算机-GIX"
+            },
+            "home_score": 3,
+            "away_score": 0
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 44,
+              "name": "经济管理学院-国际与地区研究院",
+              "short_name": "经管-地研"
+            },
+            "away": {
+              "team_id": 163,
+              "name": "未央书院",
+              "short_name": "未央"
+            },
+            "home_score": 1,
+            "away_score": 2
+          }
+        ]
+      },
+      "head_to_head": [
+        {
+          "game_id": -1,
+          "home": {
+            "team_id": 254,
+            "name": "社会科学学院-心理与认知科学系",
+            "short_name": "社科"
+          },
+          "away": {
+            "team_id": 44,
+            "name": "经济管理学院-国际与地区研究院",
+            "short_name": "经管-地研"
+          },
+          "home_score": 5,
+          "away_score": 2,
+          "season": "23-24",
+          "competition_label": "甲",
+          "stage": "半决赛"
+        }
+      ],
+      "preview_paragraphs": [
+        "曾经连续三年打进东操，获得两冠一亚的社科在半决赛遭遇卫冕冠军车辆，受限于球队严重的伤病潮和校队比赛的消耗，社科只能以防守反击阵型应对对手，在连续第三年交锋的这场对决中，社科男足明显有些后继乏力。在上半场勉力维持平局的情况下，下半时连续城门失守，最终0-3负于对手，遭遇8年以来最大比分的失利，无缘连续第四年闯入东操。回顾这个赛季，社科在连续流失主力球员后，实力出现了大幅下滑，连续三场比赛都磕磕绊绊击败对手，最终在银河战舰面前轰然倒地。往者已矣，曾经的东操辉煌已是过眼云烟，社科男足能否立足当下，用季军为这个波折的赛季画上还算圆满的句号呢？",
+        "经管男足最近三个赛季都打进了甲级四强，但在三场被安排在清明节假期的甲级半决赛中都面临了多名主力球员缺阵的难题，先后败给社科、车辆和未央无缘决赛，未能时隔9年重返东操。在与未央的这场火星撞地球的对决中，经管已经表现的足够顽强。大一的校二队球员在边路连过数人，贡献技惊四座的千里走单骑破门，攻破了对手堪称坚不可摧的防线，一度帮助球队扳平比分。可惜在掌控比赛局势的20分钟内，球队门前近在咫尺的凌空扫射被对手校二队一门如有神助拒之门外，胜利天平还是滑向对手一方。在多名球员的最后一场马杯中，球队能否迅速从半决赛失利中重整旗鼓，是击败对手拿到季军的当务之急。",
+        "在上次季军赛比赛经历中，社科曾与对手奉献让四追四的精彩对攻，经管则是最后时刻被对手绝平遗憾告负。甲级三四名决赛既是两队没有太多压力的收官战，但又意味着登上领奖台的机会，究竟哪支球队能够抓住这个机会，让我们关注周六15:30的紫操。"
+      ],
+      "writers": [
+        "唐伟"
+      ]
+    },
+    {
+      "game_id": -1,
+      "competition_name": "甲级保级赛",
+      "stage": "决赛",
+      "kickoff": "2026-04-11T19:00:00+08:00",
+      "venue": "紫荆操场",
+      "home": {
+        "team_id": 47,
+        "name": "土木工程系-建设管理系",
+        "short_name": "土木-建管",
+        "previous_outcomes": [
+          {
+            "season": "24-25",
+            "competition_label": "甲",
+            "outcome": "小组第三"
+          },
+          {
+            "season": "23-24",
+            "competition_label": "甲",
+            "outcome": "小组第三"
+          },
+          {
+            "season": "22-23",
+            "competition_label": "甲",
+            "outcome": "小组第三"
+          }
+        ],
+        "current_results": [
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 47,
+              "name": "土木工程系-建设管理系",
+              "short_name": "土木-建管"
+            },
+            "away": {
+              "team_id": 48,
+              "name": "车辆与运载学院",
+              "short_name": "车辆"
+            },
+            "home_score": 1,
+            "away_score": 6
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 47,
+              "name": "土木工程系-建设管理系",
+              "short_name": "土木-建管"
+            },
+            "away": {
+              "team_id": 41,
+              "name": "能源与动力工程系",
+              "short_name": "能动"
+            },
+            "home_score": 1,
+            "away_score": 6
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 47,
+              "name": "土木工程系-建设管理系",
+              "short_name": "土木-建管"
+            },
+            "away": {
+              "team_id": 33,
+              "name": "计算机系-GIX联队",
+              "short_name": "计算机-GIX"
+            },
+            "home_score": 1,
+            "away_score": 4
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 47,
+              "name": "土木工程系-建设管理系",
+              "short_name": "土木-建管"
+            },
+            "away": {
+              "team_id": 35,
+              "name": "电机工程与应用电子技术系",
+              "short_name": "电机"
+            },
+            "home_score": 3,
+            "away_score": 1
+          }
+        ]
+      },
+      "away": {
+        "team_id": 38,
+        "name": "材料学院",
+        "short_name": "材料",
+        "previous_outcomes": [
+          {
+            "season": "24-25",
+            "competition_label": "甲",
+            "outcome": "八强"
+          },
+          {
+            "season": "23-24",
+            "competition_label": "甲",
+            "outcome": "保级"
+          },
+          {
+            "season": "22-23",
+            "competition_label": "甲",
+            "outcome": "亚军"
+          }
+        ],
+        "current_results": [
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 38,
+              "name": "材料学院",
+              "short_name": "材料"
+            },
+            "away": {
+              "team_id": 44,
+              "name": "经济管理学院-国际与地区研究院",
+              "short_name": "经管-地研"
+            },
+            "home_score": 0,
+            "away_score": 5
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 38,
+              "name": "材料学院",
+              "short_name": "材料"
+            },
+            "away": {
+              "team_id": 53,
+              "name": "建筑学院",
+              "short_name": "建筑"
+            },
+            "home_score": 0,
+            "away_score": 5
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 38,
+              "name": "材料学院",
+              "short_name": "材料"
+            },
+            "away": {
+              "team_id": 34,
+              "name": "电子工程系",
+              "short_name": "电子"
+            },
+            "home_score": 1,
+            "away_score": 1
+          },
+          {
+            "game_id": -1,
+            "home": {
+              "team_id": 38,
+              "name": "材料学院",
+              "short_name": "材料"
+            },
+            "away": {
+              "team_id": 52,
+              "name": "化学工程系",
+              "short_name": "化工"
+            },
+            "home_score": 4,
+            "away_score": 2
+          }
+        ]
+      },
+      "head_to_head": [
+        {
+          "game_id": -1,
+          "home": {
+            "team_id": 47,
+            "name": "土木工程系-建设管理系",
+            "short_name": "土木-建管"
+          },
+          "away": {
+            "team_id": 38,
+            "name": "材料学院",
+            "short_name": "材料"
+          },
+          "home_score": 1,
+          "away_score": 1,
+          "season": "23-24",
+          "competition_label": "甲",
+          "stage": "小组赛第2轮"
+        }
+      ],
+      "preview_paragraphs": [
+        "保级赛决赛作为赛程中关注度仅次于马杯决赛的比赛，每年都为观众带来拳拳到肉、刀刀见血的精彩表演。继材料4-4点胜计算机和建筑2-2点胜公管之后，本赛季我们迎来了材料与土木的工科德比。",
+        "土木-建管联队自从乙级三四名决赛险胜生院完成升级之后，维持了非常稳定的成绩，连续三年没有掉入保级区，在甲级站住了脚跟，今年虽然同样面对一定的球员流失，但是也迎来了几位工工强将的补充，尤其是核心中锋，本赛季已经完成的四场比赛中，都有进球入账。此外，柬埔寨边锋组织细腻，出球稳定，与多位冲击力十足的前场球员一同组成了本赛季从没被零封的优秀攻击群。中场方面，几位老将拿球沉稳且善于串联调度，配合二队的中场多面手给球队提供了不俗的创造力，能够在给前场充足的进攻弹药的同时，给后场稳定的防守协助。超级中卫本赛季依旧表现出色，防守端高接抵挡、有球端稳定出球，甚至在面对电机的第一场保级赛中角球进攻梅开二度，可以说在攻守两侧都令对手胆寒。本学期土木队坚持积极备战，提升防守的协同、锻炼进攻的套路，准备用实力拿下珍贵的保级名额，为明年可能的变动留下甲级的火种。",
+        "材料学院自2023年豪取亚军之后，多位主力离队，成绩大幅波动：先是掉入保级区，成功搏杀精仪计算机留在甲级；又是小组第二出线被经管击败；今年再次被分入死亡之组，净胜球不敌电子，开始保级之旅。面对化工，材料众志成城，每一位球员都奉献出全部的体能，疯狂的攻守跑位，为我们展现了强大的意志力和卓绝的精神面貌。中锋以强大的个人能力成为前场支点，两边锋依靠中锋创造的空间犀利冲击，捕捉对手失误。三中场围绕着二队后腰，提供了坚不可摧的屏障，上下翻飞、回收球权、发起进攻。后卫虽然在化工的王牌反击下稍有失误，但是也展现了优秀的默契和整体性。门将技术稳定，给球队提供最后一层保护。场下替补球员也积极奋勇，渴望为球队做出贡献。材料虽不复当年之勇，但是新的球员继承了球队的风格和精神，希望在球队历史中写下再次冲出保级泥沼的新篇。",
+        "两队曾在2023-2024赛季的小组赛相遇，打成1-1平手，2年过去，土木保留了较完整的主力框架，而材料已经完成了阵容更迭和重建。是土木大显风采，展现球队两年来的进步，还是材料再次保级，一代新人胜旧人，我们尽情期待4月11日本周六晚19:00的紫荆操场。"
+      ],
+      "writers": [
+        "王镜尧"
+      ]
+    }
+  ],
+  "credits": {
+    "editors": [
+      "姜皓"
+    ],
+    "reviewers": [
+      "施瑞祥"
+    ],
+    "approvers": [
+      "何奇泽",
+      "邢玮"
+    ]
+  }
+}

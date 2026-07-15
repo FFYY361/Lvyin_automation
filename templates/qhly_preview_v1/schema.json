@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.qhly/templates/qhly-preview-source-v1.schema.json",
+  "title": "清华绿茵比赛前瞻源数据 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "column", "preview_date", "headline", "matches", "credits"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "column": {"$ref": "#/$defs/columnConfig"},
+    "preview_date": {"type": "string", "format": "date"},
+    "headline": {"$ref": "#/$defs/nonEmptyString"},
+    "weather": {
+      "anyOf": [
+        {"$ref": "#/$defs/weather"},
+        {"type": "null"}
+      ]
+    },
+    "matches": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/previewMatch"}
+    },
+    "credits": {"$ref": "#/$defs/credits"}
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    },
+    "columnConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["competition_full_name", "competition_short_name"],
+      "properties": {
+        "competition_full_name": {"$ref": "#/$defs/nonEmptyString"},
+        "competition_short_name": {"$ref": "#/$defs/nonEmptyString"},
+        "weekday_label_override": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "positiveId": {"type": "integer", "minimum": 1},
+    "gameId": {
+      "description": "真实比赛 ID 为正整数；未知时使用 -1",
+      "anyOf": [
+        {"const": -1},
+        {"type": "integer", "minimum": 1}
+      ]
+    },
+    "nameArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/nonEmptyString"}
+    },
+    "weather": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forecast_date", "low_c", "high_c", "wind_direction", "wind_level"],
+      "properties": {
+        "forecast_date": {"type": "string", "format": "date"},
+        "low_c": {"type": "integer"},
+        "high_c": {"type": "integer"},
+        "wind_direction": {"$ref": "#/$defs/nonEmptyString"},
+        "wind_level": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "teamRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team_id", "name", "short_name"],
+      "properties": {
+        "team_id": {"$ref": "#/$defs/positiveId"},
+        "name": {"$ref": "#/$defs/nonEmptyString"},
+        "short_name": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "seasonOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["season", "competition_label", "outcome"],
+      "properties": {
+        "season": {"$ref": "#/$defs/nonEmptyString"},
+        "competition_label": {"$ref": "#/$defs/nonEmptyString"},
+        "outcome": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "playedMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["game_id", "home", "away"],
+      "properties": {
+        "game_id": {"$ref": "#/$defs/gameId"},
+        "season": {"$ref": "#/$defs/nonEmptyString"},
+        "competition_label": {"$ref": "#/$defs/nonEmptyString"},
+        "stage": {"$ref": "#/$defs/nonEmptyString"},
+        "home": {"$ref": "#/$defs/teamRef"},
+        "away": {"$ref": "#/$defs/teamRef"},
+        "home_score": {"type": "integer", "minimum": 0},
+        "away_score": {"type": "integer", "minimum": 0},
+        "home_penalty": {"type": "integer", "minimum": 0},
+        "away_penalty": {"type": "integer", "minimum": 0},
+        "result_text": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "anyOf": [
+        {"required": ["result_text"]},
+        {"required": ["home_score", "away_score"]}
+      ]
+    },
+    "previewTeam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team_id", "name", "short_name", "previous_outcomes", "current_results"],
+      "properties": {
+        "team_id": {"$ref": "#/$defs/positiveId"},
+        "name": {"$ref": "#/$defs/nonEmptyString"},
+        "short_name": {"$ref": "#/$defs/nonEmptyString"},
+        "previous_outcomes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/seasonOutcome"}
+        },
+        "current_results": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/playedMatch"}
+        }
+      }
+    },
+    "previewMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "game_id",
+        "competition_name",
+        "stage",
+        "kickoff",
+        "venue",
+        "home",
+        "away",
+        "head_to_head",
+        "preview_paragraphs",
+        "writers"
+      ],
+      "properties": {
+        "game_id": {"$ref": "#/$defs/gameId"},
+        "competition_name": {"$ref": "#/$defs/nonEmptyString"},
+        "stage": {"$ref": "#/$defs/nonEmptyString"},
+        "kickoff": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2})?\\+08:00$"
+        },
+        "venue": {"$ref": "#/$defs/nonEmptyString"},
+        "home": {"$ref": "#/$defs/previewTeam"},
+        "away": {"$ref": "#/$defs/previewTeam"},
+        "head_to_head": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/playedMatch"}
+        },
+        "preview_paragraphs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/nonEmptyString"}
+        },
+        "writers": {"$ref": "#/$defs/nameArray"}
+      }
+    },
+    "credits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["editors", "reviewers", "approvers"],
+      "properties": {
+        "editors": {"$ref": "#/$defs/nameArray"},
+        "reviewers": {"$ref": "#/$defs/nameArray"},
+        "approvers": {"$ref": "#/$defs/nameArray"}
+      }
+    }
+  }
+}
