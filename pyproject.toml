@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+thufootball = "thufootball.cli:main"
 wechat-preview = "wechat_official.cli:main"
 
 [tool.setuptools.packages.find]
