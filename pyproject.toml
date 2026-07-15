@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thufootball-preview-automation"
+version = "0.1.0"
+description = "THUFootball preview generation and WeChat draft tooling"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<1",
+  "lxml>=5,<7",
+]
+
+[project.scripts]
+wechat-preview = "wechat_official.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
