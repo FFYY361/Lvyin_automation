@@ -4,12 +4,12 @@
     "competition_full_name": "马约翰杯男子足球赛",
     "competition_short_name": "马杯男足"
   },
-  "preview_date": "2026-04-11",
-  "headline": "落日熔金，危崖试翼",
+  "preview_date": "2026-04-12",
+  "headline": "测试",
   "weather": {
-    "forecast_date": "2026-04-11",
+    "forecast_date": "2026-04-12",
     "low_c": 11,
-    "high_c": 24,
+    "high_c": 23,
     "wind_direction": "南风",
     "wind_level": "1级"
   },
@@ -18,7 +18,7 @@
       "game_id": -1,
       "competition_name": "甲级淘汰赛",
       "stage": "三四名决赛",
-      "kickoff": "2026-04-11T15:30:00+08:00",
+      "kickoff": "2026-04-12T15:30:00+08:00",
       "venue": "紫荆操场",
       "home": {
         "team_id": 254,
@@ -251,7 +251,7 @@
       "game_id": -1,
       "competition_name": "甲级保级赛",
       "stage": "决赛",
-      "kickoff": "2026-04-11T19:00:00+08:00",
+      "kickoff": "2026-04-12T19:00:00+08:00",
       "venue": "紫荆操场",
       "home": {
         "team_id": 47,

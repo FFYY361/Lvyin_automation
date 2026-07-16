@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 
@@ -911,6 +912,16 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             client, max_concurrency=max_concurrency
         )
 
+    async def test_from_environment_owns_and_closes_transport(self) -> None:
+        with patch("thufootball.client.load_credentials", return_value=("", "")):
+            service = THUFootballQueryService.from_environment()
+        client = service._client
+
+        async with service as entered:
+            self.assertIs(entered, service)
+
+        self.assertTrue(client._closed)
+
     async def test_date_only_uses_wide_bounds_and_beijing_filter(self) -> None:
         seen: list[httpx.Request] = []
         games = [
@@ -1598,6 +1609,63 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty.summary.team_a_wins, 0)
         self.assertEqual(empty.by_tournament[30].draws, 0)
 
+    async def test_query_team_to_team_matches_expands_static_team_ids(self) -> None:
+        games = [
+            _game(
+                1,
+                10,
+                started=True,
+                ended=True,
+                home_team_id=254,
+                away_team_id=48,
+                home_goal=1,
+                away_goal=0,
+                penalty_shootout=0,
+            ),
+            _game(
+                2,
+                10,
+                started=True,
+                ended=True,
+                home_team_id=48,
+                away_team_id=80,
+                home_goal=0,
+                away_goal=2,
+                penalty_shootout=0,
+            ),
+            _game(
+                3,
+                10,
+                started=True,
+                ended=True,
+                home_team_id=101,
+                away_team_id=48,
+                home_goal=3,
+                away_goal=0,
+                penalty_shootout=0,
+            ),
+        ]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_tournament_payload(10, games),
+                request=request,
+            )
+
+        http, service = await self._service(handler)
+        try:
+            history = await service.query_team_to_team_matches(254, 48, [10])
+        finally:
+            await http.aclose()
+
+        self.assertEqual(history.team_a_id, 254)
+        self.assertEqual(history.team_b_id, 48)
+        self.assertEqual([game.game_id for game in history.matches], [2, 1])
+        self.assertEqual(history.summary.team_a_wins, 2)
+        self.assertEqual(history.summary.draws, 0)
+        self.assertEqual(history.summary.team_b_wins, 0)
+
     async def test_new_query_validation(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("invalid queries must not make requests")
@@ -1609,6 +1677,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 service.query_team_matches(1, 0),
                 service.query_team_matches(1, 1, include_unfinished=1),
                 service.query_team_to_team_matches(1, 1, [10]),
+                service.query_team_to_team_matches(254, 80, [10]),
                 service.query_team_to_team_matches(1, 2, []),
                 service.query_team_to_team_matches(1, 2, [True]),
             )

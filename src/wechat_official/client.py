@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import ipaddress
-import json
 import mimetypes
 import os
 import re
@@ -31,7 +29,7 @@ from .errors import (
 )
 from .config import DEFAULT_ENV_FILE, load_wechat_env
 from .html_tools import collect_media_references
-from .models import DraftArticle, DraftReceipt
+from .models import Article, DraftReceipt
 
 
 DEFAULT_API_BASE_URL = "https://api.weixin.qq.com"
@@ -82,21 +80,6 @@ def _wechat_observed_ip(message: str) -> str | None:
             return str(address.ipv4_mapped)
         return str(address)
     return None
-
-
-def _content_fingerprint(article: DraftArticle) -> str:
-    serialised = json.dumps(
-        {
-            "title": article.title,
-            "body_html": article.body_html,
-            "author": article.author,
-            "digest": article.digest,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(serialised).hexdigest()
 
 
 class WechatOfficialClient:
@@ -351,7 +334,7 @@ class WechatOfficialClient:
             )
         return media_id
 
-    def validate_draft(self, article: DraftArticle, thumb_media_id: str) -> None:
+    def validate_draft(self, article: Article, thumb_media_id: str) -> None:
         if not article.title.strip():
             raise DraftValidationError("draft title is required", stage="draft-validation")
         if not article.body_html.strip():
@@ -376,9 +359,19 @@ class WechatOfficialClient:
             )
 
     async def add_draft(
-        self, article: DraftArticle, *, thumb_media_id: str
+        self,
+        article: Article,
+        *,
+        thumb_media_id: str,
+        open_comments: bool = False,
+        fans_only_comments: bool = False,
     ) -> DraftReceipt:
         self.validate_draft(article, thumb_media_id)
+        if fans_only_comments and not open_comments:
+            raise DraftValidationError(
+                "fans_only_comments requires open_comments",
+                stage="draft-validation",
+            )
         item: dict[str, Any] = {
             "article_type": "news",
             "title": article.title,
@@ -387,8 +380,8 @@ class WechatOfficialClient:
             "content": article.body_html,
             "content_source_url": article.source_url,
             "thumb_media_id": thumb_media_id,
-            "need_open_comment": 1 if article.open_comments else 0,
-            "only_fans_can_comment": 1 if article.fans_only_comments else 0,
+            "need_open_comment": 1 if open_comments else 0,
+            "only_fans_can_comment": 1 if fans_only_comments else 0,
         }
         payload = await self._request_with_token(
             "POST", "/cgi-bin/draft/add", json_body={"articles": [item]}
@@ -400,7 +393,7 @@ class WechatOfficialClient:
             )
         return DraftReceipt(
             media_id=media_id,
-            content_fingerprint=_content_fingerprint(article),
+            content_fingerprint=article.content_fingerprint,
             created_at=datetime.now(UTC),
         )
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import html as html_std
-import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
@@ -12,9 +11,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .errors import TemplateContractError
-from .html_tools import collect_media_references, sanitise_html
-from .models import RenderedArticle
-from .preview import (
+from .html_tools import sanitise_html
+from .models import (
     PlayedMatch,
     PreviewMatch,
     PreviewSourceData,
@@ -34,16 +32,6 @@ _TOKEN = re.compile(
 _UNRESOLVED = re.compile(r"\{\{|\}\}|<!--\s*wx:")
 _TRIPLE_BRACE = re.compile(r"\{\{\{|\}\}\}")
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-
-
-def _fingerprint(title: str, body_html: str) -> str:
-    serialised = json.dumps(
-        {"title": title, "body_html": body_html},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(serialised).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -395,10 +383,10 @@ class PreviewTemplate:
             version = "sha256:" + hashlib.sha256(body_template.encode("utf-8")).hexdigest()[:16]
         return cls(nodes=nodes, source=body_template, version=version)
 
-    def render(
+    def render_body(
         self,
         source: PreviewSourceData,
-    ) -> RenderedArticle:
+    ) -> tuple[str, str]:
         validate_preview_source(source)
         config = source.column
         weekday_label = (
@@ -419,13 +407,7 @@ class PreviewTemplate:
             f"【{config.competition_short_name.strip()}{weekday_label}前瞻】"
             f"|| {source.headline.strip()}"
         )
-        return RenderedArticle(
-            title=title,
-            body_html=normalised_body,
-            template_version=self.version,
-            content_fingerprint=_fingerprint(title, normalised_body),
-            media=collect_media_references(normalised_body),
-        )
+        return title, normalised_body
 
 
 def load_preview_template(
@@ -437,24 +419,3 @@ def load_preview_template(
         Path(path).read_text(encoding="utf-8"),
         version=version,
     )
-
-
-def save_rendered_article(article: RenderedArticle, path: str | Path) -> Path:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    standalone = (
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        f"<title>{html_std.escape(article.title)}</title>"
-        "<style>body{margin:0 auto;max-width:677px;padding:20px;font-family:-apple-system,"
-        "BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;box-sizing:border-box}"
-        "section[data-wechat-article-body='1'] *,"
-        "section[data-wechat-article-body='1'] *::before,"
-        "section[data-wechat-article-body='1'] *::after{box-sizing:border-box;"
-        "max-width:100%!important;word-wrap:break-word!important}"
-        "section[data-wechat-article-body='1'] p{margin-block-start:0;margin-block-end:0}"
-        "img{max-width:100%;height:auto}</style></head><body>"
-        f"{article.body_html}</body></html>"
-    )
-    output.write_text(standalone, encoding="utf-8")
-    return output

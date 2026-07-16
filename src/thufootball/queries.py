@@ -87,6 +87,18 @@ def _include_unfinished(value: object) -> bool:
     return value
 
 
+def _team_alias_ids(team_id: int) -> frozenset[int]:
+    catalog = load_static_outcome_catalog()
+    team_names = catalog.team_names_by_id.get(team_id)
+    if team_names is None:
+        return frozenset((team_id,))
+    return frozenset(
+        alias_id
+        for team_name in team_names
+        for alias_id in catalog.team_ids_by_name[team_name]
+    )
+
+
 def _reject_blacklisted_tournaments(tournament_ids: tuple[int, ...]) -> None:
     blocked_ids = blacklisted_tournament_ids(tournament_ids)
     if blocked_ids:
@@ -335,6 +347,7 @@ class THUFootballQueryService:
         client: THUFootballClient,
         *,
         max_concurrency: int = 4,
+        _close_client: bool = False,
     ) -> None:
         if not isinstance(client, THUFootballClient):
             raise TypeError("client must be a THUFootballClient")
@@ -346,6 +359,31 @@ class THUFootballQueryService:
             raise _validation_error("max_concurrency must be a positive integer")
         self._client = client
         self._max_concurrency = max_concurrency
+        self._close_client = _close_client
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        max_concurrency: int = 4,
+    ) -> "THUFootballQueryService":
+        """Create a service that owns a client configured from `.env`."""
+
+        return cls(
+            THUFootballClient(),
+            max_concurrency=max_concurrency,
+            _close_client=True,
+        )
+
+    async def __aenter__(self) -> "THUFootballQueryService":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._close_client:
+            await self._client.aclose()
 
     async def _all_accessible_tournament_ids(self) -> tuple[int, ...]:
         tournaments = await self._client.get_accessible_tournaments()
@@ -588,6 +626,12 @@ class THUFootballQueryService:
         if team_a_id == team_b_id:
             raise _validation_error("team_a_id and team_b_id must be different")
         include_unfinished = _include_unfinished(include_unfinished)
+        team_a_ids = _team_alias_ids(team_a_id)
+        team_b_ids = _team_alias_ids(team_b_id)
+        if team_a_ids & team_b_ids:
+            raise _validation_error(
+                "team_a_id and team_b_id resolve to overlapping team ID aliases"
+            )
 
         if tournament_ids is None:
             normalised_tournament_ids = (
@@ -620,10 +664,18 @@ class THUFootballQueryService:
             for snapshot in snapshots
             for game_id in snapshot.invalid_game_ids
         ]
-        requested_teams = {team_a_id, team_b_id}
-
         for game in games:
-            if {game.home_team_id, game.away_team_id} != requested_teams:
+            if (
+                game.home_team_id in team_a_ids
+                and game.away_team_id in team_b_ids
+            ):
+                team_a_is_home = True
+            elif (
+                game.home_team_id in team_b_ids
+                and game.away_team_id in team_a_ids
+            ):
+                team_a_is_home = False
+            else:
                 continue
             if not game.record_active or not game.valid:
                 invalid_game_ids.append(game.game_id)
@@ -639,7 +691,7 @@ class THUFootballQueryService:
                 matches.append(resolved.game)
                 team_a_result = (
                     resolved.home_result
-                    if game.home_team_id == team_a_id
+                    if team_a_is_home
                     else _opposite_result(resolved.home_result)
                 )
                 _record_result(overall_counts, team_a_result)

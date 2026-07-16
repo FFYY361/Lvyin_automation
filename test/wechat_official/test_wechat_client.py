@@ -13,7 +13,8 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from wechat_official import (
-    DraftArticle,
+    Article,
+    CoverMediaId,
     DraftValidationError,
     DraftWriteError,
     MediaPublisher,
@@ -162,11 +163,12 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(DraftWriteError) as caught:
                 await client.add_draft(
-                    DraftArticle(
+                    Article(
                         title="超长元数据" * 7,
                         author="作者" * 9,
                         digest="摘要" * 61,
                         body_html=body,
+                        cover=CoverMediaId("cover-media-id"),
                     ),
                     thumb_media_id="cover-media-id",
                 )
@@ -219,18 +221,23 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
             )
             cover_id = await client.upload_cover(filename="cover.jpg", content=b"jpg")
             receipt = await client.add_draft(
-                DraftArticle(
+                Article(
                     title="[TEST] 清华绿茵",
                     body_html=f'<section><img src="{body_url}"></section>',
+                    cover=CoverMediaId(cover_id),
                     author="清华绿茵",
                 ),
                 thumb_media_id=cover_id,
+                open_comments=True,
+                fans_only_comments=True,
             )
         finally:
             await http.aclose()
 
         self.assertEqual(receipt.media_id, "draft-media-id")
         self.assertEqual(draft_payload["articles"][0]["thumb_media_id"], "cover-media-id")
+        self.assertEqual(draft_payload["articles"][0]["need_open_comment"], 1)
+        self.assertEqual(draft_payload["articles"][0]["only_fans_can_comment"], 1)
         self.assertEqual(
             [path for _, path in calls],
             [
@@ -253,9 +260,10 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(DraftValidationError):
                 await client.add_draft(
-                    DraftArticle(
+                    Article(
                         title="标题",
                         body_html='<section><img src="https://example.com/a.png"></section>',
+                        cover=CoverMediaId("cover"),
                     ),
                     thumb_media_id="cover",
                 )

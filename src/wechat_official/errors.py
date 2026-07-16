@@ -1,4 +1,4 @@
-"""Stable, secret-safe errors for the WeChat article pipeline."""
+"""Stable, secret-safe errors for the WeChat Official Account adapter."""
 
 from __future__ import annotations
 
@@ -20,30 +20,6 @@ class WechatArticleError(RuntimeError):
         self.retryable = retryable
         self.error_code = error_code
         self.observed_ip = observed_ip
-
-
-class SourceValidationError(WechatArticleError):
-    """Raised before an unsafe or unsupported source request is sent."""
-
-
-class SourceAccessBlocked(WechatArticleError):
-    """Raised when a public article returns a verification or block page."""
-
-
-class SourceInvalidResponse(WechatArticleError):
-    """Raised when an article response does not contain a usable article."""
-
-
-class UnsafeHtml(WechatArticleError):
-    """Raised when HTML cannot be normalised safely."""
-
-
-class TemplateContractError(WechatArticleError):
-    """Raised when an explicit template contract is incomplete or ambiguous."""
-
-
-class PreviewValidationError(WechatArticleError):
-    """Raised when preview source data or column configuration is invalid."""
 
 
 class WechatConfigurationError(WechatArticleError):
