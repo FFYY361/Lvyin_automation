@@ -8,7 +8,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-import httpx
 from lxml import html as lxml_html
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -16,54 +15,21 @@ _SRC_ROOT = _PROJECT_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from wechat_official import (
+from preview import (
     PreviewTemplate,
     PreviewValidationError,
-    PublishedArticleReader,
-    SourceAccessBlocked,
-    SourceValidationError,
+    PreviewService,
     TemplateContractError,
-    extract_article,
     load_preview_source,
     load_preview_template,
     parse_preview_source,
-    save_article_source,
-    save_rendered_article,
 )
-from wechat_official.cli import main as cli_main
-from wechat_official.html_tools import sanitise_html
+from preview.cli import main as cli_main
+from preview.html_tools import sanitise_html
+from wechat_official import Article, CoverMediaId
 
 
-_FIXTURE = _PROJECT_ROOT / "test" / "fixtures" / "article_source" / "wechat_article.html"
-
-
-class ArticleSourceTests(unittest.TestCase):
-    def test_extracts_only_article_and_metadata(self) -> None:
-        article = extract_article(
-            _FIXTURE.read_text(encoding="utf-8"),
-            source_url="https://mp.weixin.qq.com/s/authorised-sample",
-        )
-
-        self.assertEqual(article.title, "马杯前瞻｜计算机系 vs 自动化系")
-        self.assertEqual(article.author, "清华绿茵")
-        self.assertNotIn("公众号导航", article.body_html)
-        self.assertNotIn("评论与推荐", article.body_html)
-        self.assertNotIn("script", article.body_html)
-        self.assertNotIn("onclick", article.body_html)
-        self.assertNotIn("javascript:", article.body_html)
-        self.assertNotIn("运行时音频", article.body_html)
-        self.assertIn("color:#123456", article.body_html)
-        self.assertNotIn("position:fixed", article.body_html)
-        self.assertEqual(len(article.media), 1)
-        self.assertEqual(article.media[0].url, "https://mmbiz.qpic.cn/test/preview.png")
-
-    def test_recognises_verification_page(self) -> None:
-        with self.assertRaises(SourceAccessBlocked):
-            extract_article(
-                "<html><body><h1>请完成验证</h1><p>环境异常</p></body></html>",
-                source_url="https://mp.weixin.qq.com/s/blocked",
-            )
-
+class HtmlToolsTests(unittest.TestCase):
     def test_normalisation_is_deterministic_and_idempotent(self) -> None:
         raw = '<div onclick="x()" style="padding: 2px; color: red"><p>A &amp; B</p></div>'
         first = sanitise_html(raw)
@@ -71,59 +37,6 @@ class ArticleSourceTests(unittest.TestCase):
         third = sanitise_html(first)
         self.assertEqual(first, second)
         self.assertEqual(first, third)
-
-    def test_saves_preview_body_and_metadata(self) -> None:
-        article = extract_article(
-            _FIXTURE.read_text(encoding="utf-8"),
-            source_url="https://mp.weixin.qq.com/s/authorised-sample",
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            preview, metadata = save_article_source(article, directory)
-            body = Path(directory) / "body.html"
-            self.assertTrue(preview.exists())
-            self.assertTrue(body.exists())
-            payload = json.loads(metadata.read_text(encoding="utf-8"))
-            self.assertEqual(payload["title"], article.title)
-            self.assertEqual(len(payload["media"]), 1)
-
-
-class PublishedReaderTests(unittest.IsolatedAsyncioTestCase):
-    async def test_follows_only_allowlisted_redirects(self) -> None:
-        raw = _FIXTURE.read_text(encoding="utf-8")
-
-        async def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/s/start":
-                return httpx.Response(
-                    302,
-                    headers={"location": "/s/final"},
-                    request=request,
-                )
-            return httpx.Response(200, text=raw, request=request)
-
-        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        reader = PublishedArticleReader(http_client=http)
-        try:
-            article = await reader.read("https://mp.weixin.qq.com/s/start")
-        finally:
-            await http.aclose()
-        self.assertEqual(article.source_url, "https://mp.weixin.qq.com/s/final")
-
-    async def test_rejects_redirect_to_unlisted_host(self) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                302,
-                headers={"location": "https://example.com/internal"},
-                request=request,
-            )
-
-        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        reader = PublishedArticleReader(http_client=http)
-        try:
-            with self.assertRaises(SourceValidationError):
-                await reader.read("https://mp.weixin.qq.com/s/start")
-        finally:
-            await http.aclose()
-
 
 _TEMPLATE_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "template.html"
 _DATA_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_data.json"
@@ -139,6 +52,14 @@ def _raw_source() -> dict[str, object]:
     return json.loads(_DATA_PATH.read_text(encoding="utf-8"))
 
 
+def _render(template: PreviewTemplate, source) -> Article:
+    return PreviewService(template).render(
+        source,
+        cover=CoverMediaId("test-cover"),
+        author="清华绿茵",
+    )
+
+
 class PreviewSourceTests(unittest.TestCase):
     def test_women_and_futsal_saturday_examples_render(self) -> None:
         cases = (
@@ -149,7 +70,7 @@ class PreviewSourceTests(unittest.TestCase):
         for path, title_prefix, full_name in cases:
             with self.subTest(path=path.name):
                 source = load_preview_source(path)
-                rendered = template.render(source)
+                rendered = _render(template, source)
                 self.assertEqual(source.preview_date.weekday(), 5)
                 self.assertEqual(source.matches[0].game_id, -1)
                 self.assertEqual(source.matches[0].preview_paragraphs, ("前瞻文章",))
@@ -157,6 +78,24 @@ class PreviewSourceTests(unittest.TestCase):
                 self.assertIn(full_name, rendered.body_html)
                 self.assertIn("前瞻文章", rendered.body_html)
                 self.assertGreaterEqual(rendered.body_html.count("暂无数据"), 5)
+                self.assertEqual(
+                    rendered.body_html.count(
+                        "display:flex;flex-flow:row;height:42px;margin-bottom:15px"
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    rendered.body_html.count(
+                        'padding:0 13px;white-space:nowrap"><p style="line-height:42px;margin:0"'
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    rendered.body_html.count("border-width:21px 0 21px 17px"),
+                    2,
+                )
+                self.assertNotIn("align-self:stretch", rendered.body_html)
+                self.assertNotIn("line-height:.1", rendered.body_html)
 
     def test_strict_decoder_rejects_unknown_field_with_path(self) -> None:
         raw = _raw_source()
@@ -176,7 +115,7 @@ class PreviewSourceTests(unittest.TestCase):
         source = parse_preview_source(raw)
 
         self.assertEqual(source.ordered_writers, ("唐伟", "王镜尧", "赵六"))
-        rendered = load_preview_template(_TEMPLATE_PATH).render(source)
+        rendered = _render(load_preview_template(_TEMPLATE_PATH), source)
         self.assertIn("前瞻作者 | 唐伟 王镜尧 赵六", rendered.body_html)
 
     def test_blank_writer_reports_exact_path(self) -> None:
@@ -241,7 +180,7 @@ class PreviewSourceTests(unittest.TestCase):
                 for match in raw["matches"]:
                     match["kickoff"] = day + match["kickoff"][10:]
                 source = parse_preview_source(raw)
-                rendered = template.render(source)
+                rendered = _render(template, source)
                 self.assertTrue(rendered.title.startswith(f"【{short_name}{weekday}前瞻】"))
                 self.assertIn(full_name, rendered.body_html)
                 self.assertIn(f"{weekday}比赛预告及天气情况", rendered.body_html)
@@ -252,7 +191,7 @@ class PreviewSourceTests(unittest.TestCase):
             "competition_short_name": "测试",
             "weekday_label_override": "周末",
         }
-        rendered = template.render(parse_preview_source(raw))
+        rendered = _render(template, parse_preview_source(raw))
         self.assertTrue(rendered.title.startswith("【测试周末前瞻】"))
         self.assertIn("周末比赛预告及天气情况", rendered.body_html)
 
@@ -282,7 +221,7 @@ class TemplateTests(unittest.TestCase):
             """,
             version="test-preview-v1",
         )
-        rendered = template.render(source)
+        rendered = _render(template, source)
 
         self.assertIn("&lt;社科 &amp; 心理&gt;", rendered.body_html)
         self.assertIn("&lt;strong&gt;纯文本&lt;/strong&gt;", rendered.body_html)
@@ -308,7 +247,7 @@ class TemplateTests(unittest.TestCase):
             "<!-- wx:endeach -->"
             "<!-- wx:endeach -->"
         )
-        rendered = template.render(source)
+        rendered = _render(template, source)
         self.assertIn("4:0（点球 5:4）", rendered.body_html)
         self.assertIn("社科-心理对手退赛法学", rendered.body_html)
 
@@ -322,16 +261,16 @@ class TemplateTests(unittest.TestCase):
 
         template = PreviewTemplate.compile("<p>{{source.not_a_field}}</p>")
         with self.assertRaises(TemplateContractError):
-            template.render(load_preview_source(_DATA_PATH))
+            _render(template, load_preview_source(_DATA_PATH))
 
     def test_weather_fallback_and_content_fingerprint(self) -> None:
         raw = _raw_source()
         raw.pop("weather")
         source = parse_preview_source(raw)
         template = load_preview_template(_TEMPLATE_PATH)
-        first = template.render(source)
+        first = _render(template, source)
         raw["headline"] = "新的标题"
-        second = template.render(parse_preview_source(raw))
+        second = _render(template, parse_preview_source(raw))
         self.assertIn("待更新", first.body_html)
         self.assertNotEqual(first.content_fingerprint, second.content_fingerprint)
 
@@ -345,19 +284,18 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertNotIn("schedule_rows", source_text)
         self.assertNotIn("_html", source_text)
         template = PreviewTemplate.compile(template_source, version="qhly-preview-v1")
-        rendered = template.render(load_preview_source(_DATA_PATH))
+        rendered = _render(template, load_preview_source(_DATA_PATH))
 
         self.assertEqual(rendered.title, "【马杯男足周六前瞻】|| 落日熔金，危崖试翼")
 
         with tempfile.TemporaryDirectory() as directory:
-            preview_path = save_rendered_article(rendered, Path(directory) / "preview.html")
-            preview_html = preview_path.read_text(encoding="utf-8")
-            self.assertIn("box-sizing:border-box", preview_html)
-            self.assertIn("max-width:100%!important", preview_html)
-            self.assertIn("margin-block-start:0", preview_html)
+            output = rendered.save(Path(directory) / "article")
+            preview_html = (output / "body.html").read_text(encoding="utf-8")
+            self.assertIn('data-wechat-article-body="1"', preview_html)
+            self.assertIsInstance(Article.load(output), Article)
 
         self.assertLess(len(rendered.body_html.encode("utf-8")), 1_000_000)
-        self.assertEqual(len(rendered.media), 1)
+        self.assertEqual(len(lxml_html.fromstring(rendered.body_html).xpath(".//img")), 1)
         self.assertIn("grid-template-columns:100%", rendered.body_html)
         self.assertIn("display:block;height:auto;opacity:.3;width:100%", rendered.body_html)
         self.assertNotIn("background-image:url", rendered.body_html)
@@ -469,9 +407,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
 
 
 class PreviewCliTests(unittest.TestCase):
-    def test_render_and_create_draft_dry_run_use_typed_source(self) -> None:
+    def test_render_writes_loadable_article_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "article.html"
+            output = Path(directory) / "article"
             stdout = StringIO()
             with redirect_stdout(stdout):
                 status = cli_main(
@@ -480,6 +418,8 @@ class PreviewCliTests(unittest.TestCase):
                         str(_TEMPLATE_PATH),
                         "--source",
                         str(_DATA_PATH),
+                        "--cover-media-id",
+                        "dry-run-cover",
                         "--output",
                         str(output),
                     ]
@@ -488,23 +428,9 @@ class PreviewCliTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertEqual(payload["status"], "ok")
             self.assertTrue(output.exists())
-
-        stdout = StringIO()
-        with redirect_stdout(stdout):
-            status = cli_main(
-                [
-                    "create-draft",
-                    str(_TEMPLATE_PATH),
-                    "--source",
-                    str(_DATA_PATH),
-                    "--cover-media-id",
-                    "dry-run-cover",
-                ]
-            )
-        payload = json.loads(stdout.getvalue())
-        self.assertEqual(status, 0)
-        self.assertEqual(payload["status"], "dry-run")
-        self.assertIn("preview", payload)
+            article = Article.load(output)
+            self.assertEqual(article.title, payload["title"])
+            self.assertEqual(article.author, "清华绿茵")
 
 if __name__ == "__main__":
     unittest.main()

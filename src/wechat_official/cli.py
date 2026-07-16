@@ -1,4 +1,4 @@
-"""Command-line probes for capabilities 4, 5 and 6."""
+"""Command-line diagnostics and draft creation for WeChat Official Accounts."""
 
 from __future__ import annotations
 
@@ -6,130 +6,52 @@ import argparse
 import asyncio
 import json
 import sys
-from pathlib import Path
 
-from .article_source import PublishedArticleReader, extract_article, save_article_source
 from .client import WechatOfficialClient
-from .errors import WechatArticleError
-from .media import MediaPublisher
+from .errors import DraftValidationError, WechatArticleError
+from .models import Article, CoverFile, CoverMediaId
 from .network import public_ip_cross_check
-from .service import DraftService
-from .preview import load_preview_source
-from .template import load_preview_template, save_rendered_article
+from .service import WechatOfficialService
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="清华绿茵公众号文章提取、模板渲染与草稿写入工具"
-    )
+    parser = argparse.ArgumentParser(description="微信公众号只读探针与草稿创建工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    extract = subparsers.add_parser("extract", help="从公开微信文章 URL 提取正文")
-    extract.add_argument("url")
-    extract.add_argument("--output-dir", required=True)
-
-    extract_file = subparsers.add_parser(
-        "extract-file", help="从本地完整页面样本提取正文（离线验证）"
-    )
-    extract_file.add_argument("path")
-    extract_file.add_argument("--source-url", required=True)
-    extract_file.add_argument("--output-dir", required=True)
-
-    render = subparsers.add_parser("render", help="从前瞻源数据渲染 HTML 模板")
-    render.add_argument("template")
-    render.add_argument("--source", required=True)
-    render.add_argument("--output", required=True)
-    render.add_argument("--version")
-
-    probe = subparsers.add_parser("auth-probe", help="只读验证 AppID/AppSecret 与 IP 白名单")
+    probe = subparsers.add_parser("auth-probe", help="只读验证凭据、IP 白名单和草稿权限")
     probe.add_argument("--api-base-url", default="https://api.weixin.qq.com")
 
     network = subparsers.add_parser(
-        "network-check", help="确认微信实际看到的出口 IP，不进行外部写入"
+        "network-check",
+        help="确认微信实际看到的出口 IP，不进行外部写入",
     )
     network.add_argument("--api-base-url", default="https://api.weixin.qq.com")
     network.add_argument(
         "--cross-check",
         action="store_true",
-        help="显式允许额外访问 Cloudflare、AWS 和 ipify 交叉核对公网 IP",
+        help="显式允许额外访问公网 IP 服务进行交叉核对",
     )
 
     inspect_draft = subparsers.add_parser(
-        "inspect-draft", help="按 media_id 只读核验草稿元数据，不输出正文"
+        "inspect-draft",
+        help="按 media_id 只读核验草稿元数据，不输出正文",
     )
     inspect_draft.add_argument("media_id")
     inspect_draft.add_argument("--api-base-url", default="https://api.weixin.qq.com")
 
-    draft = subparsers.add_parser("create-draft", help="渲染并创建一个公众号草稿")
-    draft.add_argument("template")
-    draft.add_argument("--source", required=True)
-    cover = draft.add_mutually_exclusive_group(required=True)
-    cover.add_argument("--cover", help="上传本地图片作为新的永久封面素材")
-    cover.add_argument(
-        "--cover-media-id", help="复用公众号中已经存在的永久封面素材 ID"
-    )
-    draft.add_argument("--author", default="清华绿茵")
-    draft.add_argument("--digest", default="")
-    draft.add_argument("--source-url", default="")
-    draft.add_argument("--version")
+    draft = subparsers.add_parser("create-draft", help="从完整文章目录创建公众号草稿")
+    draft.add_argument("article", help="包含 article.json 和 body.html 的文章目录")
+    draft.add_argument("--open-comments", action="store_true")
+    draft.add_argument("--fans-only-comments", action="store_true")
     draft.add_argument(
         "--execute",
         action="store_true",
-        help="明确允许外部写入；省略时只完成本地渲染和校验",
+        help="明确允许上传图片和创建草稿；省略时只完成本地校验",
     )
     return parser
 
 
-def _preview_from_args(args: argparse.Namespace):
-    template = load_preview_template(
-        args.template,
-        version=args.version,
-    )
-    source = load_preview_source(args.source)
-    return template, source
-
-
 async def _run(args: argparse.Namespace) -> dict[str, object]:
-    if args.command == "extract":
-        async with PublishedArticleReader() as reader:
-            article = await reader.read(args.url)
-        html_path, metadata_path = save_article_source(article, args.output_dir)
-        return {
-            "status": "ok",
-            "title": article.title,
-            "author": article.author,
-            "media_count": len(article.media),
-            "content_fingerprint": article.content_fingerprint,
-            "preview": str(html_path.resolve()),
-            "body": str((Path(args.output_dir) / "body.html").resolve()),
-            "metadata": str(metadata_path.resolve()),
-        }
-    if args.command == "extract-file":
-        raw_html = Path(args.path).read_text(encoding="utf-8")
-        article = extract_article(raw_html, source_url=args.source_url)
-        html_path, metadata_path = save_article_source(article, args.output_dir)
-        return {
-            "status": "ok",
-            "title": article.title,
-            "author": article.author,
-            "media_count": len(article.media),
-            "content_fingerprint": article.content_fingerprint,
-            "preview": str(html_path.resolve()),
-            "body": str((Path(args.output_dir) / "body.html").resolve()),
-            "metadata": str(metadata_path.resolve()),
-        }
-    if args.command == "render":
-        template, source = _preview_from_args(args)
-        rendered = template.render(source)
-        output = save_rendered_article(rendered, args.output)
-        return {
-            "status": "ok",
-            "title": rendered.title,
-            "template_version": rendered.template_version,
-            "content_fingerprint": rendered.content_fingerprint,
-            "media_count": len(rendered.media),
-            "output": str(output.resolve()),
-        }
     if args.command == "auth-probe":
         async with WechatOfficialClient.from_environment(base_url=args.api_base_url) as client:
             await client.get_access_token()
@@ -140,6 +62,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
             "draft_permission": "accepted",
             "draft_count": draft_count,
             "token": "<redacted>",
+            "external_writes": False,
         }
     if args.command == "network-check":
         cross_check = await public_ip_cross_check() if args.cross_check else None
@@ -161,9 +84,7 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
                 },
                 "cross_check": cross_check,
                 "whitelist_candidate": exc.observed_ip,
-                "confidence": (
-                    "wechat-reported" if exc.observed_ip else "not-determined"
-                ),
+                "confidence": "wechat-reported" if exc.observed_ip else "not-determined",
                 "external_writes": False,
             }
         return {
@@ -201,33 +122,34 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
             "external_writes": False,
         }
     if args.command == "create-draft":
-        template, source = _preview_from_args(args)
-        rendered = template.render(source)
-        local_output = save_rendered_article(rendered, "tmp/wechat_draft_preview.html")
+        article = Article.load(args.article)
+        if args.fans_only_comments and not args.open_comments:
+            raise DraftValidationError(
+                "fans_only_comments requires open_comments",
+                stage="draft-validation",
+            )
+        cover_kind = "file" if isinstance(article.cover, CoverFile) else "media_id"
         if not args.execute:
             return {
                 "status": "dry-run",
-                "title": rendered.title,
-                "content_fingerprint": rendered.content_fingerprint,
-                "preview": str(local_output.resolve()),
-                "message": "添加 --execute 后才会写入公众号草稿箱",
+                "title": article.title,
+                "content_fingerprint": article.content_fingerprint,
+                "cover": cover_kind,
+                "external_writes": False,
+                "message": "添加 --execute 后才会上传素材并创建公众号草稿",
             }
-        async with WechatOfficialClient.from_environment() as client:
-            async with MediaPublisher(client) as media:
-                service = DraftService(client, media)
-                receipt = await service.create_draft(
-                    rendered,
-                    cover_path=args.cover,
-                    cover_media_id=args.cover_media_id,
-                    author=args.author,
-                    digest=args.digest,
-                    source_url=args.source_url,
-                )
+        async with WechatOfficialService.from_environment() as service:
+            receipt = await service.create_draft(
+                article,
+                open_comments=args.open_comments,
+                fans_only_comments=args.fans_only_comments,
+            )
         return {
             "status": "ok",
             "draft_media_id": receipt.media_id,
             "content_fingerprint": receipt.content_fingerprint,
             "created_at": receipt.created_at.isoformat(),
+            "external_writes": True,
         }
     raise AssertionError("unreachable command")
 

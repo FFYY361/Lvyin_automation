@@ -287,7 +287,7 @@ async def query_team_to_team_matches(
 ) -> HeadToHeadHistory: ...
 ```
 
-两个球队 ID 必须不同，且均为全局 `team_id`。省略 `tournament_ids` 时查询全部可访问赛事；显式赛事列表不能为空，重复 ID 按首次出现顺序去重。正反主客场、点球大战和弃赛赛果都计入；默认仅返回 `FINISHED` 比赛，按 `(kickoff_local, game_id)` 倒序，并返回跨赛事和分赛事汇总。`by_tournament` 包含实际查询的每一项赛事，无交锋赛事使用全零汇总；完全没有交锋时返回空比赛集合和全零总汇总。
+两个球队 ID 必须不同，且均为全局 `team_id`。每个 ID 会通过 `notes/teams.json` 展开为其规范球队名称下登记的全部历史 ID；例如查询 `254` 对 `48` 时，`254` 的历史 ID `80` 也参与匹配。未登记的 ID 保持精确匹配；两边展开后存在重叠则返回 `QueryValidationError`，避免无法判定比赛归属。省略 `tournament_ids` 时查询全部可访问赛事；显式赛事列表不能为空，重复 ID 按首次出现顺序去重。正反主客场、点球大战和弃赛赛果都计入；默认仅返回 `FINISHED` 比赛，按 `(kickoff_local, game_id)` 倒序，并返回跨赛事和分赛事汇总。`by_tournament` 包含实际查询的每一项赛事，无交锋赛事使用全零汇总；完全没有交锋时返回空比赛集合和全零总汇总。
 
 ## 4. 功能细节澄清
 

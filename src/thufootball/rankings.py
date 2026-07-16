@@ -66,6 +66,7 @@ class StaticTournamentRanking:
 @dataclass(frozen=True)
 class StaticOutcomeCatalog:
     tournament_ids: tuple[int, ...]
+    team_ids_by_name: Mapping[str, tuple[int, ...]]
     team_names_by_id: Mapping[int, tuple[str, ...]]
     tournaments_by_id: Mapping[int, StaticTournamentRanking]
 
@@ -297,6 +298,7 @@ def load_static_outcome_catalog() -> StaticOutcomeCatalog:
     tournament_ids, tournaments = _load_tournaments(_NOTES_ROOT, teams)
     return StaticOutcomeCatalog(
         tournament_ids=tournament_ids,
+        team_ids_by_name=MappingProxyType(teams),
         team_names_by_id=MappingProxyType(team_names_by_id),
         tournaments_by_id=MappingProxyType(tournaments),
     )

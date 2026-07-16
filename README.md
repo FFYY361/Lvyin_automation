@@ -1,155 +1,205 @@
-# THUFootball 前瞻自动化工具
+# thufootball_automation
 
 ## 说明
 
-这个项目提供一条只读、安全的赛事前瞻工作流：从 THUFootball 读取比赛、赛事和球队数据，整理为模板所需的 data，生成可本地预览的 HTML，再将文章写入微信公众号草稿箱。
+`thufootball_automation` 用于搭建所有与 THUFootball 相关的自动化任务。仓库以可组合的中层 Service 为核心，目前提供：
 
-项目包含两个主要 Python 包：
+- `thufootball`：只读查询比赛、球队赛果、赛事成绩和交锋记录。
+- `preview`：把结构化 data 渲染为文章，是当前实现的一项具体自动化能力，并不限定整个库的用途。
+- `wechat_official`：接收完整文章，处理图片和封面，并创建微信公众号草稿。
 
-- `thufootball`：封装 THUFootball 的只读查询接口，返回经过校验的结构化领域模型。
-- `wechat_official`：校验前瞻 data、渲染 HTML、处理正文图片并创建微信公众号草稿。
-
-整体数据流为 `THUFootball → data(JSON) → HTML → 微信公众号草稿`。THUFootball 客户端不会修改服务端数据；微信公众号能力止于创建草稿，不会自动发布或群发。总体设计见 [自动化比赛前瞻工具实现计划](docs/preview_automation_implementation_plan.md)。
+当前不提供自动串联三者的管线。THUFootball 侧不会修改服务端数据；`preview` 完全在本地运行；微信公众号侧只创建草稿，不自动发布或群发。模块边界见 [项目架构](docs/architecture.md)。
 
 ## 环境
 
-项目要求 Python 3.11 或更高版本。安装后会提供 `thufootball` 和 `wechat-preview` 两个命令。
+项目要求 Python 3.11 或更高版本。推荐使用标准库 `venv`：
 
 ```powershell
-python -m venv .venv
+python -m venv .venv --prompt lvyin
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
-Copy-Item .env.example .env
 ```
 
-macOS 或 Linux 可分别使用 `source .venv/bin/activate` 和 `cp .env.example .env`。在 `.env` 中按需填写：
+也可以使用 Conda：
 
-```dotenv
-THUFOOTBALL_OPENID=
-THUFOOTBALL_SESSION_KEY=
-WECHAT_APP_ID=
-WECHAT_APP_SECRET=
+```powershell
+conda create -n thufootball_automation python=3.11
+conda activate thufootball_automation
+python -m pip install -e .
 ```
 
-不要提交真实凭据。`THUFOOTBALL_OPENID` 和 `THUFOOTBALL_SESSION_KEY` 用于需要认证的赛事查询；`WECHAT_APP_ID` 和 `WECHAT_APP_SECRET` 用于公众号草稿接口。调用微信服务前，还需要在公众号后台把运行机器的出口 IP 加入白名单。
-
-安装完成后可先检查命令入口：
+安装后检查三个入口：
 
 ```powershell
 thufootball --help
-wechat-preview --help
+preview --help
+wechat-official --help
 ```
+
+各模块的凭据要求分别写在对应章节。`preview` 不需要 `.env`。
 
 ## thufootball
 
-`THUFootballQueryService` 是面向上游任务的领域查询入口。它在底层只读客户端之上完成赛事发现、并发查询、北京时间过滤、球队视角赛果换算、交锋汇总和静态最终成绩读取；`THUFootballClient` 只是它的传输依赖，不是本节主要接口。
+`thufootball` 提供通用的 THUFootball 领域查询，不包含文章或公众号逻辑。
 
-| Python 接口 | 用途 | 返回类型 | CLI |
-| --- | --- | --- | --- |
-| `query_games(query)` | 按赛事、北京时间日期和球队组合查询比赛 | `list[GameSummary]` | `thufootball games [选项]` |
-| `query_team_matches(team_id, tournament_id=None, *, include_unfinished=False)` | 查询一支球队的全部赛果，并统一为该球队视角 | `list[TeamGameResult]` | `thufootball team-matches TEAM_ID [选项]` |
-| `query_team_outcomes(team_id, tournament_ids=None)` | 从仓库静态数据读取球队在支持赛事中的最终成绩 | `list[TeamTournamentOutcome]` | `thufootball team-outcomes TEAM_ID [选项]` |
-| `query_team_to_team_matches(team_a_id, team_b_id, tournament_ids=None, *, include_unfinished=False)` | 查询两队跨赛事交锋和胜平负汇总 | `HeadToHeadHistory` | `thufootball head-to-head TEAM_A_ID TEAM_B_ID [选项]` |
+### CLI
 
-`query_games` 使用 `GameQuery` 描述通用筛选条件：`tournament_ids` 可指定多个赛事，`match_date` 是北京时间自然日，`team_ids` 最多指定两个全局球队 ID，`team_match` 决定匹配任一球队还是全部球队，`include_unfinished` 决定是否保留未完赛比赛。
+| 命令 | 用途 |
+| --- | --- |
+| `thufootball games` | 按赛事、北京日期和球队查询比赛 |
+| `thufootball team-matches TEAM_ID` | 查询一支球队的比赛并换算为该队视角 |
+| `thufootball team-outcomes TEAM_ID` | 读取球队在支持赛事中的最终成绩 |
+| `thufootball head-to-head A B` | 汇总两队交锋和胜平负 |
 
-命令行与这四个 Python 接口一一对应，并把领域模型输出为格式化 JSON：
+命令成功时输出格式化 JSON：
 
 ```powershell
-thufootball games --match-date 2026-07-15 --team-id 48
+thufootball games --match-date 2026-07-15 --tournament-id 122
 thufootball team-matches 48 --tournament-id 122
 thufootball team-outcomes 48 --tournament-id 128 --tournament-id 122
 thufootball head-to-head 48 163 --tournament-id 122 --tournament-id 123
 ```
 
-`games` 省略赛事和日期时会查询当前凭据可访问的全部赛事；可重复传入 `--tournament-id` 和最多两个 `--team-id`，增加 `--finished-only` 可排除未完赛比赛。`team-matches` 省略赛事时查询全部可访问赛事，默认只返回已完赛比赛。`team-outcomes` 完全读取本地静态数据，不需要凭据、不访问 HTTP。`head-to-head` 可跨多个赛事汇总，默认只统计已完赛比赛；后两个比赛查询可用 `--include-unfinished` 保留有效未完赛记录。
+需要访问受保护数据时，在仓库根目录 `.env` 中配置：
 
-在 Python 中复用同一个查询服务即可继续搭建上游任务：
+```dotenv
+THUFOOTBALL_OPENID=
+THUFOOTBALL_SESSION_KEY=
+```
+
+`team-outcomes` 只读取仓库静态数据，不需要凭据，也不访问 HTTP。
+
+### Python
+
+`THUFootballQueryService` 是供其他自动化任务调用的中层入口：
+
+| 接口 | 返回类型 |
+| --- | --- |
+| `query_games(query)` | `list[GameSummary]` |
+| `query_team_matches(team_id, ...)` | `list[TeamGameResult]` |
+| `query_team_outcomes(team_id, ...)` | `list[TeamTournamentOutcome]` |
+| `query_team_to_team_matches(a, b, ...)` | `HeadToHeadHistory` |
 
 ```python
 import asyncio
 from datetime import date
 
-from thufootball import GameQuery, THUFootballClient, THUFootballQueryService
+from thufootball import GameQuery, THUFootballQueryService
 
 
 async def main() -> None:
-    async with THUFootballClient() as client:
-        queries = THUFootballQueryService(client)
-        games = await queries.query_games(
+    async with THUFootballQueryService.from_environment() as service:
+        games = await service.query_games(
             GameQuery(match_date=date(2026, 7, 15), team_ids=(48,))
         )
-        team_matches = await queries.query_team_matches(48, tournament_id=122)
-        outcomes = await queries.query_team_outcomes(48, (128, 122))
-        head_to_head = await queries.query_team_to_team_matches(
-            48,
-            163,
-            (122, 123),
-        )
+        matches = await service.query_team_matches(48, tournament_id=122)
+        outcomes = await service.query_team_outcomes(48, (128, 122))
+        history = await service.query_team_to_team_matches(48, 163, (122, 123))
 
 
 asyncio.run(main())
 ```
 
-需要访问服务端的查询会从环境变量或项目 `.env` 读取凭据；只按北京时间日期调用 `games` 时可以走匿名公开比赛查询。所有公开错误都继承自 `THUFootballError`，并携带错误阶段和是否可重试等信息。完整查询规则、静态赛事范围和异常边界见 [THUFootball 查询能力实现设计](docs/thufootball/thufootball_query_implementation.md)；底层 HTTP 参数和响应字段仅供调试，见 [THUFootball HTTP API 清单](docs/thufootball/thufootball_http_api_inventory.md)。
+完整查询规则见 [THUFootball 查询能力实现设计](docs/thufootball/thufootball_query_implementation.md)，底层接口字段见 [THUFootball HTTP API 清单](docs/thufootball/thufootball_http_api_inventory.md)。
 
-## wechat_official
+## preview
 
-`wechat_official` 对外提供两个主要工作流：从 data 生成 HTML，以及把渲染后的文章写入微信公众号草稿箱。命令行适合本地试用，Python 接口适合接入自动化上游任务。
+`PreviewService` 校验结构化 data、渲染模板并生成统一 `Article`。该过程纯本地运行。
 
-### 从 data 生成 HTML
+### CLI
 
-CLI 会读取 JSON data、校验模板契约并生成本地 HTML；这个过程不会连接微信，也不会产生外部写入。
+使用本地封面生成文章目录：
 
 ```powershell
-wechat-preview render templates/qhly_preview_v1/template.html --source templates/qhly_preview_v1/example_data.json --version qhly-preview-v1 --output tmp/qhly_preview_v1/article.html
+preview render templates/qhly_preview_v1/template.html `
+  --source templates/qhly_preview_v1/example_data.json `
+  --cover tmp\wechat-test-cover.png `
+  --version qhly-preview-v1 `
+  --output tmp/qhly_preview_v1/article
 ```
 
-对应的 Python 调用为：
+也可以用 `--cover-media-id MEDIA_ID` 记录已有的公众号永久封面素材。输出目录包含 `article.json`、`body.html`，使用本地封面时还会复制一份 `cover.*`。
+
+`preview` 不读取 `.env`、不访问 THUFootball，也不连接微信公众号。
+
+### Python
 
 ```python
-from wechat_official import (
-    load_preview_source,
-    load_preview_template,
-    save_rendered_article,
-)
+from pathlib import Path
+
+from preview import PreviewService, load_preview_source
+from wechat_official import CoverFile
 
 source = load_preview_source("templates/qhly_preview_v1/example_data.json")
-template = load_preview_template(
+service = PreviewService.from_template(
     "templates/qhly_preview_v1/template.html",
     version="qhly-preview-v1",
 )
-rendered = template.render(source)
-save_rendered_article(rendered, "tmp/qhly_preview_v1/article.html")
+article = service.render(
+    source,
+    cover=CoverFile(Path("path/to/cover.png")),
+    author="清华绿茵",
+    digest="本期比赛前瞻",
+)
+article.save("tmp/qhly_preview_v1/article")
 ```
 
-### 创建微信公众号草稿
+渲染结果使用统一文章字段：
 
-`create-draft` 同样接收模板和 data，并在提交前重新渲染文章；它目前不接受任意 HTML 文件路径作为直接输入。省略 `--execute` 时只生成本地预览，不会上传图片或创建草稿：
+| 字段 | 含义 |
+| --- | --- |
+| `title` | 图文标题 |
+| `body_html` | 正文 HTML |
+| `cover` | `CoverFile` 本地封面或 `CoverMediaId` 已有永久素材 |
+| `author` | 作者署名，可为空 |
+| `digest` | 文章摘要，可为空 |
+| `source_url` | “阅读原文”链接，可为空 |
+
+data 契约、模板语法和文章目录说明见 [前瞻模板与渲染教程](docs/preview/preview_template_tutorial.md)，当前模板字段见 [qhly_preview_v1 模板说明](templates/qhly_preview_v1/README.md)。
+
+## wechat_official
+
+`WechatOfficialService` 不接收模板或前瞻 data，只接收完整 `Article` 或由 `Article.save()` 生成的文章目录。
+
+### CLI
+
+先执行默认 dry-run；它只在本地加载、校验文章，不读取公众号凭据，也不会上传图片：
 
 ```powershell
-wechat-preview create-draft templates/qhly_preview_v1/template.html --source templates/qhly_preview_v1/example_data.json --cover-media-id EXISTING_COVER_MEDIA_ID --version qhly-preview-v1
+wechat-official create-draft tmp/qhly_preview_v1/article
 ```
 
-确认预览后，增加 `--execute` 才会产生真实外部写入。封面必须且只能使用以下一种方式：`--cover path/to/cover.jpg` 上传新的永久封面素材，或 `--cover-media-id MEDIA_ID` 复用素材库中已有的永久图片。封面不是正文图片。
+确认后显式增加 `--execute` 才会上传正文图片、处理封面并创建草稿：
 
 ```powershell
-wechat-preview create-draft templates/qhly_preview_v1/template.html --source templates/qhly_preview_v1/example_data.json --cover path/to/cover.jpg --version qhly-preview-v1 --execute
+wechat-official create-draft tmp/qhly_preview_v1/article --execute
 ```
 
-Python 侧沿用上一步得到的 `rendered`：
+真实写入前，在仓库根目录 `.env` 中配置公众号凭据，并把运行机器的出口 IP 加入公众号后台白名单：
+
+```dotenv
+WECHAT_APP_ID=
+WECHAT_APP_SECRET=
+```
+
+### Python
 
 ```python
-from wechat_official import DraftService, MediaPublisher, WechatOfficialClient
+import asyncio
+
+from wechat_official import Article, WechatOfficialService
 
 
-async def create_draft(rendered):
-    async with WechatOfficialClient.from_environment() as client:
-        async with MediaPublisher(client) as media:
-            return await DraftService(client, media).create_draft(
-                rendered,
-                cover_path="path/to/cover.jpg",
-            )
+async def main() -> None:
+    article = Article.load("tmp/qhly_preview_v1/article")
+    async with WechatOfficialService.from_environment() as service:
+        receipt = await service.create_draft(article)
+    print(receipt.media_id, receipt.content_fingerprint)
+
+
+asyncio.run(main())
 ```
 
-返回的 `DraftReceipt` 包含草稿 `media_id`、内容指纹和创建时间。模板数据结构、正文图片处理、草稿约束及排错方式见 [微信公众号模板与草稿教程](docs/wechat_official/wechat_official_template_and_draft_tutorial.md)，当前模板字段说明和示例见 [qhly_preview_v1 模板说明](templates/qhly_preview_v1/README.md)。
+评论默认关闭；需要时使用 `create_draft(article, open_comments=True)`，仅粉丝评论还需同时传入 `fans_only_comments=True`。正文图片当前支持允许域名的 HTTPS 图片和 `data:` 图片，不读取本地正文资源路径。
+
+凭据、IP 白名单、图片与草稿排错见 [微信公众号草稿教程](docs/wechat_official/wechat_official_draft_tutorial.md)。

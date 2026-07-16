@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from .errors import SchemaError
 from .models import (
@@ -22,7 +21,7 @@ from .models import (
 )
 
 
-SHANGHAI = ZoneInfo("Asia/Shanghai")
+SHANGHAI = timezone(timedelta(hours=8), "Asia/Shanghai")
 _TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 def _schema(path: str) -> SchemaError:
     return SchemaError(path)
