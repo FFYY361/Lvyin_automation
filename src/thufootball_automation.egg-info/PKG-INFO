@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: thufootball_automation
-Version: 0.1.0
-Summary: Composable automation services for THUFootball workflows
-Requires-Python: >=3.11
-Requires-Dist: httpx<1,>=0.27
-Requires-Dist: lxml<7,>=5

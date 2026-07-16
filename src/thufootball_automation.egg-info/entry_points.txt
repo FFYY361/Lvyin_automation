@@ -1,4 +1,0 @@
-[console_scripts]
-preview = preview.cli:main
-thufootball = thufootball.cli:main
-wechat-official = wechat_official.cli:main
