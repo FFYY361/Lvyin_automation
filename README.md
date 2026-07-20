@@ -231,15 +231,18 @@ python scripts/auto_preview.py 2026-04-11 female --cover path/to/cover.png
 python scripts/auto_preview.py 2026-04-11 female --cover-media-id MEDIA_ID
 ```
 
-已有阶段产物采用严格验收：验收通过则跳过，验收不通过则报错，绝不自动重建。需要覆盖时显式使用 `--override`；它会从 data 开始重做到目标阶段，因此可能覆盖人工编辑过的 `source.json`：
+`source.json` 是受保护的人工数据：非 override 模式只校验并复用，不会重新查询或覆盖。`article/` 是可重建产物：当 `source.json`、模板或显式指定的封面发生变化，或者已有 Article 无法加载时，会自动覆盖渲染，不需要 `--override`。因此，手工修改 source 后直接重新运行 article 命令即可：
 
 ```powershell
-python scripts/auto_preview.py 2026-04-11 female --stage article --override
-python scripts/auto_preview.py 2026-04-11 female --stage publish --override
+python scripts/auto_preview.py 2026-04-11 female --stage article
 ```
+
+`--override` 会从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json`，仅在确实需要重新查询数据时使用。`publish` 会复用与当前 Article 完全匹配的草稿回执；Article 变化后则创建新草稿，并在 `draft.json` 中保留旧回执。
 
 `publish` 只创建公众号草稿，不正式发布或群发。每次运行的阶段日志追加到对应目录的 `auto_preview.log`，草稿回执历史保存在 `draft.json`。
 
-球队简称优先采用 `GameSummary` 中的数据库 `brief_name`；简称缺失或去除首尾空白后超过 5 个字符时，改用球队全称前两个字符并记录 warning。`src/auto_preview/source.py` 顶层的 `CURRENT_RESULTS_TEAM_ALWAYS_HOME` 默认为 `True`，控制是否将每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
+失败时终端和日志会输出错误类别、失败阶段、异常类型、安全上下文、是否可重试以及处置建议。批量赛事查询失败会按赛事 ID 展开子错误，以区分权限、认证、网络、限流、远端数据与本地校验问题；不会记录凭据、令牌或底层异常的完整消息。
 
-比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；近三年没有直接交手记录时显示“无”。已有运行目录仍遵守严格复用规则，需要重新生成这些内容时请使用 `--override`。
+球队名称和简称优先采用 `src/thufootball/notes/teams.json` 中由院系信息汇总表维护的官方值，官方简称不受长度限制。未登记球队才采用 `GameSummary` 中长度不超过 5 个字符的数据库 `brief_name`；数据库简称缺失或过长时，改用球队全称前两个字符并记录 warning。`src/auto_preview/source.py` 顶层的 `CURRENT_RESULTS_TEAM_ALWAYS_HOME` 默认为 `True`，控制是否将每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
+
+比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；交手记录以“赛季-等级”标识赛事，例如 `23-24-甲`、`22-23-甲`，近三年没有直接交手记录时显示“无”。已有 Article 会在 source 或模板变化后自动重新渲染。

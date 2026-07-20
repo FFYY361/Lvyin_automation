@@ -20,12 +20,21 @@ from preview import (
     PreviewValidationError,
     PreviewService,
     TemplateContractError,
+    SeasonOutcome,
     load_preview_source,
     load_preview_template,
     parse_preview_source,
 )
 from preview.cli import main as cli_main
 from preview.html_tools import sanitise_html
+from preview.template import (
+    DEFAULT_HEADER_BACKGROUND_URL,
+    FEMALE_HEADER_BACKGROUND_URL,
+    VENUE_SHORT_NAMES,
+    _head_to_head_line,
+    _outcome_heading,
+    _venue_short_name,
+)
 from wechat_official import Article, CoverMediaId
 
 
@@ -198,6 +207,65 @@ class PreviewSourceTests(unittest.TestCase):
 
 
 class TemplateTests(unittest.TestCase):
+    def test_female_outcome_heading_uses_season_only(self) -> None:
+        self.assertEqual(
+            _outcome_heading(SeasonOutcome("24-25", "女足", "16强")),
+            "24-25",
+        )
+        self.assertEqual(
+            _outcome_heading(SeasonOutcome("24-25", "甲", "16强")),
+            "24-25-甲",
+        )
+
+    def test_female_head_to_head_prefix_omits_competition_label(self) -> None:
+        raw = _raw_source()
+        meeting = raw["matches"][0]["head_to_head"][0]
+        meeting["season"] = "22-23"
+        meeting["competition_label"] = "女足"
+        female = parse_preview_source(raw).matches[0].head_to_head[0]
+
+        female_line = _head_to_head_line(female)
+        self.assertTrue(female_line.startswith("（22-23）"))
+        self.assertNotIn("女足", female_line)
+        self.assertIn(f"{female.home.short_name} ", female_line)
+        self.assertTrue(female_line.endswith(f" {female.away.short_name}"))
+
+        meeting["competition_label"] = "甲"
+        male = parse_preview_source(raw).matches[0].head_to_head[0]
+        self.assertTrue(_head_to_head_line(male).startswith("（22-23-甲）"))
+
+    def test_venue_short_names_cover_configured_fields_and_fallback(self) -> None:
+        expected = {
+            "紫荆足球场": "紫操",
+            "西区足球场": "西操",
+            "东区足球场": "东操",
+            "紫荆足球场北侧场地": "紫北",
+            "紫荆足球场南侧场地": "紫南",
+            "西区足球场北侧场地": "西北",
+            "西区足球场南侧场地": "西南",
+        }
+        for full_name, short_name in expected.items():
+            with self.subTest(full_name=full_name):
+                self.assertEqual(VENUE_SHORT_NAMES[full_name], short_name)
+                self.assertEqual(_venue_short_name(full_name), short_name)
+
+        self.assertEqual(_venue_short_name("综合体育馆"), "综合体育馆")
+
+    def test_schedule_uses_short_venue_but_match_detail_keeps_full_name(
+        self,
+    ) -> None:
+        raw = _raw_source()
+        raw["matches"] = [raw["matches"][0]]
+        raw["matches"][0]["venue"] = "紫荆足球场北侧场地"
+
+        rendered = _render(
+            load_preview_template(_TEMPLATE_PATH),
+            parse_preview_source(raw),
+        )
+
+        self.assertIn(">紫北</td>", rendered.body_html)
+        self.assertIn("紫荆足球场北侧场地</p>", rendered.body_html)
+
     def test_missing_outcome_and_head_to_head_have_explicit_fallbacks(self) -> None:
         raw = _raw_source()
         raw["matches"] = [raw["matches"][0]]
@@ -261,6 +329,7 @@ class TemplateTests(unittest.TestCase):
         first = raw["matches"][0]["home"]["current_results"][0]
         first["home_penalty"] = 5
         first["away_penalty"] = 4
+        first["result_text"] = "4:0（点球 5:4）"
         second = raw["matches"][0]["home"]["current_results"][1]
         del second["home_score"]
         del second["away_score"]
@@ -274,8 +343,9 @@ class TemplateTests(unittest.TestCase):
             "<!-- wx:endeach -->"
         )
         rendered = _render(template, source)
-        self.assertIn("4:0（点球 5:4）", rendered.body_html)
-        self.assertIn("社科-心理对手退赛法学", rendered.body_html)
+        self.assertIn("社科-心理 4(5):0(4) 工物-安全", rendered.body_html)
+        self.assertNotIn("点球 5:4", rendered.body_html)
+        self.assertIn("社科-心理 对手退赛 法学", rendered.body_html)
 
     def test_invalid_marker_filter_and_path_fail(self) -> None:
         with self.assertRaises(TemplateContractError):
@@ -302,6 +372,145 @@ class TemplateTests(unittest.TestCase):
 
 
 class QhlyPreviewV1AssetTests(unittest.TestCase):
+    def test_header_background_changes_only_for_female_preview(self) -> None:
+        cases = (
+            (_DATA_PATH, DEFAULT_HEADER_BACKGROUND_URL),
+            (_WOMEN_DATA_PATH, FEMALE_HEADER_BACKGROUND_URL),
+            (_FUTSAL_DATA_PATH, DEFAULT_HEADER_BACKGROUND_URL),
+        )
+        template = load_preview_template(_TEMPLATE_PATH)
+
+        for source_path, expected_url in cases:
+            with self.subTest(source_path=source_path.name):
+                rendered = _render(template, load_preview_source(source_path))
+                images = lxml_html.fromstring(rendered.body_html).xpath(
+                    ".//img"
+                )
+                self.assertEqual(len(images), 1)
+                self.assertEqual(images[0].get("src"), expected_url)
+                self.assertIn("aspect-ratio:32/9", images[0].get("style", ""))
+                self.assertIn("object-fit:cover", images[0].get("style", ""))
+
+    def test_schedule_table_has_compact_columns_and_light_border_style(
+        self,
+    ) -> None:
+        rendered = _render(
+            load_preview_template(_TEMPLATE_PATH),
+            load_preview_source(_DATA_PATH),
+        )
+        document = lxml_html.fromstring(rendered.body_html)
+        schedule_table = document.xpath(".//table")[0]
+        weather_panel = schedule_table.getprevious()
+        rows = schedule_table.xpath("./tbody/tr")
+        header_cells = rows[0].xpath("./td")
+
+        self.assertIn("table-layout:fixed", schedule_table.get("style", ""))
+        self.assertIsNotNone(weather_panel)
+        self.assertEqual(weather_panel.tag, "section")
+        self.assertIn("border-bottom:0", weather_panel.get("style", ""))
+        self.assertIn("color:#000", weather_panel.get("style", ""))
+        self.assertEqual(weather_panel.xpath(".//br"), [])
+        self.assertEqual(len(weather_panel.xpath("./p")), 2)
+        self.assertTrue(
+            all("margin:0" in item.get("style", "") for item in weather_panel.xpath("./p"))
+        )
+        self.assertFalse(
+            any("height:0" in row.get("style", "") for row in rows)
+        )
+        self.assertEqual(rows[0].get("style"), "background:#fff;color:#5a0383")
+        self.assertEqual(
+            [cell.get("width") for cell in header_cells],
+            ["27.27%", "9.09%", "27.27%", "18.18%", "18.18%"],
+        )
+        self.assertTrue(
+            all(
+                "border:1px solid #d6d6d6" in cell.get("style", "")
+                for row in rows
+                for cell in row.xpath("./td")
+            )
+        )
+        self.assertTrue(
+            all(
+                "background:#fff" in cell.get("style", "")
+                and "color:#000" in cell.get("style", "")
+                for cell in rows[1].xpath("./td")
+            )
+        )
+        self.assertEqual(rows[1].xpath("./td")[3].text_content(), "紫操")
+        self.assertIn(
+            "white-space:nowrap",
+            rows[1].xpath("./td")[4].get("style", ""),
+        )
+
+    def test_history_table_text_is_explicitly_black(self) -> None:
+        rendered = _render(
+            load_preview_template(_TEMPLATE_PATH),
+            load_preview_source(_DATA_PATH),
+        )
+        history_tables = [
+            table
+            for table in lxml_html.fromstring(rendered.body_html).xpath(".//table")
+            if "过往三届战绩" in table.text_content()
+        ]
+
+        self.assertGreater(len(history_tables), 0)
+        for table in history_tables:
+            rows = table.xpath("./tbody/tr")
+            self.assertIn("color:#000", table.get("style", ""))
+            self.assertTrue(
+                all(
+                    "color:#000" in cell.get("style", "")
+                    for row in rows[1:]
+                    for cell in row.xpath("./td")
+                )
+            )
+            for cell in rows[3].xpath("./td[@colspan='2']"):
+                paragraphs = cell.xpath("./p")
+                self.assertGreater(len(paragraphs), 0)
+                margins = [item.get("style", "") for item in paragraphs]
+                self.assertTrue(
+                    all("margin:0 0 3px" in style for style in margins[:-1])
+                )
+                self.assertIn("margin:0", margins[-1])
+            for cell in rows[2].xpath("./td[@colspan='2']"):
+                paragraphs = cell.xpath("./p")
+                headings = paragraphs[0::2]
+                results = paragraphs[1::2]
+                self.assertTrue(
+                    all("margin:0 0 2px" in item.get("style", "") for item in headings)
+                )
+                self.assertTrue(
+                    all(
+                        "margin:0 0 3px" in item.get("style", "")
+                        for item in results[:-1]
+                    )
+                )
+                self.assertIn("margin:0", results[-1].get("style", ""))
+
+    def test_each_match_card_starts_with_a_dark_purple_accent(self) -> None:
+        source = load_preview_source(_DATA_PATH)
+        rendered = _render(
+            load_preview_template(_TEMPLATE_PATH),
+            source,
+        )
+        card_accent_style = (
+            "background:#5a0383;height:4px;line-height:0;"
+            "margin:-10px 0 10px -10px;"
+            "overflow:hidden;width:60px"
+        )
+        document = lxml_html.fromstring(rendered.body_html)
+        match_cards = document.xpath(
+            './/section[contains(@style,"background:rgba(252,154,255,.08)") '
+            'and contains(@style,"padding:10px")]'
+        )
+
+        self.assertEqual(len(match_cards), len(source.matches))
+        for card in match_cards:
+            self.assertEqual(
+                card.xpath("./section[1]")[0].get("style"),
+                card_accent_style,
+            )
+
     def test_full_example_keeps_visual_effects_and_wechat_fallbacks(self) -> None:
         template_source = _TEMPLATE_PATH.read_text(encoding="utf-8")
         source_text = _DATA_PATH.read_text(encoding="utf-8")
@@ -323,7 +532,11 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertLess(len(rendered.body_html.encode("utf-8")), 1_000_000)
         self.assertEqual(len(lxml_html.fromstring(rendered.body_html).xpath(".//img")), 1)
         self.assertIn("grid-template-columns:100%", rendered.body_html)
-        self.assertIn("display:block;height:auto;opacity:.3;width:100%", rendered.body_html)
+        self.assertIn(
+            "aspect-ratio:32/9;border:3px solid #5a0383;display:block;"
+            "height:auto;object-fit:cover;opacity:.3;width:100%",
+            rendered.body_html,
+        )
         self.assertNotIn("background-image:url", rendered.body_html)
         self.assertNotIn("padding-top:31.92%", rendered.body_html)
         self.assertNotIn("transform:translate3d(-25px,0,0)", rendered.body_html)

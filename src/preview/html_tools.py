@@ -127,6 +127,7 @@ _TAG_ATTRIBUTES = {
 }
 _ALLOWED_STYLE_PREFIXES = (
     "align-",
+    "aspect-",
     "background",
     "border",
     "box-",
@@ -144,6 +145,7 @@ _ALLOWED_STYLE_PREFIXES = (
     "max-",
     "min-",
     "opacity",
+    "object-",
     "overflow",
     "padding",
     "table-",
@@ -306,4 +308,3 @@ def sanitise_html_fragment(html_text: str, *, base_url: str = "") -> str:
     for child in wrapper:
         pieces.append(html.tostring(child, encoding="unicode", method="html"))
     return "".join(pieces)
-
