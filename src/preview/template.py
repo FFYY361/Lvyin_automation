@@ -17,6 +17,7 @@ from .models import (
     PreviewMatch,
     PreviewSourceData,
     PreviewWeather,
+    SeasonOutcome,
     validate_preview_source,
 )
 
@@ -250,6 +251,14 @@ def _head_to_head_line(value: PlayedMatch) -> str:
     return f"{prefix}{stage}{spacer}{_result_line(value)}"
 
 
+def _outcome_heading(value: SeasonOutcome) -> str:
+    if not isinstance(value, SeasonOutcome):
+        raise TypeError("outcome_heading 需要 SeasonOutcome")
+    if value.competition_label is None:
+        return value.season
+    return f"{value.season}-{value.competition_label}"
+
+
 def _join_names(value: Sequence[str]) -> str:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
         raise TypeError("join_names 需要字符串数组")
@@ -298,6 +307,7 @@ _FILTERS = {
     "weather_summary": _weather_summary,
     "result_line": _result_line,
     "head_to_head_line": _head_to_head_line,
+    "outcome_heading": _outcome_heading,
     "join_names": _join_names,
     "writers": _writers,
     "outcome_margin": _outcome_margin,

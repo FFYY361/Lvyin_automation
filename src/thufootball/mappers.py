@@ -296,6 +296,8 @@ def map_game_summary(
         home_abandon=_optional_binary_flag(item.get("home_abandon")),
         away_abandon=_optional_binary_flag(item.get("away_abandon")),
         field_name=field_name,
+        home_team_brief_name=_optional_text(home_team.get("brief_name")),
+        away_team_brief_name=_optional_text(away_team.get("brief_name")),
     )
 
 

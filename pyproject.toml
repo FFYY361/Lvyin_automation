@@ -19,3 +19,6 @@ wechat-official = "wechat_official.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+auto_preview = ["assets/*.png"]

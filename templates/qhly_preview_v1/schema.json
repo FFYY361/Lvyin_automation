@@ -77,7 +77,7 @@
     "seasonOutcome": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["season", "competition_label", "outcome"],
+      "required": ["season", "outcome"],
       "properties": {
         "season": {"$ref": "#/$defs/nonEmptyString"},
         "competition_label": {"$ref": "#/$defs/nonEmptyString"},
