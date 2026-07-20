@@ -347,34 +347,43 @@ class AutoPreviewPipeline:
 
         preview_service = PreviewService.from_template(
             self._project_root / "templates" / "qhly_preview_v1" / "template.html",
-            version="qhly-preview-v1",
         )
         article_started = time.monotonic()
         article: Article
+        existing_article: Article | None = None
+        rebuild_reasons: list[str] = []
+        render_article = request.override or not article_directory.exists()
         if article_directory.exists() and not request.override:
-            article_state = self._article_state(state)
-            article = self._load_existing_article(article_directory)
-            actual_cover = article_cover_descriptor(article)
-            if article_state["source_sha256"] != source_sha256:
-                raise ArtifactValidationError(
-                    "已有 article 使用的 source 指纹已过期；请使用 --override",
-                    stage="article-validation",
-                )
-            if article_state["template_version"] != preview_service.template_version:
-                raise ArtifactValidationError(
-                    "已有 article 使用的模板版本已过期；请使用 --override",
-                    stage="article-validation",
-                )
-            if article_state["cover"] != actual_cover:
-                raise ArtifactValidationError(
-                    "已有 article 的封面指纹验收失败；请使用 --override",
-                    stage="article-validation",
-                )
-            if request.cover is not None and cover_descriptor(request.cover) != actual_cover:
-                raise ArtifactValidationError(
-                    "命令指定的封面与已有 article 不一致；请使用 --override",
-                    stage="article-validation",
-                )
+            try:
+                existing_article = self._load_existing_article(article_directory)
+            except ArtifactValidationError as exc:
+                rebuild_reasons.append(f"article 无法加载（{exc}）")
+            if existing_article is not None:
+                actual_cover = article_cover_descriptor(existing_article)
+                try:
+                    article_state = self._article_state(state)
+                except ArtifactValidationError as exc:
+                    rebuild_reasons.append(f"run.json.article 无法验收（{exc}）")
+                else:
+                    if article_state["source_sha256"] != source_sha256:
+                        rebuild_reasons.append("source 指纹已变化")
+                    if (
+                        article_state["template_version"]
+                        != preview_service.template_version
+                    ):
+                        rebuild_reasons.append("模板指纹已变化")
+                    if article_state["cover"] != actual_cover:
+                        rebuild_reasons.append("article 封面状态不一致")
+                if (
+                    request.cover is not None
+                    and cover_descriptor(request.cover) != actual_cover
+                ):
+                    rebuild_reasons.append("命令指定了不同封面")
+            render_article = bool(rebuild_reasons)
+
+        if not render_article:
+            assert existing_article is not None
+            article = existing_article
             if accepted_placeholder_sha256 is not None:
                 source_state["accepted_placeholder_sha256"] = (
                     accepted_placeholder_sha256
@@ -386,27 +395,19 @@ class AutoPreviewPipeline:
                 article_directory,
             )
         else:
-            if (
-                not article_directory.exists()
-                and state.get("article") is not None
-                and not request.override
-            ):
-                raise ArtifactValidationError(
-                    "run.json 记录 article 已完成，但文章目录缺失",
-                    stage="article-validation",
+            if rebuild_reasons:
+                logger.info(
+                    "↻ [2/3] article 可覆盖重渲染：%s",
+                    "；".join(dict.fromkeys(rebuild_reasons)),
                 )
-            if (
-                not request.override
-                and not article_directory.exists()
-                and draft_path.exists()
-            ):
-                raise ArtifactValidationError(
-                    "上游 article 缺失但已有 draft.json；请使用 --override",
-                    stage="article-validation",
+            else:
+                logger.info("▶ [2/3] article 渲染模板")
+            cover = (
+                request.cover
+                or (existing_article.cover if existing_article is not None else None)
+                or CoverFile(
+                    Path(__file__).with_name("assets") / "default_cover.png"
                 )
-            logger.info("▶ [2/3] article 渲染模板")
-            cover = request.cover or CoverFile(
-                Path(__file__).with_name("assets") / "default_cover.png"
             )
             article = preview_service.render(
                 source,
@@ -455,12 +456,7 @@ class AutoPreviewPipeline:
             if receipt["article_fingerprint"] == article.content_fingerprint
             and receipt["cover_fingerprint"] == cover_sha256
         ]
-        if draft_path.exists() and not request.override:
-            if not matching:
-                raise ArtifactValidationError(
-                    "已有 draft.json 与当前 article 或封面不一致；请使用 --override",
-                    stage="draft-validation",
-                )
+        if draft_path.exists() and not request.override and matching:
             receipt = matching[-1]
             logger.info(
                 "↷ [3/3] publish 验收通过，跳过重复创建（%.2fs）",
@@ -473,6 +469,11 @@ class AutoPreviewPipeline:
                 source_path=source_path,
                 article_directory=article_directory,
                 draft_media_id=receipt["media_id"],
+            )
+
+        if draft_path.exists() and not request.override:
+            logger.info(
+                "↻ [3/3] 当前 article 无匹配草稿，将创建新草稿并保留历史回执"
             )
 
         logger.info("▶ [3/3] publish 上传素材并创建公众号草稿")

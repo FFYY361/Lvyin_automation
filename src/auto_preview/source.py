@@ -26,6 +26,10 @@ from thufootball import (
     TeamGameResult,
     TeamTournamentOutcome,
 )
+from thufootball.rankings import (
+    StaticTeamIdentity,
+    load_static_outcome_catalog,
+)
 
 from .config import CompetitionConfig
 from .errors import NoGamesForDate
@@ -42,6 +46,11 @@ EDITOR_PLACEHOLDER = "【待填写：编辑】"
 REVIEWER_PLACEHOLDER = "【待填写：责编】"
 APPROVER_PLACEHOLDER = "【待填写：审核】"
 _SEASON_PATTERN = re.compile(r"(20\d{2})[~～-](20\d{2})")
+_TEAM_CATEGORY_BY_COMPETITION = {
+    "male": "男足",
+    "female": "女足",
+    "futsal": "五人制",
+}
 
 
 def _season_label(value: str) -> str | None:
@@ -87,9 +96,23 @@ class PreviewSourceBuilder:
         self._config = config
         self._logger = logger
         self._short_names: dict[int, str] = {}
+        category = _TEAM_CATEGORY_BY_COMPETITION[config.competition.value]
+        catalog = load_static_outcome_catalog()
+        self._official_teams: dict[int, StaticTeamIdentity] = {}
+        for team_id, team_names in catalog.team_names_by_id.items():
+            for team_name in team_names:
+                identity = catalog.teams_by_name[team_name]
+                if identity.category == category:
+                    self._official_teams[team_id] = identity
+                    break
         self._team_results: dict[tuple[int, int], list[TeamGameResult]] = {}
         self._team_outcomes: dict[int, list[TeamTournamentOutcome]] = {}
         self._head_to_head: dict[tuple[int, int], tuple[GameSummary, ...]] = {}
+        self._historical_seasons_by_tournament_id = {
+            tournament_id: _season_label(season.label) or season.label
+            for season in config.historical_seasons
+            for tournament_id in season.tournament_ids
+        }
         self._outcome_warnings: set[int] = set()
         self.selected_games: tuple[tuple[int, int], ...] = ()
 
@@ -99,6 +122,10 @@ class PreviewSourceBuilder:
         name: str,
         database_short_name: str | None = None,
     ) -> str:
+        official = self._official_teams.get(team_id)
+        if official is not None:
+            self._short_names[team_id] = official.brief_name
+            return official.brief_name
         existing = self._short_names.get(team_id)
         if existing is not None:
             return existing
@@ -128,7 +155,10 @@ class PreviewSourceBuilder:
         name: str,
         short_name: str | None,
     ) -> TeamRef:
-        clean_name = name.strip()
+        official = self._official_teams.get(team_id)
+        clean_name = (
+            official.institution_name if official is not None else name.strip()
+        )
         return TeamRef(
             team_id=team_id,
             name=clean_name,
@@ -184,7 +214,12 @@ class PreviewSourceBuilder:
             home_penalty=home_penalty,
             away_penalty=away_penalty,
             result_text=result_text,
-            season=_season_label(game.tournament_name),
+            season=(
+                _season_label(game.tournament_name)
+                or self._historical_seasons_by_tournament_id.get(
+                    game.tournament_id
+                )
+            ),
             competition_label=_competition_label(game.tournament_name),
             stage=_stage(game),
         )
@@ -333,11 +368,15 @@ class PreviewSourceBuilder:
         before: datetime,
     ) -> PreviewTeam:
         resolved_short_name = self._short_name(team_id, name, short_name)
+        official = self._official_teams.get(team_id)
+        resolved_name = (
+            official.institution_name if official is not None else name.strip()
+        )
         outcomes = await self._outcomes(team_id)
         results = await self._current_results(team_id, tournament_id, before)
         return PreviewTeam(
             team_id=team_id,
-            name=name.strip(),
+            name=resolved_name,
             short_name=resolved_short_name,
             previous_outcomes=outcomes,
             current_results=results,
@@ -366,7 +405,7 @@ class PreviewSourceBuilder:
             (game.game_id, game.tournament_id) for game in eligible
         )
 
-        # 所有目标队先于历史数据注册，确保目标比赛的数据库简称拥有优先级。
+        # 目标队先注册；静态官方简称优先，未登记球队再采用可信数据库简称。
         for game in eligible:
             self._short_name(
                 game.home_team_id,

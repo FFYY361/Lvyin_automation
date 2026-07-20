@@ -773,7 +773,9 @@ class StaticRankingDataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             notes_root = Path(directory)
             (notes_root / "teams.json").write_text(
-                '{"测试男足": [true]}\n', encoding="utf-8"
+                '{"测试学院": {"男足": [true], "女足": [], '
+                '"五人制": [], "简称": "测试"}}\n',
+                encoding="utf-8",
             )
             with self.assertRaises(ConfigurationError):
                 _load_teams(notes_root)
@@ -791,18 +793,56 @@ class StaticRankingDataTests(unittest.TestCase):
         )
 
         self.assertEqual(len(tournaments), 14)
-        self.assertTrue(teams)
+        self.assertEqual(len(teams), 53)
+        self.assertEqual(
+            teams["电子工程系"],
+            {"男足": [34], "女足": [66], "五人制": [34], "简称": "电子"},
+        )
+        self.assertEqual(
+            teams["新闻与传播学院-马克思主义学院"],
+            {
+                "男足": [2041, 253, 56, 1944],
+                "女足": [2046, 253, 94],
+                "五人制": [2041, 1944, 253],
+                "简称": "新闻-马院",
+            },
+        )
+        self.assertNotIn("新闻与传播学院-马克思注意学院", teams)
+        self.assertEqual(
+            teams["教育学院-至善书院"]["五人制"],
+            [2051, 235, 293],
+        )
+
         reverse_ids: dict[int, list[str]] = {}
-        for team_name, team_ids in teams.items():
-            self.assertTrue(team_name.endswith(("男足", "女足", "五人制")))
-            self.assertIsInstance(team_ids, list)
-            self.assertTrue(team_ids)
-            self.assertEqual(len(team_ids), len(set(team_ids)))
-            for team_id in team_ids:
-                self.assertIsInstance(team_id, int)
-                self.assertNotIsInstance(team_id, bool)
-                self.assertGreater(team_id, 0)
-                reverse_ids.setdefault(team_id, []).append(team_name)
+        flat_team_names: set[str] = set()
+        institution_by_id: dict[int, str] = {}
+        for institution_name, team in teams.items():
+            self.assertEqual(set(team), {"男足", "女足", "五人制", "简称"})
+            self.assertIsInstance(team["简称"], str)
+            self.assertTrue(team["简称"])
+            for category in ("男足", "女足", "五人制"):
+                team_ids = team[category]
+                self.assertIsInstance(team_ids, list)
+                self.assertEqual(len(team_ids), len(set(team_ids)))
+                if not team_ids:
+                    continue
+                team_name = f"{institution_name}{category}"
+                flat_team_names.add(team_name)
+                for team_id in team_ids:
+                    self.assertIsInstance(team_id, int)
+                    self.assertNotIsInstance(team_id, bool)
+                    self.assertGreater(team_id, 0)
+                    owner = institution_by_id.setdefault(
+                        team_id, institution_name
+                    )
+                    self.assertEqual(owner, institution_name)
+                    reverse_ids.setdefault(team_id, []).append(team_name)
+
+        self.assertEqual(len(reverse_ids), 109)
+        self.assertEqual(
+            teams["深圳国际研究生院"],
+            {"男足": [], "女足": [], "五人制": [], "简称": "深研院"},
+        )
 
         actual_shared = {
             team_id: team_names
@@ -832,13 +872,13 @@ class StaticRankingDataTests(unittest.TestCase):
             128: 47,
             99: 16,
             100: 16,
-            101: 15,
+            101: 14,
             102: 22,
-            111: 48,
+            111: 47,
             89: 16,
             88: 27,
             90: 23,
-            93: 44,
+            93: 43,
         }
         rank_order = {
             "冠军": 0,
@@ -867,13 +907,35 @@ class StaticRankingDataTests(unittest.TestCase):
                 )
             )
             self.assertEqual(len(ranks), expected_counts[tournament_id])
-            self.assertTrue(set(ranks) <= set(teams))
+            self.assertTrue(set(ranks) <= flat_team_names)
             self.assertTrue(
                 all(isinstance(rank, str) and rank for rank in ranks.values())
             )
             rank_priorities = [rank_order[rank] for rank in ranks.values()]
             self.assertEqual(rank_priorities, sorted(rank_priorities))
             observed_labels.update(ranks.values())
+
+        ranks_101 = json.loads(
+            (notes_root / "ranks" / "101.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            ranks_101["新闻与传播学院-马克思主义学院男足"],
+            "小组第三",
+        )
+        ranks_93 = json.loads(
+            (notes_root / "ranks" / "93.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            ranks_93["新闻与传播学院-马克思主义学院五人制"],
+            "44强",
+        )
+        ranks_111 = json.loads(
+            (notes_root / "ranks" / "111.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            ranks_111["新闻与传播学院-马克思主义学院五人制"],
+            "48强",
+        )
 
         self.assertTrue(
             {
@@ -1702,6 +1764,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             current_alias = await service.query_team_outcomes(132)
             historical_alias = await service.query_team_outcomes(244)
             shared_three_ways = await service.query_team_outcomes(253)
+            merged_news = await service.query_team_outcomes(2041, [101])
             non_participant = await service.query_team_outcomes(2051, [122])
         finally:
             await http.aclose()
@@ -1725,10 +1788,14 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {outcome.team_name for outcome in shared_three_ways},
             {
-                "新闻与传播学院男足",
-                "新闻与传播学院女足",
-                "新闻与传播学院五人制",
+                "新闻与传播学院-马克思主义学院男足",
+                "新闻与传播学院-马克思主义学院女足",
+                "新闻与传播学院-马克思主义学院五人制",
             },
+        )
+        self.assertEqual(
+            [(item.team_name, item.rank) for item in merged_news],
+            [("新闻与传播学院-马克思主义学院男足", "小组第三")],
         )
         self.assertEqual(non_participant, [])
 

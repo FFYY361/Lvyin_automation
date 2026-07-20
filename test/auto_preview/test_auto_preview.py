@@ -29,20 +29,26 @@ from auto_preview import (
     Stage,
 )
 from auto_preview.config import competition_config
-from auto_preview.cli import _parser
+from auto_preview.cli import _parser, main as cli_main
+from auto_preview.diagnostics import failure_lines
 from auto_preview.logging_utils import configure_logging
 from auto_preview.source import PreviewSourceBuilder
+from auto_preview.state import sha256_file
 from preview import SeasonOutcome
+from preview.template import _head_to_head_line
 from thufootball import (
+    BatchQueryError,
     GameQuery,
     GameStatus,
     GameSummary,
     HeadToHeadHistory,
     HeadToHeadSummary,
     MatchResult,
+    PermissionError as THUFootballPermissionError,
     QueryValidationError,
     TeamGameResult,
     TeamTournamentOutcome,
+    Timeout,
 )
 from wechat_official import Article, CoverFile, DraftReceipt
 
@@ -337,6 +343,40 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
             {128: "五人制"},
         )
 
+    def test_head_to_head_uses_configured_season_when_name_omits_year(
+        self,
+    ) -> None:
+        queries = _FakeQueries()
+        logger, _ = _logger()
+        builder = PreviewSourceBuilder(
+            queries,  # type: ignore[arg-type]
+            competition_config(Competition.MALE),
+            logger=logger,
+        )
+
+        cases = ((89, "23-24"), (72, "22-23"))
+        for index, (tournament_id, expected_season) in enumerate(cases):
+            with self.subTest(tournament_id=tournament_id):
+                played = builder._played_match(
+                    _game(
+                        800 + index,
+                        tournament_id,
+                        datetime(2024, 3, 1, 12, 0, tzinfo=SHANGHAI),
+                        status=GameStatus.FINISHED,
+                        tournament_name="马杯男足甲级",
+                        home_score=1,
+                        away_score=0,
+                    )
+                )
+
+                self.assertEqual(played.season, expected_season)
+                self.assertEqual(played.competition_label, "甲")
+                self.assertTrue(
+                    _head_to_head_line(played).startswith(
+                        f"（{expected_season}-甲）"
+                    )
+                )
+
     async def test_team_missing_from_outcome_catalog_is_shown_as_not_entered(self) -> None:
         queries = _FakeQueries()
         queries.outcome_query_error_team_ids.add(1)
@@ -403,6 +443,28 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
             sum("team_id=2" in item and "简称不可信" in item for item in handler.messages),
             1,
         )
+
+    def test_official_team_name_and_brief_name_precede_database_values(
+        self,
+    ) -> None:
+        queries = _FakeQueries()
+        logger, handler = _logger()
+        builder = PreviewSourceBuilder(
+            queries,  # type: ignore[arg-type]
+            competition_config(Competition.MALE),
+            logger=logger,
+        )
+
+        # 直接验证目录解析，避免将网络查询行为混入此单元测试。
+        team = builder._team_ref(
+            33,
+            "数据库计算机队全称",
+            "数据库中的超长简称",
+        )
+
+        self.assertEqual(team.name, "计算机科学与技术系-全球创新学院")
+        self.assertEqual(team.short_name, "计算机-GIX")
+        self.assertFalse(any("team_id=33" in item for item in handler.messages))
 
     async def test_current_results_home_normalisation_can_be_disabled(self) -> None:
         queries = _FakeQueries()
@@ -471,6 +533,21 @@ class DefaultCoverAssetTests(unittest.TestCase):
 
 
 class LoggingTests(unittest.TestCase):
+    def test_logging_permission_error_is_diagnosed_without_traceback(self) -> None:
+        stderr = StringIO()
+        with patch(
+            "auto_preview.cli.configure_logging",
+            side_effect=PermissionError(13, "access denied", "runs"),
+        ):
+            with redirect_stderr(stderr):
+                status = cli_main(["2026-03-13", "male", "--stage", "data"])
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 2)
+        self.assertIn("类别：本地文件权限错误", rendered)
+        self.assertIn("阶段：logging", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_file_log_is_utf8_plain_text_without_ansi(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with redirect_stderr(StringIO()):
@@ -484,6 +561,65 @@ class LoggingTests(unittest.TestCase):
                 handler.close()
         self.assertIn("[1/3] 测试日志", content)
         self.assertNotIn("\x1b", content)
+
+    def test_batch_permission_error_has_actionable_child_details(self) -> None:
+        error = BatchQueryError(
+            {
+                tournament_id: THUFootballPermissionError(
+                    "GetTournInfo denied access to the requested resource",
+                    stage="http",
+                )
+                for tournament_id in (122, 124, 126)
+            }
+        )
+
+        rendered = "\n".join(
+            failure_lines(error, log_path=Path("pipeline.log"))
+        )
+
+        self.assertIn("批量赛事查询错误（权限错误）", rendered)
+        self.assertIn("赛事 IDs=(122, 124, 126)", rendered)
+        self.assertIn("赛事 122：权限错误", rendered)
+        self.assertIn("确认当前 THUFootball 账号能够查看失败赛事", rendered)
+        self.assertIn("完整日志：pipeline.log", rendered)
+
+    def test_network_and_local_validation_errors_are_distinguished(self) -> None:
+        try:
+            raise Timeout(
+                "GetTournInfo timed out",
+                stage="http",
+                retryable=True,
+                tournament_id=122,
+            ) from OSError("sensitive low-level message")
+        except Timeout as timeout:
+            network = "\n".join(failure_lines(timeout))
+
+        local = "\n".join(
+            failure_lines(
+                ArtifactValidationError(
+                    "已有 source.json 验收失败",
+                    stage="data-validation",
+                )
+            )
+        )
+        redacted = "\n".join(
+            failure_lines(
+                ValueError(
+                    "request failed: session_key=secret-session, "
+                    "'access_token': 'secret-token'"
+                )
+            )
+        )
+
+        self.assertIn("类别：网络超时", network)
+        self.assertIn("可重试：是", network)
+        self.assertIn("底层异常=OSError", network)
+        self.assertNotIn("sensitive low-level message", network)
+        self.assertIn("类别：本地产物校验错误", local)
+        self.assertIn("--override 仅用于重新查询并覆盖 source.json", local)
+        self.assertNotIn("secret-session", redacted)
+        self.assertNotIn("secret-token", redacted)
+        self.assertEqual(redacted.count("<redacted>"), 2)
 
 
 class _Context:
@@ -583,12 +719,28 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reused.draft_media_id, "draft-1")
             self.assertEqual(len(wechat.articles), 1)
 
+            source = json.loads(first.source_path.read_text(encoding="utf-8"))
+            source["headline"] = "人工修改后创建新草稿"
+            first.source_path.write_text(
+                json.dumps(source, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            changed = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.PUBLISH,
+                )
+            )
+            self.assertEqual(changed.draft_media_id, "draft-2")
+            self.assertEqual(len(wechat.articles), 2)
+
             second = await runner.run(request)
-            self.assertEqual(second.draft_media_id, "draft-2")
+            self.assertEqual(second.draft_media_id, "draft-3")
             history = json.loads(
                 (second.run_directory / "draft.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(len(history["receipts"]), 2)
+            self.assertEqual(len(history["receipts"]), 3)
 
     async def test_pause_edit_source_and_resume_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -632,11 +784,11 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(resumed.article_directory.is_dir())
             self.assertEqual(len(queries.game_queries), 1)
 
-    async def test_stale_article_errors_without_changing_existing_artifacts(self) -> None:
+    async def test_edited_source_rebuilds_article_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
             queries = _FakeQueries()
-            logger, _ = _logger()
+            logger, handler = _logger()
             runner = AutoPreviewPipeline(
                 project_root=root,
                 query_service_factory=lambda: _Context(queries),
@@ -657,30 +809,109 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8",
             )
             state_path = complete.run_directory / "run.json"
-            before_state = state_path.read_bytes()
-            before_article = {
-                path.name: path.read_bytes()
-                for path in complete.article_directory.iterdir()
-                if path.is_file()
-            }
+            before_article = Article.load(complete.article_directory)
 
-            with self.assertRaises(ArtifactValidationError):
-                await runner.run(
-                    PipelineRequest(
-                        override_request.preview_date,
-                        override_request.competition,
-                        Stage.ARTICLE,
-                    )
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    override_request.preview_date,
+                    override_request.competition,
+                    Stage.ARTICLE,
                 )
+            )
 
-            self.assertEqual(state_path.read_bytes(), before_state)
+            article = Article.load(rebuilt.article_directory)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIn("人工修改后的标题", article.title)
+            self.assertNotEqual(
+                article.content_fingerprint, before_article.content_fingerprint
+            )
             self.assertEqual(
-                {
-                    path.name: path.read_bytes()
-                    for path in complete.article_directory.iterdir()
-                    if path.is_file()
-                },
-                before_article,
+                state["article"]["source_sha256"], sha256_file(complete.source_path)
+            )
+            self.assertEqual(
+                state["article"]["cover"]["sha256"],
+                sha256_file(article.cover.path),
+            )
+            self.assertEqual(len(queries.game_queries), 1)
+            self.assertTrue(
+                any("source 指纹已变化" in message for message in handler.messages)
+            )
+
+    async def test_invalid_article_is_rebuilt_without_querying_again(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.ARTICLE,
+                override=True,
+            )
+            complete = await runner.run(request)
+            (complete.article_directory / "article.json").write_text(
+                "{broken", encoding="utf-8"
+            )
+
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+
+            self.assertIsInstance(Article.load(rebuilt.article_directory), Article)
+            self.assertEqual(len(queries.game_queries), 1)
+
+    async def test_changed_template_rebuilds_article_without_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, handler = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.ARTICLE,
+                override=True,
+            )
+            complete = await runner.run(request)
+            before = Article.load(complete.article_directory)
+            template_path = root / "templates" / "qhly_preview_v1" / "template.html"
+            template_path.write_text(
+                template_path.read_text(encoding="utf-8")
+                + "\n<section>模板变化测试标记</section>\n",
+                encoding="utf-8",
+            )
+
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+
+            article = Article.load(rebuilt.article_directory)
+            self.assertIn("模板变化测试标记", article.body_html)
+            self.assertNotEqual(
+                article.content_fingerprint, before.content_fingerprint
+            )
+            self.assertEqual(len(queries.game_queries), 1)
+            self.assertTrue(
+                any("模板指纹已变化" in message for message in handler.messages)
             )
 
 

@@ -9,11 +9,9 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from preview import PreviewError
-from thufootball import THUFootballError
-from wechat_official import CoverFile, CoverMediaId, WechatArticleError
+from wechat_official import CoverFile, CoverMediaId
 
-from .errors import PipelineError
+from .diagnostics import failure_lines, log_failure
 from .logging_utils import configure_logging
 from .models import Competition, PipelineRequest, Stage
 from .service import AutoPreviewPipeline
@@ -68,43 +66,50 @@ def main(argv: list[str] | None = None) -> int:
         / "auto_preview"
         / f"{args.preview_date.isoformat()}_{args.competition.value}"
     )
-    logger = configure_logging(run_directory)
-    if args.cover is not None:
-        cover_path = Path(args.cover).expanduser().resolve()
-        if not cover_path.is_file():
-            logger.error("✗ 封面文件不存在：%s", cover_path)
-            return 2
-        cover = CoverFile(cover_path)
-    elif args.cover_media_id is not None:
-        cover = CoverMediaId(args.cover_media_id)
-    else:
-        cover = None
-    request = PipelineRequest(
-        preview_date=args.preview_date,
-        competition=args.competition,
-        stage=args.stage,
-        cover=cover,
-        override=args.override,
-    )
-    runner = AutoPreviewPipeline(project_root=project_root, logger=logger)
+    log_path = run_directory / "auto_preview.log"
     try:
+        logger = configure_logging(run_directory)
+    except Exception as exc:
+        print(
+            *failure_lines(exc, stage="logging", log_path=log_path),
+            sep="\n",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        if args.cover is not None:
+            cover_path = Path(args.cover).expanduser().resolve()
+            if not cover_path.is_file():
+                log_failure(
+                    logger,
+                    FileNotFoundError(
+                        2, "封面文件不存在", str(cover_path)
+                    ),
+                    stage="arguments",
+                    log_path=log_path,
+                )
+                return 2
+            cover = CoverFile(cover_path)
+        elif args.cover_media_id is not None:
+            cover = CoverMediaId(args.cover_media_id)
+        else:
+            cover = None
+        request = PipelineRequest(
+            preview_date=args.preview_date,
+            competition=args.competition,
+            stage=args.stage,
+            cover=cover,
+            override=args.override,
+        )
+        runner = AutoPreviewPipeline(project_root=project_root, logger=logger)
         result = asyncio.run(runner.run(request))
-    except (PipelineError, THUFootballError, PreviewError, WechatArticleError) as exc:
-        logger.error(
-            "✗ auto_preview 失败：stage=%s error=%s message=%s",
-            getattr(exc, "stage", "unknown"),
-            type(exc).__name__,
-            str(exc),
-        )
-        return 2
-    except (OSError, ValueError) as exc:
-        logger.error(
-            "✗ auto_preview 失败：error=%s message=%s", type(exc).__name__, str(exc)
-        )
-        return 2
     except KeyboardInterrupt:
         logger.error("✗ auto_preview 已由用户中断")
         return 130
+    except Exception as exc:
+        log_failure(logger, exc, log_path=log_path)
+        return 2
 
     print(
         json.dumps(

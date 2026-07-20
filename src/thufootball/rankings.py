@@ -17,7 +17,8 @@ from .errors import ConfigurationError
 
 _NOTES_ROOT = Path(__file__).with_name("notes")
 _SEASON_PATTERN = re.compile(r"(20\d{2}~20\d{2})$")
-_TEAM_SUFFIXES = ("男足", "女足", "五人制")
+_TEAM_CATEGORIES = ("男足", "女足", "五人制")
+_TEAM_FIELDS = frozenset((*_TEAM_CATEGORIES, "简称"))
 
 
 class _DuplicateKeyError(ValueError):
@@ -64,8 +65,18 @@ class StaticTournamentRanking:
 
 
 @dataclass(frozen=True)
+class StaticTeamIdentity:
+    team_name: str
+    institution_name: str
+    category: str
+    brief_name: str
+    team_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class StaticOutcomeCatalog:
     tournament_ids: tuple[int, ...]
+    teams_by_name: Mapping[str, StaticTeamIdentity]
     team_ids_by_name: Mapping[str, tuple[int, ...]]
     team_names_by_id: Mapping[int, tuple[str, ...]]
     tournaments_by_id: Mapping[int, StaticTournamentRanking]
@@ -73,35 +84,80 @@ class StaticOutcomeCatalog:
 
 def _load_teams(
     notes_root: Path,
-) -> tuple[dict[str, tuple[int, ...]], dict[int, tuple[str, ...]]]:
+) -> tuple[
+    dict[str, tuple[int, ...]],
+    dict[int, tuple[str, ...]],
+    dict[str, StaticTeamIdentity],
+]:
     raw = _read_json(notes_root / "teams.json", "teams.json")
     if not isinstance(raw, dict) or not raw:
         raise _configuration_error("teams.json")
 
     teams: dict[str, tuple[int, ...]] = {}
+    identities: dict[str, StaticTeamIdentity] = {}
     reverse: dict[int, list[str]] = defaultdict(list)
-    for team_name, raw_ids in raw.items():
+    institution_by_id: dict[int, str] = {}
+    for institution_name, raw_team in raw.items():
         if (
-            not isinstance(team_name, str)
-            or not team_name.strip()
-            or not team_name.endswith(_TEAM_SUFFIXES)
-            or not isinstance(raw_ids, list)
-            or not raw_ids
+            not isinstance(institution_name, str)
+            or not institution_name.strip()
+            or institution_name != institution_name.strip()
+            or not isinstance(raw_team, dict)
+            or set(raw_team) != _TEAM_FIELDS
         ):
             raise _configuration_error("teams.json")
-        team_ids = tuple(
-            _positive_int(team_id, f"teams.json.{team_name}")
-            for team_id in raw_ids
-        )
-        if len(set(team_ids)) != len(team_ids):
-            raise _configuration_error(f"teams.json.{team_name}")
-        teams[team_name] = team_ids
-        for team_id in team_ids:
-            reverse[team_id].append(team_name)
+        brief_name = raw_team["简称"]
+        if (
+            not isinstance(brief_name, str)
+            or not brief_name.strip()
+            or brief_name != brief_name.strip()
+        ):
+            raise _configuration_error(f"teams.json.{institution_name}.简称")
 
-    return teams, {
-        team_id: tuple(team_names) for team_id, team_names in reverse.items()
-    }
+        for category in _TEAM_CATEGORIES:
+            raw_ids = raw_team[category]
+            if not isinstance(raw_ids, list):
+                raise _configuration_error(
+                    f"teams.json.{institution_name}.{category}"
+                )
+            team_ids = tuple(
+                _positive_int(
+                    team_id, f"teams.json.{institution_name}.{category}"
+                )
+                for team_id in raw_ids
+            )
+            if len(set(team_ids)) != len(team_ids):
+                raise _configuration_error(
+                    f"teams.json.{institution_name}.{category}"
+                )
+            if not team_ids:
+                continue
+
+            team_name = f"{institution_name}{category}"
+            teams[team_name] = team_ids
+            identities[team_name] = StaticTeamIdentity(
+                team_name=team_name,
+                institution_name=institution_name,
+                category=category,
+                brief_name=brief_name,
+                team_ids=team_ids,
+            )
+            for team_id in team_ids:
+                owner = institution_by_id.setdefault(team_id, institution_name)
+                if owner != institution_name:
+                    raise _configuration_error(
+                        f"teams.json.team_id.{team_id}"
+                    )
+                reverse[team_id].append(team_name)
+
+    return (
+        teams,
+        {
+            team_id: tuple(team_names)
+            for team_id, team_names in reverse.items()
+        },
+        identities,
+    )
 
 
 def _validate_identity_audit(
@@ -293,11 +349,12 @@ def _load_tournaments(
 
 @lru_cache(maxsize=1)
 def load_static_outcome_catalog() -> StaticOutcomeCatalog:
-    teams, team_names_by_id = _load_teams(_NOTES_ROOT)
+    teams, team_names_by_id, identities = _load_teams(_NOTES_ROOT)
     _validate_identity_audit(_NOTES_ROOT, teams, team_names_by_id)
     tournament_ids, tournaments = _load_tournaments(_NOTES_ROOT, teams)
     return StaticOutcomeCatalog(
         tournament_ids=tournament_ids,
+        teams_by_name=MappingProxyType(identities),
         team_ids_by_name=MappingProxyType(teams),
         team_names_by_id=MappingProxyType(team_names_by_id),
         tournaments_by_id=MappingProxyType(tournaments),

@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime
 from pathlib import Path
+from types import MappingProxyType
 
 from .errors import TemplateContractError
 from .html_tools import sanitise_html
@@ -33,6 +34,32 @@ _TOKEN = re.compile(
 _UNRESOLVED = re.compile(r"\{\{|\}\}|<!--\s*wx:")
 _TRIPLE_BRACE = re.compile(r"\{\{\{|\}\}\}")
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+VENUE_SHORT_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        "紫荆操场": "紫操",
+        "紫荆足球场": "紫操",
+        "西大操场": "西操",
+        "西区足球场": "西操",
+        "东大操场": "东操",
+        "东区足球场": "东操",
+        "紫荆足球场北侧场地": "紫北",
+        "紫荆足球场南侧场地": "紫南",
+        "西区足球场北侧场地": "西北",
+        "西区足球场南侧场地": "西南",
+    }
+)
+
+DEFAULT_HEADER_BACKGROUND_URL = (
+    "https://mmbiz.qpic.cn/mmbiz_png/"
+    "nLiaMdUM1UQOQdqlHEV1dIKby8VxYFfk8TibEib5X3w65xasLVLyrUiaO0oJgY9mmp9"
+    "LHroxYUJAnKE5qZhVbKhodw/640?wx_fmt=png"
+)
+FEMALE_HEADER_BACKGROUND_URL = (
+    "https://mmbiz.qpic.cn/mmbiz_jpg/"
+    "nLiaMdUM1UQMfbXqPelnvE3UB4MCYGkP972QFqvicw6w76sbhOErtbQz1ADVnxoiagJ5"
+    "o5XzOKWTkDA6B7jH9dkWQ/640?wx_fmt=jpeg"
+)
 
 
 @dataclass(frozen=True)
@@ -224,27 +251,49 @@ def _weather_summary(value: PreviewWeather | None) -> str:
     return f"{value.low_c}~{value.high_c}℃，{value.wind_direction}{value.wind_level}"
 
 
+def _venue_short_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("venue_short_name 需要场地名称")
+    clean_name = value.strip()
+    return VENUE_SHORT_NAMES.get(clean_name, clean_name)
+
+
+def _header_background_url(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("header_background_url 需要赛事简称")
+    if value.strip() == "马杯女足":
+        return FEMALE_HEADER_BACKGROUND_URL
+    return DEFAULT_HEADER_BACKGROUND_URL
+
+
 def _score_text(value: PlayedMatch) -> str:
     if not isinstance(value, PlayedMatch):
         raise TypeError("比分格式化器需要 PlayedMatch")
+    if value.home_penalty is not None:
+        return (
+            f"{value.home_score}({value.home_penalty}):"
+            f"{value.away_score}({value.away_penalty})"
+        )
     if value.result_text is not None:
         return value.result_text
-    score = f"{value.home_score}:{value.away_score}"
-    if value.home_penalty is not None:
-        score += f"（点球 {value.home_penalty}:{value.away_penalty}）"
-    return score
+    return f"{value.home_score}:{value.away_score}"
 
 
 def _result_line(value: PlayedMatch) -> str:
     if not isinstance(value, PlayedMatch):
         raise TypeError("result_line 需要 PlayedMatch")
-    return f"{value.home.short_name}{_score_text(value)}{value.away.short_name}"
+    return (
+        f"{value.home.short_name} {_score_text(value)} "
+        f"{value.away.short_name}"
+    )
 
 
 def _head_to_head_line(value: PlayedMatch) -> str:
     if not isinstance(value, PlayedMatch):
         raise TypeError("head_to_head_line 需要 PlayedMatch")
-    labels = [item for item in (value.season, value.competition_label) if item]
+    labels = [value.season] if value.season else []
+    if value.competition_label and value.competition_label != "女足":
+        labels.append(value.competition_label)
     prefix = f"（{'-'.join(labels)}）" if labels else ""
     stage = value.stage or ""
     spacer = " " if prefix or stage else ""
@@ -254,7 +303,7 @@ def _head_to_head_line(value: PlayedMatch) -> str:
 def _outcome_heading(value: SeasonOutcome) -> str:
     if not isinstance(value, SeasonOutcome):
         raise TypeError("outcome_heading 需要 SeasonOutcome")
-    if value.competition_label is None:
+    if value.competition_label is None or value.competition_label == "女足":
         return value.season
     return f"{value.season}-{value.competition_label}"
 
@@ -281,10 +330,10 @@ def _writers(value: Sequence[PreviewMatch]) -> str:
     return " ".join(ordered)
 
 
-def _outcome_margin(value: bool) -> str:
+def _history_item_margin(value: bool) -> str:
     if not isinstance(value, bool):
-        raise TypeError("outcome_margin 需要 loop.last")
-    return "0" if value else "0 0 5px"
+        raise TypeError("history_item_margin 需要 loop.last")
+    return "0" if value else "0 0 3px"
 
 
 def _paragraph_margin(value: bool) -> str:
@@ -305,12 +354,15 @@ _FILTERS = {
     "time_hm": _time_hm,
     "match_datetime": _match_datetime,
     "weather_summary": _weather_summary,
+    "venue_short_name": _venue_short_name,
+    "header_background_url": _header_background_url,
     "result_line": _result_line,
     "head_to_head_line": _head_to_head_line,
     "outcome_heading": _outcome_heading,
     "join_names": _join_names,
     "writers": _writers,
-    "outcome_margin": _outcome_margin,
+    "outcome_margin": _history_item_margin,
+    "history_item_margin": _history_item_margin,
     "paragraph_margin": _paragraph_margin,
     "team_name_width": _team_name_width,
 }
