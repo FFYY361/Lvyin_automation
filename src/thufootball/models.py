@@ -77,6 +77,8 @@ class GameSummary:
     home_abandon: bool | None
     away_abandon: bool | None
     field_name: str | None
+    home_team_brief_name: str | None = None
+    away_team_brief_name: str | None = None
 
 
 @dataclass(frozen=True)

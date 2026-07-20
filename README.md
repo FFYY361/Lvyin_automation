@@ -203,3 +203,43 @@ asyncio.run(main())
 评论默认关闭；需要时使用 `create_draft(article, open_comments=True)`，仅粉丝评论还需同时传入 `fans_only_comments=True`。正文图片当前支持允许域名的 HTTPS 图片和 `data:` 图片，不读取本地正文资源路径。
 
 凭据、IP 白名单、图片与草稿排错见 [微信公众号草稿教程](docs/wechat_official/wechat_official_draft_tutorial.md)。
+
+## 自动化前瞻 auto_preview
+
+`auto_preview` 按日期和赛事串联 `thufootball`、`preview` 与 `wechat_official`。入口是纯 Python 脚本，可在 Windows、macOS 和 Linux 使用：
+
+```powershell
+python scripts/auto_preview.py 2026-04-11 female
+python scripts/auto_preview.py 2026-04-11 male --stage data
+python scripts/auto_preview.py 2026-04-11 futsal --stage publish
+```
+
+赛事参数仅支持 `male`、`female`、`futsal`。`--stage` 支持：
+
+| stage | 行为 |
+| --- | --- |
+| `data` | 读取固定赛事 ID，生成 `source.json` |
+| `article` | 完成 data 后渲染 Article；这是默认值 |
+| `publish` | 完成前两阶段后创建微信公众号草稿 |
+
+运行产物位于 `runs/auto_preview/YYYY-MM-DD_赛事/`。新生成的 `source.json` 中，标题、前瞻段落和人员字段带有 `【待填写】` 占位符。进入 article 前可以选择保留占位符继续，也可以暂停、编辑 JSON 后重新运行命令。
+
+不传封面时自动使用随包提供的“默认封面 / 发布前请替换”图片；也可以显式指定本地封面或已有公众号永久素材：
+
+```powershell
+python scripts/auto_preview.py 2026-04-11 female --cover path/to/cover.png
+python scripts/auto_preview.py 2026-04-11 female --cover-media-id MEDIA_ID
+```
+
+已有阶段产物采用严格验收：验收通过则跳过，验收不通过则报错，绝不自动重建。需要覆盖时显式使用 `--override`；它会从 data 开始重做到目标阶段，因此可能覆盖人工编辑过的 `source.json`：
+
+```powershell
+python scripts/auto_preview.py 2026-04-11 female --stage article --override
+python scripts/auto_preview.py 2026-04-11 female --stage publish --override
+```
+
+`publish` 只创建公众号草稿，不正式发布或群发。每次运行的阶段日志追加到对应目录的 `auto_preview.log`，草稿回执历史保存在 `draft.json`。
+
+球队简称优先采用 `GameSummary` 中的数据库 `brief_name`；简称缺失或去除首尾空白后超过 5 个字符时，改用球队全称前两个字符并记录 warning。`src/auto_preview/source.py` 顶层的 `CURRENT_RESULTS_TEAM_ALWAYS_HOME` 默认为 `True`，控制是否将每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
+
+比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；近三年没有直接交手记录时显示“无”。已有运行目录仍遵守严格复用规则，需要重新生成这些内容时请使用 `--override`。

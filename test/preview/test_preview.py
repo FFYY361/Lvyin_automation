@@ -77,7 +77,8 @@ class PreviewSourceTests(unittest.TestCase):
                 self.assertTrue(rendered.title.startswith(title_prefix))
                 self.assertIn(full_name, rendered.body_html)
                 self.assertIn("前瞻文章", rendered.body_html)
-                self.assertGreaterEqual(rendered.body_html.count("暂无数据"), 5)
+                self.assertGreaterEqual(rendered.body_html.count("暂无数据"), 4)
+                self.assertIn(">无</p>", rendered.body_html)
                 self.assertEqual(
                     rendered.body_html.count(
                         "display:flex;flex-flow:row;height:42px;margin-bottom:15px"
@@ -197,6 +198,31 @@ class PreviewSourceTests(unittest.TestCase):
 
 
 class TemplateTests(unittest.TestCase):
+    def test_missing_outcome_and_head_to_head_have_explicit_fallbacks(self) -> None:
+        raw = _raw_source()
+        raw["matches"] = [raw["matches"][0]]
+        match = raw["matches"][0]
+        match["home"]["previous_outcomes"] = [
+            {"season": "22-23", "outcome": "未参赛"}
+        ]
+        match["head_to_head"] = []
+
+        rendered = _render(
+            load_preview_template(_TEMPLATE_PATH),
+            parse_preview_source(raw),
+        )
+
+        self.assertIn("（22-23）", rendered.body_html)
+        self.assertIn("未参赛", rendered.body_html)
+        document = lxml_html.fromstring(rendered.body_html)
+        cells = [
+            cell
+            for cell in document.xpath(".//td")
+            if "两队最近三年交手战绩" in cell.text_content()
+        ]
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0].xpath("./p")[-1].text_content(), "无")
+
     def test_repeated_nested_lists_empty_fallback_and_text_escaping(self) -> None:
         raw = _raw_source()
         for match in raw["matches"]:

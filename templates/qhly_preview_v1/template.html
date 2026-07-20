@@ -122,14 +122,14 @@
               <tr>
                 <td colspan="2" style="border:1px solid #d6d6d6;padding:5px;vertical-align:middle">
                   <!-- wx:each match.home.previous_outcomes as outcome -->
-                  <p style="margin:0">（{{outcome.season}}-{{outcome.competition_label}}）</p>
+                  <p style="margin:0">（{{outcome|outcome_heading}}）</p>
                   <p style="margin:{{loop.last|outcome_margin}}">{{outcome.outcome}}</p>
                   <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
                 </td>
                 <td style="border:1px solid #d6d6d6;padding:5px;vertical-align:middle"><strong>过往三届战绩</strong></td>
                 <td colspan="2" style="border:1px solid #d6d6d6;padding:5px;vertical-align:middle">
                   <!-- wx:each match.away.previous_outcomes as outcome -->
-                  <p style="margin:0">（{{outcome.season}}-{{outcome.competition_label}}）</p>
+                  <p style="margin:0">（{{outcome|outcome_heading}}）</p>
                   <p style="margin:{{loop.last|outcome_margin}}">{{outcome.outcome}}</p>
                   <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
                 </td>
@@ -152,7 +152,7 @@
                   <p style="margin:0 0 4px"><strong>两队最近三年交手战绩：</strong></p>
                   <!-- wx:each match.head_to_head as meeting -->
                   <p style="margin:0">{{meeting|head_to_head_line}}</p>
-                  <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
+                  <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
                 </td>
               </tr>
             </tbody>

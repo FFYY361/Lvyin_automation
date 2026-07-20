@@ -35,7 +35,7 @@ class TeamRef:
 @dataclass(frozen=True)
 class SeasonOutcome:
     season: str
-    competition_label: str
+    competition_label: str | None
     outcome: str
 
 
@@ -262,12 +262,13 @@ def _parse_outcome(value: object, path: str, stage: str) -> SeasonOutcome:
     obj = _ObjectReader(
         value,
         path=path,
-        required=("season", "competition_label", "outcome"),
+        required=("season", "outcome"),
+        optional=("competition_label",),
         stage=stage,
     )
     return SeasonOutcome(
         season=_string(obj.get("season"), obj.child_path("season"), stage=stage),
-        competition_label=_string(
+        competition_label=_optional_string(
             obj.get("competition_label"), obj.child_path("competition_label"), stage=stage
         ),
         outcome=_string(obj.get("outcome"), obj.child_path("outcome"), stage=stage),
@@ -577,11 +578,12 @@ def _validate_preview_team(team: PreviewTeam, path: str, *, stage: str) -> None:
     for index, outcome in enumerate(team.previous_outcomes):
         outcome_path = f"{path}.previous_outcomes[{index}]"
         _validate_nonempty(outcome.season, f"{outcome_path}.season", stage=stage)
-        _validate_nonempty(
-            outcome.competition_label,
-            f"{outcome_path}.competition_label",
-            stage=stage,
-        )
+        if outcome.competition_label is not None:
+            _validate_nonempty(
+                outcome.competition_label,
+                f"{outcome_path}.competition_label",
+                stage=stage,
+            )
         _validate_nonempty(outcome.outcome, f"{outcome_path}.outcome", stage=stage)
     for index, result in enumerate(team.current_results):
         _validate_played_match(result, f"{path}.current_results[{index}]", stage=stage)

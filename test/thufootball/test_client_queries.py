@@ -450,6 +450,8 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(scheduled.kickoff_local.utcoffset().total_seconds(), 8 * 3600)
         self.assertEqual(scheduled.home_tournament_team_id, 1101)
         self.assertEqual(scheduled.home_team_id, 101)
+        self.assertEqual(scheduled.home_team_brief_name, "主101")
+        self.assertEqual(scheduled.away_team_brief_name, "客202")
         self.assertEqual(scheduled.tournament_name, "赛事10")
         self.assertEqual(scheduled.home_score, 2)
         self.assertTrue(scheduled.penalty_shootout)
