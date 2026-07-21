@@ -7,6 +7,7 @@ import re
 from datetime import date, datetime
 
 from preview import (
+    SOURCE_DOCUMENT_SCHEMA_VERSION,
     PlayedMatch,
     PreviewColumnConfig,
     PreviewCredits,
@@ -14,7 +15,6 @@ from preview import (
     PreviewSourceData,
     PreviewTeam,
     PreviewValidationError,
-    SOURCE_DOCUMENT_SCHEMA_VERSION,
     SeasonOutcome,
     TeamRef,
     matchup_key,
@@ -26,9 +26,9 @@ from thufootball import (
     GameStatus,
     GameSummary,
     QueryValidationError,
-    THUFootballQueryService,
     TeamGameResult,
     TeamTournamentOutcome,
+    THUFootballQueryService,
 )
 from thufootball.rankings import (
     StaticTeamIdentity,
@@ -37,7 +37,6 @@ from thufootball.rankings import (
 
 from .config import CompetitionConfig
 from .errors import NoGamesForDate
-
 
 # 顶层开关：开启时，每支球队的本赛事历史战绩都从该队的主队视角展示。
 CURRENT_RESULTS_TEAM_ALWAYS_HOME = True
@@ -135,8 +134,7 @@ class PreviewSourceBuilder:
         clean_name = name.strip()
         candidate = database_short_name.strip() if database_short_name else ""
         trusted = (
-            bool(candidate)
-            and len(candidate) <= MAX_TRUSTED_TEAM_SHORT_NAME_LENGTH
+            bool(candidate) and len(candidate) <= MAX_TRUSTED_TEAM_SHORT_NAME_LENGTH
         )
         short_name = candidate if trusted else clean_name[:2]
         self._short_names[team_id] = short_name
@@ -159,9 +157,7 @@ class PreviewSourceBuilder:
         short_name: str | None,
     ) -> TeamRef:
         official = self._official_teams.get(team_id)
-        clean_name = (
-            official.institution_name if official is not None else name.strip()
-        )
+        clean_name = official.institution_name if official is not None else name.strip()
         return TeamRef(
             team_id=team_id,
             name=clean_name,
@@ -219,9 +215,7 @@ class PreviewSourceBuilder:
             result_text=result_text,
             season=(
                 _season_label(game.tournament_name)
-                or self._historical_seasons_by_tournament_id.get(
-                    game.tournament_id
-                )
+                or self._historical_seasons_by_tournament_id.get(game.tournament_id)
             ),
             competition_label=_competition_label(game.tournament_name),
             stage=_stage(game),
@@ -299,9 +293,7 @@ class PreviewSourceBuilder:
             resolved.append(
                 SeasonOutcome(
                     season=season_label,
-                    competition_label=_competition_label(
-                        outcome.tournament_name
-                    ),
+                    competition_label=_competition_label(outcome.tournament_name),
                     outcome=outcome.rank,
                 )
             )
@@ -329,16 +321,12 @@ class PreviewSourceBuilder:
             (
                 game
                 for game in matches
-                if game.status is GameStatus.FINISHED
-                and game.kickoff_local < before
+                if game.status is GameStatus.FINISHED and game.kickoff_local < before
             ),
             key=lambda game: (game.kickoff_local, game.game_id),
             reverse=True,
         )
-        return tuple(
-            self._played_match(game)
-            for game in eligible
-        )
+        return tuple(self._played_match(game) for game in eligible)
 
     async def _preview_team(
         self,
@@ -599,9 +587,7 @@ def _manual_preview_entries(
         key: game_ids for key, game_ids in keys.items() if len(game_ids) > 1
     }
     duplicate_files = {
-        path: game_ids
-        for path, game_ids in files.values()
-        if len(game_ids) > 1
+        path: game_ids for path, game_ids in files.values() if len(game_ids) > 1
     }
     if duplicate_keys or duplicate_files:
         details = [

@@ -14,6 +14,7 @@ if __package__:
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _optional_authentication_parameters,
         load_credentials,
         request_json,
     )
@@ -22,6 +23,7 @@ else:  # Support ``python src/thufootball/api/get_current_games.py``.
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _optional_authentication_parameters,
         load_credentials,
         request_json,
     )
@@ -67,14 +69,7 @@ def get_current_games(
     ``type``.
     """
 
-    if openid is not None and (not isinstance(openid, str) or not openid.strip()):
-        raise ValueError("openid must be a non-empty string when supplied")
-    if session_key is not None and (
-        not isinstance(session_key, str) or not session_key.strip()
-    ):
-        raise ValueError("session_key must be a non-empty string when supplied")
-    if (openid is None) != (session_key is None):
-        raise ValueError("openid and session_key must be supplied together")
+    authentication = _optional_authentication_parameters(openid, session_key)
 
     normalised_history = _normalise_date(history_bound, "history_bound")
     normalised_future = _normalise_date(future_bound, "future_bound")
@@ -93,9 +88,7 @@ def get_current_games(
         raise ValueError("game_type must be either 'public' or 'all'")
 
     parameters: dict[str, str | int] = {"type": game_type}
-    if openid is not None and session_key is not None:
-        parameters["openid"] = openid
-        parameters["session_key"] = session_key
+    parameters.update(authentication)
     if normalised_history is not None:
         parameters["history_bound"] = normalised_history
     if normalised_future is not None:

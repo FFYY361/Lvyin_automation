@@ -8,15 +8,16 @@ import mimetypes
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
 import httpx
 
+from .config import DEFAULT_ENV_FILE, load_wechat_env
 from .errors import (
     DraftValidationError,
     DraftWriteError,
@@ -27,10 +28,8 @@ from .errors import (
     WechatRateLimited,
     WechatTimeout,
 )
-from .config import DEFAULT_ENV_FILE, load_wechat_env
 from .html_tools import collect_media_references
 from .models import Article, DraftReceipt
-
 
 DEFAULT_API_BASE_URL = "https://api.weixin.qq.com"
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
@@ -57,9 +56,15 @@ def _non_empty_secret(value: str | None, name: str) -> str:
 
 def _api_error(payload: Mapping[str, Any]) -> tuple[int | None, str]:
     raw_code = payload.get("errcode")
-    code = raw_code if isinstance(raw_code, int) and not isinstance(raw_code, bool) else None
+    code = (
+        raw_code
+        if isinstance(raw_code, int) and not isinstance(raw_code, bool)
+        else None
+    )
     raw_message = payload.get("errmsg")
-    message = raw_message if isinstance(raw_message, str) else "unknown WeChat API error"
+    message = (
+        raw_message if isinstance(raw_message, str) else "unknown WeChat API error"
+    )
     return code, message[:200]
 
 
@@ -229,11 +234,19 @@ class WechatOfficialClient:
 
     async def get_access_token(self, *, force_refresh: bool = False) -> str:
         now = float(self._clock())
-        if not force_refresh and self._token is not None and now < self._token.refresh_at:
+        if (
+            not force_refresh
+            and self._token is not None
+            and now < self._token.refresh_at
+        ):
             return self._token.value
         async with self._token_lock:
             now = float(self._clock())
-            if not force_refresh and self._token is not None and now < self._token.refresh_at:
+            if (
+                not force_refresh
+                and self._token is not None
+                and now < self._token.refresh_at
+            ):
                 return self._token.value
             payload = await self._send(
                 "POST",
@@ -247,7 +260,11 @@ class WechatOfficialClient:
             )
             token = payload.get("access_token")
             expires_in = payload.get("expires_in")
-            if not isinstance(token, str) or not token or not isinstance(expires_in, int):
+            if (
+                not isinstance(token, str)
+                or not token
+                or not isinstance(expires_in, int)
+            ):
                 self._raise_api_error(payload, stage="wechat-auth")
             refresh_at = now + max(1, expires_in - self._token_refresh_margin)
             self._token = _AccessToken(
@@ -301,9 +318,7 @@ class WechatOfficialClient:
             )
         return mime_type
 
-    async def upload_content_image(
-        self, *, filename: str, content: bytes
-    ) -> str:
+    async def upload_content_image(self, *, filename: str, content: bytes) -> str:
         mime_type = self._validate_image(filename, content)
         payload = await self._request_with_token(
             "POST",
@@ -336,9 +351,13 @@ class WechatOfficialClient:
 
     def validate_draft(self, article: Article, thumb_media_id: str) -> None:
         if not article.title.strip():
-            raise DraftValidationError("draft title is required", stage="draft-validation")
+            raise DraftValidationError(
+                "draft title is required", stage="draft-validation"
+            )
         if not article.body_html.strip():
-            raise DraftValidationError("draft body is required", stage="draft-validation")
+            raise DraftValidationError(
+                "draft body is required", stage="draft-validation"
+            )
         if not isinstance(thumb_media_id, str) or not thumb_media_id.strip():
             raise DraftValidationError(
                 "permanent cover media_id is required", stage="draft-validation"
@@ -399,7 +418,9 @@ class WechatOfficialClient:
 
     async def get_draft(self, media_id: str) -> Mapping[str, Any]:
         if not isinstance(media_id, str) or not media_id.strip():
-            raise DraftValidationError("draft media_id is required", stage="draft-validation")
+            raise DraftValidationError(
+                "draft media_id is required", stage="draft-validation"
+            )
         return await self._request_with_token(
             "POST", "/cgi-bin/draft/get", json_body={"media_id": media_id}
         )
@@ -416,7 +437,9 @@ class WechatOfficialClient:
 
     async def delete_draft(self, media_id: str) -> None:
         if not isinstance(media_id, str) or not media_id.strip():
-            raise DraftValidationError("draft media_id is required", stage="draft-validation")
+            raise DraftValidationError(
+                "draft media_id is required", stage="draft-validation"
+            )
         await self._request_with_token(
             "POST", "/cgi-bin/draft/delete", json_body={"media_id": media_id}
         )

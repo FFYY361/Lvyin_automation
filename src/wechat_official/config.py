@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 WECHAT_CREDENTIAL_NAMES = ("WECHAT_APP_ID", "WECHAT_APP_SECRET")
 

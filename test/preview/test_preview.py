@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import copy
+import json
 import sys
 import tempfile
 import unittest
@@ -17,11 +17,11 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from preview import (
+    PreviewService,
     PreviewTemplate,
     PreviewValidationError,
-    PreviewService,
-    TemplateContractError,
     SeasonOutcome,
+    TemplateContractError,
     load_preview_bundle,
     load_preview_template,
     parse_preview_bundle,
@@ -43,12 +43,15 @@ from wechat_official import Article, CoverMediaId
 
 class HtmlToolsTests(unittest.TestCase):
     def test_normalisation_is_deterministic_and_idempotent(self) -> None:
-        raw = '<div onclick="x()" style="padding: 2px; color: red"><p>A &amp; B</p></div>'
+        raw = (
+            '<div onclick="x()" style="padding: 2px; color: red"><p>A &amp; B</p></div>'
+        )
         first = sanitise_html(raw)
         second = sanitise_html(raw)
         third = sanitise_html(first)
         self.assertEqual(first, second)
         self.assertEqual(first, third)
+
 
 _TEMPLATE_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "template.html"
 _DATA_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_data.json"
@@ -56,7 +59,10 @@ _WOMEN_DATA_PATH = (
     _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_data_women_saturday.json"
 )
 _FUTSAL_DATA_PATH = (
-    _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_data_futsal_saturday.json"
+    _PROJECT_ROOT
+    / "templates"
+    / "qhly_preview_v1"
+    / "example_data_futsal_saturday.json"
 )
 _WEATHER_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_weather.json"
 _CONFIG_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_config.json"
@@ -70,13 +76,11 @@ def _raw_source() -> dict[str, object]:
     raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
     previews = raw.pop("previews")
     raw["schema_version"] = 1
-    weather = json.loads(_WEATHER_PATH.read_text(encoding="utf-8"))[
-        raw["preview_date"]
-    ]
+    weather = json.loads(_WEATHER_PATH.read_text(encoding="utf-8"))[raw["preview_date"]]
     raw["weather"] = {"forecast_date": raw["preview_date"], **weather}
     raw["credits"] = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
     for match in raw["matches"]:
-        key = f'{match["home"]["short_name"]} vs {match["away"]["short_name"]}'
+        key = f"{match['home']['short_name']} vs {match['away']['short_name']}"
         match["preview_paragraphs"] = [
             line.strip()
             for line in previews[key]["article"].splitlines()
@@ -216,7 +220,9 @@ class PreviewSourceTests(unittest.TestCase):
                     match["kickoff"] = day + match["kickoff"][10:]
                 source = parse_preview_source(raw)
                 rendered = _render(template, source)
-                self.assertTrue(rendered.title.startswith(f"【{short_name}{weekday}前瞻】"))
+                self.assertTrue(
+                    rendered.title.startswith(f"【{short_name}{weekday}前瞻】")
+                )
                 self.assertIn(full_name, rendered.body_html)
                 self.assertIn(f"{weekday}比赛预告及天气情况", rendered.body_html)
 
@@ -295,9 +301,7 @@ class TemplateTests(unittest.TestCase):
         raw = _raw_source()
         raw["matches"] = [raw["matches"][0]]
         match = raw["matches"][0]
-        match["home"]["previous_outcomes"] = [
-            {"season": "22-23", "outcome": "未参赛"}
-        ]
+        match["home"]["previous_outcomes"] = [{"season": "22-23", "outcome": "未参赛"}]
         match["head_to_head"] = []
 
         rendered = _render(
@@ -397,20 +401,23 @@ class TemplateTests(unittest.TestCase):
 
 
 class QhlyPreviewV1AssetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.template = load_preview_template(_TEMPLATE_PATH)
+        cls.source = _load_example(_DATA_PATH)
+        cls.rendered = _render(cls.template, cls.source)
+        cls.document = lxml_html.fromstring(cls.rendered.body_html)
+
     def test_header_background_changes_only_for_female_preview(self) -> None:
         cases = (
             (_DATA_PATH, DEFAULT_HEADER_BACKGROUND_URL),
             (_WOMEN_DATA_PATH, FEMALE_HEADER_BACKGROUND_URL),
             (_FUTSAL_DATA_PATH, DEFAULT_HEADER_BACKGROUND_URL),
         )
-        template = load_preview_template(_TEMPLATE_PATH)
-
         for source_path, expected_url in cases:
             with self.subTest(source_path=source_path.name):
-                rendered = _render(template, _load_example(source_path))
-                images = lxml_html.fromstring(rendered.body_html).xpath(
-                    ".//img"
-                )
+                rendered = _render(self.template, _load_example(source_path))
+                images = lxml_html.fromstring(rendered.body_html).xpath(".//img")
                 self.assertEqual(len(images), 1)
                 self.assertEqual(images[0].get("src"), expected_url)
                 self.assertIn("aspect-ratio:32/9", images[0].get("style", ""))
@@ -419,12 +426,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
     def test_schedule_table_has_compact_columns_and_light_border_style(
         self,
     ) -> None:
-        rendered = _render(
-            load_preview_template(_TEMPLATE_PATH),
-            _load_example(_DATA_PATH),
-        )
-        document = lxml_html.fromstring(rendered.body_html)
-        schedule_table = document.xpath(".//table")[0]
+        schedule_table = self.document.xpath(".//table")[0]
         weather_panel = schedule_table.getprevious()
         rows = schedule_table.xpath("./tbody/tr")
         header_cells = rows[0].xpath("./td")
@@ -437,11 +439,12 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertEqual(weather_panel.xpath(".//br"), [])
         self.assertEqual(len(weather_panel.xpath("./p")), 2)
         self.assertTrue(
-            all("margin:0" in item.get("style", "") for item in weather_panel.xpath("./p"))
+            all(
+                "margin:0" in item.get("style", "")
+                for item in weather_panel.xpath("./p")
+            )
         )
-        self.assertFalse(
-            any("height:0" in row.get("style", "") for row in rows)
-        )
+        self.assertFalse(any("height:0" in row.get("style", "") for row in rows))
         self.assertEqual(rows[0].get("style"), "background:#fff;color:#5a0383")
         self.assertEqual(
             [cell.get("width") for cell in header_cells],
@@ -468,13 +471,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         )
 
     def test_history_table_text_is_explicitly_black(self) -> None:
-        rendered = _render(
-            load_preview_template(_TEMPLATE_PATH),
-            _load_example(_DATA_PATH),
-        )
         history_tables = [
             table
-            for table in lxml_html.fromstring(rendered.body_html).xpath(".//table")
+            for table in self.document.xpath(".//table")
             if "过往三届战绩" in table.text_content()
         ]
 
@@ -513,23 +512,17 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
                 self.assertIn("margin:0", results[-1].get("style", ""))
 
     def test_each_match_card_starts_with_a_dark_purple_accent(self) -> None:
-        source = _load_example(_DATA_PATH)
-        rendered = _render(
-            load_preview_template(_TEMPLATE_PATH),
-            source,
-        )
         card_accent_style = (
             "background:#5a0383;height:4px;line-height:0;"
             "margin:-10px 0 10px -10px;"
             "overflow:hidden;width:60px"
         )
-        document = lxml_html.fromstring(rendered.body_html)
-        match_cards = document.xpath(
+        match_cards = self.document.xpath(
             './/section[contains(@style,"background:rgba(252,154,255,.08)") '
             'and contains(@style,"padding:10px")]'
         )
 
-        self.assertEqual(len(match_cards), len(source.matches))
+        self.assertEqual(len(match_cards), len(self.source.matches))
         for card in match_cards:
             self.assertEqual(
                 card.xpath("./section[1]")[0].get("style"),
@@ -543,8 +536,8 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertGreater(template_source.count("\n"), 100)
         self.assertNotIn("schedule_rows", source_text)
         self.assertNotIn("_html", source_text)
-        template = PreviewTemplate.compile(template_source, version="qhly-preview-v1")
-        rendered = _render(template, _load_example(_DATA_PATH))
+        PreviewTemplate.compile(template_source, version="qhly-preview-v1")
+        rendered = self.rendered
 
         self.assertEqual(rendered.title, "【马杯男足周日前瞻】|| 测试")
 
@@ -555,7 +548,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
             self.assertIsInstance(Article.load(output), Article)
 
         self.assertLess(len(rendered.body_html.encode("utf-8")), 1_000_000)
-        self.assertEqual(len(lxml_html.fromstring(rendered.body_html).xpath(".//img")), 1)
+        self.assertEqual(len(self.document.xpath(".//img")), 1)
         self.assertIn("grid-template-columns:100%", rendered.body_html)
         self.assertIn(
             "aspect-ratio:32/9;border:3px solid #5a0383;display:block;"
@@ -602,8 +595,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertEqual(rendered.body_html.count('style="height:20px"'), 1)
         self.assertEqual(
             rendered.body_html.count(
-                "align-items:flex-end;display:flex;flex-flow:row nowrap;"
-                "margin:10px 0\""
+                'align-items:flex-end;display:flex;flex-flow:row nowrap;margin:10px 0"'
             ),
             2,
         )
@@ -633,10 +625,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
             1,
         )
 
-        document = lxml_html.fromstring(rendered.body_html)
         history_tables = [
             table
-            for table in document.xpath(".//table")
+            for table in self.document.xpath(".//table")
             if "过往三届战绩" in table.text_content()
         ]
         self.assertEqual(len(history_tables), 2)
@@ -700,8 +691,7 @@ class PreviewBundleTests(unittest.TestCase):
         key = next(iter(source["previews"]))
         match = source["matches"][0]
         article_file = (
-            f'previews/{match["home"]["short_name"]}'
-            f'vs{match["away"]["short_name"]}.md'
+            f"previews/{match['home']['short_name']}vs{match['away']['short_name']}.md"
         )
         source["previews"][key] = {
             "article_file": article_file,
@@ -712,8 +702,7 @@ class PreviewBundleTests(unittest.TestCase):
             markdown = root / article_file
             markdown.parent.mkdir(parents=True)
             markdown.write_text(
-                "第一段第一行。\n第一段第二行。\n\n"
-                "第二段正文。\n\n\n第三段正文。\n",
+                "第一段第一行。\n第一段第二行。\n\n第二段正文。\n\n\n第三段正文。\n",
                 encoding="utf-8",
             )
 
@@ -795,9 +784,7 @@ class PreviewBundleTests(unittest.TestCase):
                 "wind_level": None,
             }
         }
-        self.assertIsNone(
-            parse_preview_bundle(source, empty_weather, config).weather
-        )
+        self.assertIsNone(parse_preview_bundle(source, empty_weather, config).weather)
 
         partial_weather = copy.deepcopy(empty_weather)
         partial_weather[day]["low_c"] = 8
@@ -867,6 +854,7 @@ class PreviewCliTests(unittest.TestCase):
             article = Article.load(output)
             self.assertEqual(article.title, payload["title"])
             self.assertEqual(article.author, "清华绿茵")
+
 
 if __name__ == "__main__":
     unittest.main()

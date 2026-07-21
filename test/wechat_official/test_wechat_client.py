@@ -36,9 +36,7 @@ class TokenTests(unittest.IsolatedAsyncioTestCase):
                     json={"access_token": "token", "expires_in": 7200},
                     request=request,
                 )
-            return httpx.Response(
-                200, json={"total_count": 3}, request=request
-            )
+            return httpx.Response(200, json={"total_count": 3}, request=request)
 
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         client = WechatOfficialClient(
@@ -235,7 +233,9 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
             await http.aclose()
 
         self.assertEqual(receipt.media_id, "draft-media-id")
-        self.assertEqual(draft_payload["articles"][0]["thumb_media_id"], "cover-media-id")
+        self.assertEqual(
+            draft_payload["articles"][0]["thumb_media_id"], "cover-media-id"
+        )
         self.assertEqual(draft_payload["articles"][0]["need_open_comment"], 1)
         self.assertEqual(draft_payload["articles"][0]["only_fans_can_comment"], 1)
         self.assertEqual(
@@ -307,7 +307,9 @@ class MediaPublisherTests(unittest.IsolatedAsyncioTestCase):
             await http.aclose()
 
         self.assertEqual(fake.uploads, 1)
-        self.assertEqual(result.body_html.count("https://mmbiz.qpic.cn/new/uploaded.png"), 2)
+        self.assertEqual(
+            result.body_html.count("https://mmbiz.qpic.cn/new/uploaded.png"), 2
+        )
         self.assertIn(f'href="{source}"', result.body_html)
 
 

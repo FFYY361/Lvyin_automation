@@ -13,6 +13,7 @@ if __package__:
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _authenticated_parameters,
         load_credentials,
         request_json,
     )
@@ -21,6 +22,7 @@ else:  # Support ``python src/thufootball/api/get_my_tournaments.py``.
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _authenticated_parameters,
         load_credentials,
         request_json,
     )
@@ -35,13 +37,9 @@ def get_my_tournaments(
 ) -> dict[str, Any]:
     """Return tournaments associated with the authenticated user."""
 
-    if not isinstance(openid, str) or not openid.strip():
-        raise ValueError("openid must be a non-empty string")
-    if not isinstance(session_key, str) or not session_key.strip():
-        raise ValueError("session_key must be a non-empty string")
     return request_json(
         "GetMyTournaments",
-        {"openid": openid, "session_key": session_key},
+        _authenticated_parameters(openid, session_key),
         base_url=base_url,
         timeout=timeout,
     )

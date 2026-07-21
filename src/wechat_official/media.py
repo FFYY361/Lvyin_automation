@@ -16,7 +16,6 @@ from .errors import MediaUploadError, WechatTimeout
 from .html_tools import collect_media_references, replace_media_urls
 from .models import MediaPublishResult
 
-
 DEFAULT_MEDIA_HOSTS = ("mmbiz.qpic.cn", "mmbiz.qlogo.cn")
 
 

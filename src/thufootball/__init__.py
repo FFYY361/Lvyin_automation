@@ -32,8 +32,8 @@ from .models import (
     TournamentTeam,
     UserProbe,
 )
-from .queries import THUFootballQueryService
 from .policy import BLACKLISTED_TOURNAMENT_IDS
+from .queries import THUFootballQueryService
 
 __all__ = [
     "AuthenticationError",

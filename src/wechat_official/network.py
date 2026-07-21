@@ -8,7 +8,6 @@ from typing import Any
 
 import httpx
 
-
 _PUBLIC_IP_ENDPOINTS = {
     "cloudflare": "https://www.cloudflare.com/cdn-cgi/trace",
     "aws": "https://checkip.amazonaws.com/",
@@ -57,14 +56,14 @@ async def public_ip_cross_check() -> dict[str, Any]:
             *(query(name, url) for name, url in _PUBLIC_IP_ENDPOINTS.items())
         )
 
-    observations = {
-        name: {"ip": ip, "error": error} for name, ip, error in results
-    }
+    observations = {name: {"ip": ip, "error": error} for name, ip, error in results}
     successful = [ip for _, ip, _ in results if ip is not None]
     unique = sorted(set(successful))
     return {
         "observations": observations,
-        "consensus_ip": unique[0] if len(unique) == 1 and len(successful) >= 2 else None,
+        "consensus_ip": unique[0]
+        if len(unique) == 1 and len(successful) >= 2
+        else None,
         "consistent": len(unique) == 1 and len(successful) >= 2,
         "successful_checks": len(successful),
     }

@@ -14,7 +14,6 @@ from typing import Any
 
 from .errors import ConfigurationError
 
-
 _NOTES_ROOT = Path(__file__).with_name("notes")
 _SEASON_PATTERN = re.compile(r"(20\d{2}~20\d{2})$")
 _TEAM_CATEGORIES = ("男足", "女足", "五人制")
@@ -117,19 +116,13 @@ def _load_teams(
         for category in _TEAM_CATEGORIES:
             raw_ids = raw_team[category]
             if not isinstance(raw_ids, list):
-                raise _configuration_error(
-                    f"teams.json.{institution_name}.{category}"
-                )
+                raise _configuration_error(f"teams.json.{institution_name}.{category}")
             team_ids = tuple(
-                _positive_int(
-                    team_id, f"teams.json.{institution_name}.{category}"
-                )
+                _positive_int(team_id, f"teams.json.{institution_name}.{category}")
                 for team_id in raw_ids
             )
             if len(set(team_ids)) != len(team_ids):
-                raise _configuration_error(
-                    f"teams.json.{institution_name}.{category}"
-                )
+                raise _configuration_error(f"teams.json.{institution_name}.{category}")
             if not team_ids:
                 continue
 
@@ -145,36 +138,23 @@ def _load_teams(
             for team_id in team_ids:
                 owner = institution_by_id.setdefault(team_id, institution_name)
                 if owner != institution_name:
-                    raise _configuration_error(
-                        f"teams.json.team_id.{team_id}"
-                    )
+                    raise _configuration_error(f"teams.json.team_id.{team_id}")
                 reverse[team_id].append(team_name)
 
     return (
         teams,
-        {
-            team_id: tuple(team_names)
-            for team_id, team_names in reverse.items()
-        },
+        {team_id: tuple(team_names) for team_id, team_names in reverse.items()},
         identities,
     )
 
 
-def _validate_identity_audit(
-    notes_root: Path,
+def _validate_shared_team_ids(
+    raw_items: list[object],
     teams: Mapping[str, tuple[int, ...]],
     team_names_by_id: Mapping[int, tuple[str, ...]],
 ) -> None:
-    raw = _read_json(notes_root / "identity_audit.json", "identity_audit.json")
-    if not isinstance(raw, dict) or set(raw) != {"merged_teams", "shared_team_ids"}:
-        raise _configuration_error("identity_audit.json")
-    if not isinstance(raw["merged_teams"], list) or not isinstance(
-        raw["shared_team_ids"], list
-    ):
-        raise _configuration_error("identity_audit.json")
-
-    audited_shared: dict[int, tuple[str, ...]] = {}
-    for item in raw["shared_team_ids"]:
+    audited: dict[int, tuple[str, ...]] = {}
+    for item in raw_items:
         if not isinstance(item, dict) or set(item) != {
             "team_id",
             "institution",
@@ -192,21 +172,26 @@ def _validate_identity_audit(
             or not isinstance(team_names, list)
             or len(team_names) < 2
             or any(name not in teams for name in team_names)
-            or team_id in audited_shared
+            or team_id in audited
         ):
             raise _configuration_error("identity_audit.json.shared_team_ids")
-        audited_shared[team_id] = tuple(team_names)
+        audited[team_id] = tuple(team_names)
 
-    actual_shared = {
+    actual = {
         team_id: team_names
         for team_id, team_names in team_names_by_id.items()
         if len(team_names) > 1
     }
-    if audited_shared != actual_shared:
+    if audited != actual:
         raise _configuration_error("identity_audit.json.shared_team_ids")
 
+
+def _validate_merged_teams(
+    raw_items: list[object],
+    teams: Mapping[str, tuple[int, ...]],
+) -> None:
     audited_merged: set[str] = set()
-    for item in raw["merged_teams"]:
+    for item in raw_items:
         if not isinstance(item, dict) or set(item) != {
             "team_name",
             "team_ids",
@@ -227,19 +212,11 @@ def _validate_identity_audit(
         ):
             raise _configuration_error("identity_audit.json.merged_teams")
         audited_ids = tuple(
-            _positive_int(
-                team_id, "identity_audit.json.merged_teams.team_ids"
-            )
+            _positive_int(team_id, "identity_audit.json.merged_teams.team_ids")
             for team_id in team_ids
         )
-        if (
-            len(set(audited_ids)) != len(audited_ids)
-            or audited_ids
-            != tuple(
-                team_id
-                for team_id in teams[team_name]
-                if team_id in audited_ids
-            )
+        if len(set(audited_ids)) != len(audited_ids) or audited_ids != tuple(
+            team_id for team_id in teams[team_name] if team_id in audited_ids
         ):
             raise _configuration_error("identity_audit.json.merged_teams")
 
@@ -277,9 +254,7 @@ def _validate_identity_audit(
                 )
                 for tournament_id in observed_tournament_ids
             )
-            if len(set(validated_tournament_ids)) != len(
-                validated_tournament_ids
-            ):
+            if len(set(validated_tournament_ids)) != len(validated_tournament_ids):
                 raise _configuration_error("identity_audit.json.merged_teams")
             observed_ids.add(observed_team_id)
         if observed_ids != set(audited_ids):
@@ -290,6 +265,23 @@ def _validate_identity_audit(
         team_name for team_name, team_ids in teams.items() if len(team_ids) > 1
     } - audited_merged:
         raise _configuration_error("identity_audit.json.merged_teams")
+
+
+def _validate_identity_audit(
+    notes_root: Path,
+    teams: Mapping[str, tuple[int, ...]],
+    team_names_by_id: Mapping[int, tuple[str, ...]],
+) -> None:
+    raw = _read_json(notes_root / "identity_audit.json", "identity_audit.json")
+    if not isinstance(raw, dict) or set(raw) != {"merged_teams", "shared_team_ids"}:
+        raise _configuration_error("identity_audit.json")
+    if not isinstance(raw["merged_teams"], list) or not isinstance(
+        raw["shared_team_ids"], list
+    ):
+        raise _configuration_error("identity_audit.json")
+
+    _validate_shared_team_ids(raw["shared_team_ids"], teams, team_names_by_id)
+    _validate_merged_teams(raw["merged_teams"], teams)
 
 
 def _load_tournaments(
@@ -330,11 +322,7 @@ def _load_tournaments(
             raise _configuration_error(location)
         ranks: dict[str, str] = {}
         for team_name, rank in raw_ranks.items():
-            if (
-                team_name not in teams
-                or not isinstance(rank, str)
-                or not rank.strip()
-            ):
+            if team_name not in teams or not isinstance(rank, str) or not rank.strip():
                 raise _configuration_error(location)
             ranks[team_name] = rank
         name, season = metadata[tournament_id]

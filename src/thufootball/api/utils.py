@@ -11,7 +11,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-
 DEFAULT_BASE_URL = "https://api.thufootball.tech"
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
@@ -20,6 +19,37 @@ CREDENTIAL_ENV_NAMES = ("THUFOOTBALL_OPENID", "THUFOOTBALL_SESSION_KEY")
 
 class THUFootballRequestError(RuntimeError):
     """Raised when THUFootball cannot return a usable JSON response."""
+
+
+def _authenticated_parameters(openid: object, session_key: object) -> dict[str, str]:
+    if not isinstance(openid, str) or not openid.strip():
+        raise ValueError("openid must be a non-empty string")
+    if not isinstance(session_key, str) or not session_key.strip():
+        raise ValueError("session_key must be a non-empty string")
+    return {"openid": openid, "session_key": session_key}
+
+
+def _optional_authentication_parameters(
+    openid: object,
+    session_key: object,
+) -> dict[str, str]:
+    if openid is not None and (not isinstance(openid, str) or not openid.strip()):
+        raise ValueError("openid must be a non-empty string when supplied")
+    if session_key is not None and (
+        not isinstance(session_key, str) or not session_key.strip()
+    ):
+        raise ValueError("session_key must be a non-empty string when supplied")
+    if (openid is None) != (session_key is None):
+        raise ValueError("openid and session_key must be supplied together")
+    if isinstance(openid, str) and isinstance(session_key, str):
+        return {"openid": openid, "session_key": session_key}
+    return {}
+
+
+def _positive_integer(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
 def load_env_file(path: Path = DEFAULT_ENV_FILE) -> None:
@@ -81,9 +111,7 @@ def request_json(
         with urlopen(request, timeout=timeout) as response:
             body = response.read()
     except HTTPError as exc:
-        raise THUFootballRequestError(
-            f"{endpoint} returned HTTP {exc.code}"
-        ) from exc
+        raise THUFootballRequestError(f"{endpoint} returned HTTP {exc.code}") from exc
     except URLError as exc:
         raise THUFootballRequestError(f"{endpoint} request failed") from exc
     except (TimeoutError, OSError) as exc:
@@ -94,7 +122,5 @@ def request_json(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise THUFootballRequestError(f"{endpoint} returned invalid JSON") from exc
     if not isinstance(payload, Mapping):
-        raise THUFootballRequestError(
-            f"{endpoint} returned a non-object JSON value"
-        )
+        raise THUFootballRequestError(f"{endpoint} returned a non-object JSON value")
     return dict(payload)

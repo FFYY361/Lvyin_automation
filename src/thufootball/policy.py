@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 BLACKLISTED_TOURNAMENT_IDS: frozenset[int] = frozenset({6, 28})
 
 

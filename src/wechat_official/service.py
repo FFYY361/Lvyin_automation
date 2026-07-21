@@ -55,7 +55,9 @@ class WechatOfficialService:
         open_comments: bool = False,
         fans_only_comments: bool = False,
     ) -> DraftReceipt:
-        if not isinstance(open_comments, bool) or not isinstance(fans_only_comments, bool):
+        if not isinstance(open_comments, bool) or not isinstance(
+            fans_only_comments, bool
+        ):
             raise DraftValidationError(
                 "comment options must be bool",
                 stage="draft-validation",

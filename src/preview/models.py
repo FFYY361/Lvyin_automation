@@ -11,7 +11,6 @@ from typing import TypeVar
 
 from .errors import PreviewValidationError
 
-
 SCHEMA_VERSION = 1
 CHINA_UTC_OFFSET = timedelta(hours=8)
 
@@ -237,7 +236,9 @@ def _tuple_of(
         raise _error(path, "必须是数组", stage=stage)
     if len(value) < minimum_items:
         raise _error(path, f"至少需要 {minimum_items} 项", stage=stage)
-    return tuple(parser(item, f"{path}[{index}]", stage) for index, item in enumerate(value))
+    return tuple(
+        parser(item, f"{path}[{index}]", stage) for index, item in enumerate(value)
+    )
 
 
 def _parse_string(value: object, path: str, stage: str) -> str:
@@ -252,9 +253,13 @@ def _parse_team_ref(value: object, path: str, stage: str) -> TeamRef:
         stage=stage,
     )
     return TeamRef(
-        team_id=_integer(obj.get("team_id"), obj.child_path("team_id"), stage=stage, minimum=1),
+        team_id=_integer(
+            obj.get("team_id"), obj.child_path("team_id"), stage=stage, minimum=1
+        ),
         name=_string(obj.get("name"), obj.child_path("name"), stage=stage),
-        short_name=_string(obj.get("short_name"), obj.child_path("short_name"), stage=stage),
+        short_name=_string(
+            obj.get("short_name"), obj.child_path("short_name"), stage=stage
+        ),
     )
 
 
@@ -269,7 +274,9 @@ def _parse_outcome(value: object, path: str, stage: str) -> SeasonOutcome:
     return SeasonOutcome(
         season=_string(obj.get("season"), obj.child_path("season"), stage=stage),
         competition_label=_optional_string(
-            obj.get("competition_label"), obj.child_path("competition_label"), stage=stage
+            obj.get("competition_label"),
+            obj.child_path("competition_label"),
+            stage=stage,
         ),
         outcome=_string(obj.get("outcome"), obj.child_path("outcome"), stage=stage),
     )
@@ -303,17 +310,27 @@ def _parse_played_match(value: object, path: str, stage: str) -> PlayedMatch:
             obj.get("away_score"), obj.child_path("away_score"), stage=stage, minimum=0
         ),
         home_penalty=_optional_integer(
-            obj.get("home_penalty"), obj.child_path("home_penalty"), stage=stage, minimum=0
+            obj.get("home_penalty"),
+            obj.child_path("home_penalty"),
+            stage=stage,
+            minimum=0,
         ),
         away_penalty=_optional_integer(
-            obj.get("away_penalty"), obj.child_path("away_penalty"), stage=stage, minimum=0
+            obj.get("away_penalty"),
+            obj.child_path("away_penalty"),
+            stage=stage,
+            minimum=0,
         ),
         result_text=_optional_string(
             obj.get("result_text"), obj.child_path("result_text"), stage=stage
         ),
-        season=_optional_string(obj.get("season"), obj.child_path("season"), stage=stage),
+        season=_optional_string(
+            obj.get("season"), obj.child_path("season"), stage=stage
+        ),
         competition_label=_optional_string(
-            obj.get("competition_label"), obj.child_path("competition_label"), stage=stage
+            obj.get("competition_label"),
+            obj.child_path("competition_label"),
+            stage=stage,
         ),
         stage=_optional_string(obj.get("stage"), obj.child_path("stage"), stage=stage),
     )
@@ -323,13 +340,23 @@ def _parse_team(value: object, path: str, stage: str) -> PreviewTeam:
     obj = _ObjectReader(
         value,
         path=path,
-        required=("team_id", "name", "short_name", "previous_outcomes", "current_results"),
+        required=(
+            "team_id",
+            "name",
+            "short_name",
+            "previous_outcomes",
+            "current_results",
+        ),
         stage=stage,
     )
     return PreviewTeam(
-        team_id=_integer(obj.get("team_id"), obj.child_path("team_id"), stage=stage, minimum=1),
+        team_id=_integer(
+            obj.get("team_id"), obj.child_path("team_id"), stage=stage, minimum=1
+        ),
         name=_string(obj.get("name"), obj.child_path("name"), stage=stage),
-        short_name=_string(obj.get("short_name"), obj.child_path("short_name"), stage=stage),
+        short_name=_string(
+            obj.get("short_name"), obj.child_path("short_name"), stage=stage
+        ),
         previous_outcomes=_tuple_of(
             obj.get("previous_outcomes"),
             obj.child_path("previous_outcomes"),
@@ -404,13 +431,17 @@ def _parse_weather(value: object, path: str, stage: str) -> PreviewWeather:
         stage=stage,
     )
     return PreviewWeather(
-        forecast_date=_date(obj.get("forecast_date"), obj.child_path("forecast_date"), stage=stage),
+        forecast_date=_date(
+            obj.get("forecast_date"), obj.child_path("forecast_date"), stage=stage
+        ),
         low_c=_integer(obj.get("low_c"), obj.child_path("low_c"), stage=stage),
         high_c=_integer(obj.get("high_c"), obj.child_path("high_c"), stage=stage),
         wind_direction=_string(
             obj.get("wind_direction"), obj.child_path("wind_direction"), stage=stage
         ),
-        wind_level=_string(obj.get("wind_level"), obj.child_path("wind_level"), stage=stage),
+        wind_level=_string(
+            obj.get("wind_level"), obj.child_path("wind_level"), stage=stage
+        ),
     )
 
 
@@ -423,7 +454,11 @@ def _parse_credits(value: object, path: str, stage: str) -> PreviewCredits:
     )
     return PreviewCredits(
         editors=_tuple_of(
-            obj.get("editors"), obj.child_path("editors"), _parse_string, stage=stage, minimum_items=1
+            obj.get("editors"),
+            obj.child_path("editors"),
+            _parse_string,
+            stage=stage,
+            minimum_items=1,
         ),
         reviewers=_tuple_of(
             obj.get("reviewers"),
@@ -463,10 +498,15 @@ def parse_preview_source(value: object) -> PreviewSourceData:
     raw_weather = obj.get("weather")
     source = PreviewSourceData(
         schema_version=_integer(
-            obj.get("schema_version"), obj.child_path("schema_version"), stage=stage, minimum=1
+            obj.get("schema_version"),
+            obj.child_path("schema_version"),
+            stage=stage,
+            minimum=1,
         ),
         column=_parse_column_config(obj.get("column"), obj.child_path("column"), stage),
-        preview_date=_date(obj.get("preview_date"), obj.child_path("preview_date"), stage=stage),
+        preview_date=_date(
+            obj.get("preview_date"), obj.child_path("preview_date"), stage=stage
+        ),
         headline=_string(obj.get("headline"), obj.child_path("headline"), stage=stage),
         weather=(
             None
@@ -511,6 +551,8 @@ def _parse_column_config(value: object, path: str, stage: str) -> PreviewColumnC
             stage=stage,
         ),
     )
+
+
 def _validate_schema_version(value: int, path: str, *, stage: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value != SCHEMA_VERSION:
         raise _error(path, f"仅支持版本 {SCHEMA_VERSION}，实际为 {value}", stage=stage)
@@ -527,7 +569,11 @@ def _validate_positive_id(value: int, path: str, *, stage: str) -> None:
 
 
 def _validate_game_id(value: int, path: str, *, stage: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or not (value == -1 or value >= 1):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not (value == -1 or value >= 1)
+    ):
         raise _error(path, "必须是正整数；未知时使用 -1", stage=stage)
 
 
@@ -563,7 +609,9 @@ def _validate_played_match(match: PlayedMatch, path: str, *, stage: str) -> None
         raise _error(path, "必须提供完整比分或 result_text", stage=stage)
     for field in ("home_score", "away_score", "home_penalty", "away_penalty"):
         value = getattr(match, field)
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
             raise _error(f"{path}.{field}", "必须是非负整数", stage=stage)
     for field in ("season", "competition_label", "stage", "result_text"):
         value = getattr(match, field)
@@ -595,7 +643,9 @@ def validate_preview_source(source: PreviewSourceData) -> None:
     stage = "preview-source"
     _validate_schema_version(source.schema_version, "$.schema_version", stage=stage)
     _validate_preview_config(source.column, path="$.column", stage=stage)
-    if not isinstance(source.preview_date, date) or isinstance(source.preview_date, datetime):
+    if not isinstance(source.preview_date, date) or isinstance(
+        source.preview_date, datetime
+    ):
         raise _error("$.preview_date", "必须是 date", stage=stage)
     _validate_nonempty(source.headline, "$.headline", stage=stage)
     if not source.matches:
@@ -604,25 +654,34 @@ def validate_preview_source(source: PreviewSourceData) -> None:
     if source.weather is not None:
         weather = source.weather
         if weather.forecast_date != source.preview_date:
-            raise _error("$.weather.forecast_date", "必须与 preview_date 相同", stage=stage)
+            raise _error(
+                "$.weather.forecast_date", "必须与 preview_date 相同", stage=stage
+            )
         if isinstance(weather.low_c, bool) or not isinstance(weather.low_c, int):
             raise _error("$.weather.low_c", "必须是整数", stage=stage)
         if isinstance(weather.high_c, bool) or not isinstance(weather.high_c, int):
             raise _error("$.weather.high_c", "必须是整数", stage=stage)
         if weather.low_c > weather.high_c:
             raise _error("$.weather", "最低温不能高于最高温", stage=stage)
-        _validate_nonempty(weather.wind_direction, "$.weather.wind_direction", stage=stage)
+        _validate_nonempty(
+            weather.wind_direction, "$.weather.wind_direction", stage=stage
+        )
         _validate_nonempty(weather.wind_level, "$.weather.wind_level", stage=stage)
 
     for index, match in enumerate(source.matches):
         path = f"$.matches[{index}]"
         _validate_game_id(match.game_id, f"{path}.game_id", stage=stage)
-        _validate_nonempty(match.competition_name, f"{path}.competition_name", stage=stage)
+        _validate_nonempty(
+            match.competition_name, f"{path}.competition_name", stage=stage
+        )
         _validate_nonempty(match.stage, f"{path}.stage", stage=stage)
         _validate_nonempty(match.venue, f"{path}.venue", stage=stage)
         if not isinstance(match.kickoff, datetime):
             raise _error(f"{path}.kickoff", "必须是 datetime", stage=stage)
-        if match.kickoff.tzinfo is None or match.kickoff.utcoffset() != CHINA_UTC_OFFSET:
+        if (
+            match.kickoff.tzinfo is None
+            or match.kickoff.utcoffset() != CHINA_UTC_OFFSET
+        ):
             raise _error(f"{path}.kickoff", "必须显式使用 +08:00 时区", stage=stage)
         if match.kickoff.date() != source.preview_date:
             raise _error(f"{path}.kickoff", "日期必须与 preview_date 相同", stage=stage)
@@ -631,8 +690,12 @@ def validate_preview_source(source: PreviewSourceData) -> None:
         if match.home.team_id == match.away.team_id:
             raise _error(path, "主客队不能相同", stage=stage)
         for h2h_index, result in enumerate(match.head_to_head):
-            _validate_played_match(result, f"{path}.head_to_head[{h2h_index}]", stage=stage)
-        _validate_names(match.preview_paragraphs, f"{path}.preview_paragraphs", stage=stage)
+            _validate_played_match(
+                result, f"{path}.head_to_head[{h2h_index}]", stage=stage
+            )
+        _validate_names(
+            match.preview_paragraphs, f"{path}.preview_paragraphs", stage=stage
+        )
         _validate_names(match.writers, f"{path}.writers", stage=stage)
 
     _validate_names(source.credits.editors, "$.credits.editors", stage=stage)

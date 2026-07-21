@@ -15,7 +15,6 @@ from preview import (
 from .errors import ArtifactValidationError
 from .state import read_json_object, write_json
 
-
 WEATHER_FILE_NAME = "weather.json"
 CONFIG_FILE_NAME = "config.json"
 EMPTY_WEATHER = {
@@ -42,52 +41,62 @@ class GlobalInputStatus:
     incomplete_config_fields: tuple[str, ...]
 
 
-def ensure_global_inputs(
+def _ensure_weather(
     root: Path,
     preview_date: date,
-    *,
-    require_complete_config: bool,
-) -> GlobalInputStatus:
-    """Create only missing templates, then validate existing manual content."""
-
-    root.mkdir(parents=True, exist_ok=True)
-    weather_path = root / WEATHER_FILE_NAME
-    config_path = root / CONFIG_FILE_NAME
+) -> tuple[Path, bool, bool, bool]:
+    path = root / WEATHER_FILE_NAME
     day = preview_date.isoformat()
-
-    weather_created = not weather_path.exists()
-    weather_date_added = False
-    if weather_created:
-        weather_payload: dict[str, object] = {day: dict(EMPTY_WEATHER)}
-        write_json(weather_path, weather_payload)
+    created = not path.exists()
+    date_added = False
+    if created:
+        payload: dict[str, object] = {day: dict(EMPTY_WEATHER)}
+        write_json(path, payload)
         weather = None
     else:
-        weather_payload = read_json_object(
-            weather_path, stage="weather-validation"
-        )
+        payload = read_json_object(path, stage="weather-validation")
         try:
-            weather = parse_weather_for_date(weather_payload, preview_date)
+            weather = parse_weather_for_date(payload, preview_date)
         except PreviewValidationError as exc:
             raise ArtifactValidationError(
                 f"weather.json 校验失败：{exc}",
                 stage="weather-validation",
             ) from exc
-        if day not in weather_payload:
-            weather_payload[day] = dict(EMPTY_WEATHER)
-            write_json(weather_path, weather_payload)
-            weather_date_added = True
+        if day not in payload:
+            payload[day] = dict(EMPTY_WEATHER)
+            write_json(path, payload)
+            date_added = True
+    return path, created, date_added, weather is None
 
-    config_created = not config_path.exists()
-    if config_created:
-        config_payload: dict[str, object] = {
+
+def _load_or_create_config(root: Path) -> tuple[Path, dict[str, object], bool]:
+    path = root / CONFIG_FILE_NAME
+    created = not path.exists()
+    if created:
+        payload: dict[str, object] = {
             key: list(value) for key, value in EMPTY_CONFIG.items()
         }
-        write_json(config_path, config_payload)
+        write_json(path, payload)
     else:
-        config_payload = read_json_object(config_path, stage="config-validation")
+        payload = read_json_object(path, stage="config-validation")
+    return path, payload, created
 
+
+def _config_error(error: PreviewValidationError) -> ArtifactValidationError:
+    return ArtifactValidationError(
+        f"config.json 校验失败：{error}",
+        stage="config-validation",
+    )
+
+
+def _validate_config(
+    payload: dict[str, object],
+    *,
+    created: bool,
+    require_complete: bool,
+) -> tuple[str, ...]:
     expected = set(EMPTY_CONFIG)
-    actual = set(config_payload)
+    actual = set(payload)
     if actual != expected:
         missing = sorted(expected - actual)
         extra = sorted(actual - expected)
@@ -104,17 +113,15 @@ def ensure_global_inputs(
             "config.json 字段不符合契约（" + "；".join(details) + "）",
             stage="config-validation",
         )
+
     incomplete: list[str] = []
     for field in EMPTY_CONFIG:
-        value = config_payload[field]
+        value = payload[field]
         if not isinstance(value, list):
             try:
-                parse_preview_config(config_payload)
+                parse_preview_config(payload)
             except PreviewValidationError as exc:
-                raise ArtifactValidationError(
-                    f"config.json 校验失败：{exc}",
-                    stage="config-validation",
-                ) from exc
+                raise _config_error(exc) from exc
         if not value:
             incomplete.append(field)
             continue
@@ -126,25 +133,43 @@ def ensure_global_inputs(
                 )
     if not incomplete:
         try:
-            parse_preview_config(config_payload)
+            parse_preview_config(payload)
         except PreviewValidationError as exc:
-            raise ArtifactValidationError(
-                f"config.json 校验失败：{exc}",
-                stage="config-validation",
-            ) from exc
-    elif require_complete_config and not config_created:
+            raise _config_error(exc) from exc
+    elif require_complete and not created:
         raise ArtifactValidationError(
             "config.json 人员数组不能为空："
             + ", ".join(f"config.json.{field}" for field in incomplete),
             stage="config-validation",
         )
+    return tuple(incomplete)
+
+
+def ensure_global_inputs(
+    root: Path,
+    preview_date: date,
+    *,
+    require_complete_config: bool,
+) -> GlobalInputStatus:
+    """Create only missing templates, then validate existing manual content."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    weather_path, weather_created, weather_date_added, weather_placeholder = (
+        _ensure_weather(root, preview_date)
+    )
+    config_path, config_payload, config_created = _load_or_create_config(root)
+    incomplete = _validate_config(
+        config_payload,
+        created=config_created,
+        require_complete=require_complete_config,
+    )
 
     return GlobalInputStatus(
         weather_path=weather_path,
         config_path=config_path,
         weather_created=weather_created,
         weather_date_added=weather_date_added,
-        weather_placeholder=weather is None,
+        weather_placeholder=weather_placeholder,
         config_created=config_created,
-        incomplete_config_fields=tuple(incomplete),
+        incomplete_config_fields=incomplete,
     )

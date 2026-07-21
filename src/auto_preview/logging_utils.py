@@ -7,7 +7,6 @@ import os
 import sys
 from pathlib import Path
 
-
 _COLORS = {
     logging.DEBUG: "\x1b[90m",
     logging.INFO: "\x1b[36m",
