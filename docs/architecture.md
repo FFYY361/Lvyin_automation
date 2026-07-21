@@ -28,7 +28,7 @@ article/
 └── cover.png
 ```
 
-当前已在 `src/auto_preview` 实现第一条高层自动化：按日期与男足、女足或五人制固定赛事范围读取数据，生成前瞻 Article，并按显式 stage 创建微信公众号草稿。`auto_preview` 只编排公开中层 Service；任务状态、严格断点复用和运行记录保存在仓库根目录的 `runs/auto_preview`，不反向改变三个中层模块的依赖边界。批量并发等通用调度能力留待后续单独设计。
+当前已在 `src/auto_preview` 实现第一条高层自动化：接收一组日期和赛事，按日期 × 赛事展开组合，依次完成全部 data、全部 article，并将最多八篇文章一次创建为微信公众号多图文草稿。`auto_preview` 只编排公开中层 Service；每个组合的任务状态、`no_games` 负结果缓存、严格断点复用和运行记录保存在仓库根目录的 `runs/auto_preview`，不反向改变三个中层模块的依赖边界。
 
 ## 安全边界
 

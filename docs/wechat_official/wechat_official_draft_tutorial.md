@@ -1,6 +1,6 @@
 # 微信公众号草稿教程
 
-`wechat_official` 接收一篇完整 `Article`，处理正文图片和封面，然后调用微信公众号草稿 API。它不读取前瞻模板或比赛 data。
+`wechat_official` 接收一篇或一组完整 `Article`，处理正文图片和封面，然后调用微信公众号草稿 API。它不读取前瞻模板或比赛 data。
 
 ## 配置
 
@@ -29,7 +29,7 @@ wechat-official network-check
 - `CoverFile(path)`：提交时上传本地图片作为永久封面素材；
 - `CoverMediaId(media_id)`：复用公众号素材库中的永久图片。
 
-评论不是文章内容，由 `create_draft()` 参数控制，默认关闭。
+一个草稿支持 1–8 篇文章；顺序决定头条和次条。评论不是文章内容，由 `create_draft()` 参数统一控制组内所有文章，默认关闭。
 
 ## CLI 创建草稿
 
@@ -39,12 +39,18 @@ wechat-official network-check
 wechat-official create-draft tmp/qhly_preview_v1/article
 ```
 
+多图文按顺序传入多个文章目录：
+
+```powershell
+wechat-official create-draft tmp/headline tmp/second tmp/third
+```
+
 它只调用 `Article.load()` 完成本地校验，不获取 access token、不上传素材、不创建草稿。
 
 确认后执行：
 
 ```powershell
-wechat-official create-draft tmp/qhly_preview_v1/article --execute
+wechat-official create-draft tmp/headline tmp/second tmp/third --execute
 ```
 
 需要开放评论时添加 `--open-comments`；`--fans-only-comments` 必须和它一起使用。
@@ -58,16 +64,20 @@ from wechat_official import Article, WechatOfficialService
 
 
 async def main() -> None:
-    article = Article.load("tmp/qhly_preview_v1/article")
+    articles = [
+        Article.load("tmp/headline"),
+        Article.load("tmp/second"),
+        Article.load("tmp/third"),
+    ]
     async with WechatOfficialService.from_environment() as service:
-        receipt = await service.create_draft(article)
+        receipt = await service.create_draft(articles)
     print(receipt.media_id)
 
 
 asyncio.run(main())
 ```
 
-服务会先上传正文图片并替换 HTML 地址，再上传或复用封面，最后新增草稿。`DraftReceipt.content_fingerprint` 与输入 Article 保持一致。
+服务会先处理所有文章的正文图片和封面，最后用一次微信请求新增草稿并返回一个 `media_id`。单篇 `DraftReceipt.content_fingerprint` 与输入 Article 保持一致；多篇时它是按输入顺序计算的组合指纹。
 
 ## 图片限制与排错
 

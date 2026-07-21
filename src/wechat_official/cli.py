@@ -9,7 +9,7 @@ import sys
 
 from .client import WechatOfficialClient
 from .errors import DraftValidationError, WechatArticleError
-from .models import Article, CoverFile
+from .models import Article, CoverFile, _draft_content_fingerprint
 from .network import public_ip_cross_check
 from .service import WechatOfficialService
 
@@ -42,7 +42,11 @@ def _parser() -> argparse.ArgumentParser:
     inspect_draft.add_argument("--api-base-url", default="https://api.weixin.qq.com")
 
     draft = subparsers.add_parser("create-draft", help="从完整文章目录创建公众号草稿")
-    draft.add_argument("article", help="包含 article.json 和 body.html 的文章目录")
+    draft.add_argument(
+        "article",
+        nargs="+",
+        help="一个或多个包含 article.json 和 body.html 的文章目录",
+    )
     draft.add_argument("--open-comments", action="store_true")
     draft.add_argument("--fans-only-comments", action="store_true")
     draft.add_argument(
@@ -128,30 +132,45 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
             "external_writes": False,
         }
     if args.command == "create-draft":
-        article = Article.load(args.article)
+        articles = tuple(Article.load(path) for path in args.article)
         if args.fans_only_comments and not args.open_comments:
             raise DraftValidationError(
                 "fans_only_comments requires open_comments",
                 stage="draft-validation",
             )
-        cover_kind = "file" if isinstance(article.cover, CoverFile) else "media_id"
+        titles = [article.title for article in articles]
+        content_fingerprints = [article.content_fingerprint for article in articles]
+        covers = [
+            "file" if isinstance(article.cover, CoverFile) else "media_id"
+            for article in articles
+        ]
+        content_fingerprint = _draft_content_fingerprint(articles)
+        result_metadata: dict[str, object] = {
+            "article_count": len(articles),
+            "title": titles[0],
+            "titles": titles,
+            "cover": covers[0],
+            "covers": covers,
+            "content_fingerprints": content_fingerprints,
+        }
         if not args.execute:
             return {
                 "status": "dry-run",
-                "title": article.title,
-                "content_fingerprint": article.content_fingerprint,
-                "cover": cover_kind,
+                **result_metadata,
+                "content_fingerprint": content_fingerprint,
                 "external_writes": False,
                 "message": "添加 --execute 后才会上传素材并创建公众号草稿",
             }
+        article_input = articles[0] if len(articles) == 1 else articles
         async with WechatOfficialService.from_environment() as service:
             receipt = await service.create_draft(
-                article,
+                article_input,
                 open_comments=args.open_comments,
                 fans_only_comments=args.fans_only_comments,
             )
         return {
             "status": "ok",
+            **result_metadata,
             "draft_media_id": receipt.media_id,
             "content_fingerprint": receipt.content_fingerprint,
             "created_at": receipt.created_at.isoformat(),

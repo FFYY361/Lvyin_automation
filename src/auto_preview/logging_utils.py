@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sys
@@ -59,7 +60,10 @@ def configure_logging(
     project_root: Path | None = None,
 ) -> logging.Logger:
     run_directory.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("auto_preview")
+    logger_key = hashlib.sha256(
+        str(run_directory.resolve()).encode("utf-8")
+    ).hexdigest()[:16]
+    logger = logging.getLogger(f"auto_preview.{logger_key}")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     for handler in tuple(logger.handlers):

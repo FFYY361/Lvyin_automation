@@ -8,8 +8,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
-from datetime import UTC, datetime, timedelta, timezone
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from types import MappingProxyType
@@ -23,8 +24,11 @@ if str(_SRC_ROOT) not in sys.path:
 from auto_preview import (
     ArtifactValidationError,
     AutoPreviewPipeline,
+    CombinationResult,
     Competition,
+    PipelineError,
     PipelineRequest,
+    PipelineResult,
     Stage,
 )
 from auto_preview.cli import _parser
@@ -262,6 +266,37 @@ class _FakeQueries:
     ) -> HeadToHeadHistory:
         self.h2h_calls.append((team_a_id, team_b_id, tournament_ids))
         return self.history
+
+
+class _BatchQueries(_FakeQueries):
+    def __init__(self) -> None:
+        super().__init__()
+        self.no_games: set[tuple[date, tuple[int, ...]]] = set()
+
+    async def query_games(self, query: GameQuery) -> list[GameSummary]:
+        self.game_queries.append(query)
+        assert query.match_date is not None
+        key = (query.match_date, query.tournament_ids)
+        if key in self.no_games:
+            return []
+        tournament_id = query.tournament_ids[0]
+        game_id = query.match_date.toordinal() * 1000 + tournament_id
+        return [
+            _game(
+                game_id,
+                tournament_id,
+                datetime(
+                    query.match_date.year,
+                    query.match_date.month,
+                    query.match_date.day,
+                    15,
+                    30,
+                    tzinfo=SHANGHAI,
+                ),
+                status=GameStatus.SCHEDULED,
+                tournament_name=f"赛事 {tournament_id}",
+            )
+        ]
 
 
 class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
@@ -509,13 +544,24 @@ class CliTests(unittest.TestCase):
     def test_parser_supports_all_stages_and_rejects_conflicting_covers(self) -> None:
         parser = _parser()
         for stage in Stage:
-            args = parser.parse_args(["2026-04-11", "male", "--stage", stage.value])
+            args = parser.parse_args(
+                [
+                    "--dates",
+                    "2026-04-11",
+                    "--competitions",
+                    "male",
+                    "--stage",
+                    stage.value,
+                ]
+            )
             self.assertEqual(args.stage, stage)
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit):
                 parser.parse_args(
                     [
+                        "--dates",
                         "2026-04-11",
+                        "--competitions",
                         "female",
                         "--cover",
                         "cover.png",
@@ -524,7 +570,125 @@ class CliTests(unittest.TestCase):
                     ]
                 )
             with self.assertRaises(SystemExit):
-                parser.parse_args(["2026-04-11", "futsal", "--overide"])
+                parser.parse_args(
+                    [
+                        "--dates",
+                        "2026-04-11",
+                        "--competitions",
+                        "futsal",
+                        "--overide",
+                    ]
+                )
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["2026-04-11", "futsal"])
+
+    def test_batch_arguments_are_required_and_request_is_canonical(self) -> None:
+        parser = _parser()
+        args = parser.parse_args(
+            [
+                "--dates",
+                "2026-04-12",
+                "2026-04-11",
+                "2026-04-12",
+                "--competitions",
+                "futsal",
+                "male",
+                "female",
+                "male",
+            ]
+        )
+        request = PipelineRequest(args.dates, args.competitions)
+
+        self.assertEqual(
+            request.preview_dates,
+            (date(2026, 4, 11), date(2026, 4, 12)),
+        )
+        self.assertEqual(
+            request.competitions,
+            (Competition.MALE, Competition.FEMALE, Competition.FUTSAL),
+        )
+        self.assertEqual(
+            request.combinations,
+            (
+                (date(2026, 4, 11), Competition.MALE),
+                (date(2026, 4, 11), Competition.FEMALE),
+                (date(2026, 4, 11), Competition.FUTSAL),
+                (date(2026, 4, 12), Competition.MALE),
+                (date(2026, 4, 12), Competition.FEMALE),
+                (date(2026, 4, 12), Competition.FUTSAL),
+            ),
+        )
+        with self.assertRaises(ValueError):
+            PipelineRequest((), (Competition.MALE,))
+        with self.assertRaises(ValueError):
+            PipelineRequest((date(2026, 4, 11),), ())
+        with self.assertRaises(TypeError):
+            PipelineRequest(date(2026, 4, 11), Competition.MALE)  # type: ignore[arg-type]
+
+    def test_cli_outputs_ordered_batch_runs(self) -> None:
+        captured_request: list[PipelineRequest] = []
+        run_directory = _PROJECT_ROOT / "runs" / "auto_preview" / "2026-04-11_male"
+        result = PipelineResult(
+            status="ok",
+            completed_stage=Stage.PUBLISH,
+            runs=(
+                CombinationResult(
+                    preview_date=date(2026, 4, 11),
+                    competition=Competition.MALE,
+                    status="ok",
+                    completed_stage=Stage.PUBLISH,
+                    run_directory=run_directory,
+                    source_path=run_directory / "source.json",
+                    article_directory=run_directory / "article",
+                    draft_media_id="batch-media-id",
+                ),
+                CombinationResult(
+                    preview_date=date(2026, 4, 11),
+                    competition=Competition.FEMALE,
+                    status="skipped",
+                    completed_stage=Stage.DATA,
+                    run_directory=run_directory.with_name("2026-04-11_female"),
+                    reason="no_games",
+                ),
+            ),
+            draft_media_id="batch-media-id",
+        )
+
+        class _Runner:
+            async def run(self, request: PipelineRequest) -> PipelineResult:
+                captured_request.append(request)
+                return result
+
+        output = StringIO()
+        logger, _ = _logger()
+        with (
+            patch("auto_preview.cli.configure_logging", return_value=logger),
+            patch("auto_preview.cli.AutoPreviewPipeline", return_value=_Runner()),
+            redirect_stdout(output),
+        ):
+            status = cli_main(
+                [
+                    "--dates",
+                    "2026-04-11",
+                    "--competitions",
+                    "female",
+                    "male",
+                    "--stage",
+                    "publish",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            captured_request[0].competitions, (Competition.MALE, Competition.FEMALE)
+        )
+        self.assertEqual(payload["draft_media_id"], "batch-media-id")
+        self.assertEqual(
+            [(run["competition"], run["status"]) for run in payload["runs"]],
+            [("male", "ok"), ("female", "skipped")],
+        )
+        self.assertEqual(payload["runs"][1]["reason"], "no_games")
 
 
 class DefaultCoverAssetTests(unittest.TestCase):
@@ -544,7 +708,16 @@ class LoggingTests(unittest.TestCase):
             side_effect=PermissionError(13, "access denied", "runs"),
         ):
             with redirect_stderr(stderr):
-                status = cli_main(["2026-03-13", "male", "--stage", "data"])
+                status = cli_main(
+                    [
+                        "--dates",
+                        "2026-03-13",
+                        "--competitions",
+                        "male",
+                        "--stage",
+                        "data",
+                    ]
+                )
 
         rendered = stderr.getvalue()
         self.assertEqual(status, 2)
@@ -650,13 +823,16 @@ class _Context:
 
 class _FakeWechat:
     def __init__(self) -> None:
-        self.articles: list[Article] = []
+        self.articles: list[tuple[Article, ...]] = []
 
-    async def create_draft(self, article: Article) -> DraftReceipt:
-        self.articles.append(article)
+    async def create_draft(
+        self, article: Article | tuple[Article, ...]
+    ) -> DraftReceipt:
+        articles = (article,) if isinstance(article, Article) else tuple(article)
+        self.articles.append(articles)
         return DraftReceipt(
             media_id=f"draft-{len(self.articles)}",
-            content_fingerprint=article.content_fingerprint,
+            content_fingerprint=articles[0].content_fingerprint,
             created_at=datetime(2026, 7, 16, len(self.articles), tzinfo=UTC),
         )
 
@@ -725,15 +901,31 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
         return runner, queries, handler
 
     @staticmethod
+    def _ensure_weather_dates(root: Path, *days: date) -> None:
+        path = root / "runs" / "auto_preview" / "weather.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for day in days:
+            payload[day.isoformat()] = {
+                "low_c": None,
+                "high_c": None,
+                "wind_direction": None,
+                "wind_level": None,
+            }
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
     def _request(
         stage: Stage,
         *,
         override: bool = False,
     ) -> PipelineRequest:
         return PipelineRequest(
-            datetime(2026, 4, 11).date(),
-            Competition.FEMALE,
-            stage,
+            preview_dates=(datetime(2026, 4, 11).date(),),
+            competitions=(Competition.FEMALE,),
+            stage=stage,
             override=override,
         )
 
@@ -768,9 +960,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             reused = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.PUBLISH,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.PUBLISH,
                 )
             )
             self.assertEqual(reused.draft_media_id, "draft-1")
@@ -784,9 +976,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
             changed = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.PUBLISH,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.PUBLISH,
                 )
             )
             self.assertEqual(changed.draft_media_id, "draft-2")
@@ -798,6 +990,278 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 (second.run_directory / "draft.json").read_text(encoding="utf-8")
             )
             self.assertEqual(len(history["receipts"]), 3)
+            self.assertEqual(history["schema_version"], 2)
+            self.assertEqual(len(history["receipts"][-1]["articles"]), 1)
+
+    async def test_batch_phase_barriers_order_and_single_publish_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            wechat = _FakeWechat()
+            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
+            events: list[str] = []
+            prepare_data = runner._prepare_data
+            prepare_article = runner._prepare_article
+            publish_articles = runner._publish_articles
+
+            async def traced_data(*args, **kwargs):
+                events.append("data")
+                return await prepare_data(*args, **kwargs)
+
+            def traced_article(*args, **kwargs):
+                events.append("article")
+                return prepare_article(*args, **kwargs)
+
+            async def traced_publish(*args, **kwargs):
+                events.append("publish")
+                return await publish_articles(*args, **kwargs)
+
+            request = PipelineRequest(
+                preview_dates=(date(2026, 4, 11),),
+                competitions=(Competition.FEMALE, Competition.MALE),
+                stage=Stage.PUBLISH,
+            )
+            with (
+                patch.object(runner, "_prepare_data", side_effect=traced_data),
+                patch.object(runner, "_prepare_article", side_effect=traced_article),
+                patch.object(
+                    runner,
+                    "_publish_articles",
+                    side_effect=traced_publish,
+                ),
+            ):
+                result = await runner.run(request)
+
+            self.assertEqual(
+                events,
+                ["data", "data", "article", "article", "publish"],
+            )
+            self.assertEqual(
+                [run.competition for run in result.runs],
+                [Competition.MALE, Competition.FEMALE],
+            )
+            self.assertEqual(len(wechat.articles), 1)
+            self.assertEqual(len(wechat.articles[0]), 2)
+            self.assertEqual(
+                [article.content_fingerprint for article in wechat.articles[0]],
+                [
+                    Article.load(run.article_directory).content_fingerprint
+                    for run in result.runs
+                    if run.article_directory is not None
+                ],
+            )
+            self.assertEqual(
+                {run.draft_media_id for run in result.runs},
+                {result.draft_media_id},
+            )
+
+    async def test_no_games_is_cached_and_override_or_scope_change_requeries(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            day = date(2026, 4, 11)
+            queries.no_games.add((day, (123,)))
+            runner, _, _ = self._pipeline(root, queries=queries)
+            request = PipelineRequest(
+                (day,),
+                (Competition.FEMALE,),
+                stage=Stage.DATA,
+            )
+
+            first = await runner.run(request)
+            cached = await runner.run(request)
+            refreshed = await runner.run(
+                PipelineRequest(
+                    (day,),
+                    (Competition.FEMALE,),
+                    stage=Stage.DATA,
+                    override=True,
+                )
+            )
+            self.assertEqual(len(queries.game_queries), 2)
+            self.assertEqual(first.status, "skipped")
+            self.assertEqual(cached.runs[0].reason, "no_games")
+            self.assertEqual(refreshed.status, "skipped")
+
+            config = competition_config(Competition.FEMALE)
+            changed_scope = replace(
+                config,
+                current_tournament_ids=(123, 999),
+            )
+            queries.no_games.add((day, changed_scope.current_tournament_ids))
+            with patch(
+                "auto_preview.service.competition_config",
+                return_value=changed_scope,
+            ):
+                changed = await runner.run(request)
+
+            self.assertEqual(changed.status, "skipped")
+            self.assertEqual(len(queries.game_queries), 3)
+            state = json.loads(
+                (changed.runs[0].run_directory / "run.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["schema_version"], 3)
+            self.assertEqual(state["source"]["status"], "no_games")
+            self.assertEqual(state["source"]["preview_date"], "2026-04-11")
+            self.assertEqual(state["source"]["competition"], "female")
+            self.assertEqual(state["source"]["selected_games"], [])
+            self.assertEqual(len(state["source"]["query_scope_sha256"]), 64)
+
+    async def test_partial_no_games_skips_only_that_combination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            wechat = _FakeWechat()
+            day = date(2026, 4, 11)
+            queries.no_games.add((day, (123,)))
+            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
+
+            result = await runner.run(
+                PipelineRequest(
+                    (day,),
+                    (Competition.MALE, Competition.FEMALE),
+                    stage=Stage.PUBLISH,
+                )
+            )
+
+            self.assertEqual(result.status, "ok")
+            self.assertEqual(
+                [(run.competition, run.status) for run in result.runs],
+                [
+                    (Competition.MALE, "ok"),
+                    (Competition.FEMALE, "skipped"),
+                ],
+            )
+            self.assertEqual(result.runs[1].reason, "no_games")
+            self.assertIsNone(result.runs[1].source_path)
+            self.assertEqual(len(wechat.articles), 1)
+            self.assertEqual(len(wechat.articles[0]), 1)
+
+    async def test_batch_draft_reuse_requires_all_matching_histories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            wechat = _FakeWechat()
+            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
+            request = PipelineRequest(
+                (date(2026, 4, 11),),
+                (Competition.MALE, Competition.FEMALE),
+                stage=Stage.PUBLISH,
+            )
+
+            first = await runner.run(request)
+            reused = await runner.run(request)
+            self.assertEqual(reused.draft_media_id, first.draft_media_id)
+            self.assertEqual(len(wechat.articles), 1)
+
+            missing_history = first.runs[1].run_directory / "draft.json"
+            missing_history.unlink()
+            rebuilt = await runner.run(request)
+
+            self.assertEqual(rebuilt.draft_media_id, "draft-2")
+            self.assertEqual(len(wechat.articles), 2)
+            for run in rebuilt.runs:
+                history = json.loads(
+                    (run.run_directory / "draft.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    history["receipts"][-1]["media_id"],
+                    rebuilt.draft_media_id,
+                )
+
+    async def test_publish_rejects_more_than_eight_ready_combinations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            days = (
+                date(2026, 4, 11),
+                date(2026, 4, 12),
+                date(2026, 4, 13),
+            )
+            self._ensure_weather_dates(root, *days)
+            queries = _BatchQueries()
+            wechat = _FakeWechat()
+            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
+
+            with self.assertRaises(PipelineError) as caught:
+                await runner.run(
+                    PipelineRequest(
+                        days,
+                        tuple(Competition),
+                        stage=Stage.PUBLISH,
+                    )
+                )
+
+            self.assertEqual(caught.exception.stage, "publish-validation")
+            self.assertEqual(len(queries.game_queries), 9)
+            self.assertEqual(wechat.articles, [])
+
+    async def test_legacy_run_and_single_draft_schemas_are_upgraded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            wechat = _FakeWechat()
+            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
+            request = PipelineRequest(
+                (date(2026, 4, 11),),
+                (Competition.FEMALE,),
+                stage=Stage.PUBLISH,
+            )
+            created = await runner.run(request)
+            run = created.runs[0]
+            state_path = run.run_directory / "run.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["schema_version"] = 2
+            state["source"] = {
+                "selected_games": state["source"]["selected_games"],
+                "accepted_placeholder_sha256": state["source"][
+                    "accepted_placeholder_sha256"
+                ],
+            }
+            state_path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            draft_path = run.run_directory / "draft.json"
+            draft = json.loads(draft_path.read_text(encoding="utf-8"))
+            receipt = draft["receipts"][-1]
+            component = receipt["articles"][0]
+            draft_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "receipts": [
+                            {
+                                "media_id": receipt["media_id"],
+                                "created_at": receipt["created_at"],
+                                "article_fingerprint": component["article_fingerprint"],
+                                "cover_fingerprint": component["cover_fingerprint"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            reused = await runner.run(request)
+
+            self.assertEqual(reused.draft_media_id, created.draft_media_id)
+            self.assertEqual(len(queries.game_queries), 1)
+            self.assertEqual(len(wechat.articles), 1)
+            upgraded_state = json.loads(state_path.read_text(encoding="utf-8"))
+            upgraded_draft = json.loads(draft_path.read_text(encoding="utf-8"))
+            self.assertEqual(upgraded_state["schema_version"], 3)
+            self.assertEqual(upgraded_state["source"]["status"], "ready")
+            self.assertEqual(upgraded_draft["schema_version"], 2)
+            self.assertEqual(
+                upgraded_draft["receipts"][0]["articles"][0]["competition"],
+                "female",
+            )
 
     async def test_placeholders_warn_and_continue_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -858,9 +1322,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             rebuilt = await runner.run(
                 PipelineRequest(
-                    override_request.preview_date,
-                    override_request.competition,
-                    Stage.ARTICLE,
+                    override_request.preview_dates,
+                    override_request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
 
@@ -903,9 +1367,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             rebuilt = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
 
@@ -925,9 +1389,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
             await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
 
@@ -961,9 +1425,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             rebuilt = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
 
@@ -986,9 +1450,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             rebuilt = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
 
@@ -1189,11 +1653,15 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             day = datetime(2026, 4, 11).date()
 
             data = await runner.run(
-                PipelineRequest(day, Competition.FEMALE, Stage.DATA)
+                PipelineRequest((day,), (Competition.FEMALE,), stage=Stage.DATA)
             )
             with self.assertRaises(ArtifactValidationError) as caught:
                 await runner.run(
-                    PipelineRequest(day, Competition.FEMALE, Stage.ARTICLE)
+                    PipelineRequest(
+                        (day,),
+                        (Competition.FEMALE,),
+                        stage=Stage.ARTICLE,
+                    )
                 )
 
             self.assertEqual(data.status, "ok")
@@ -1310,9 +1778,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
             unchanged = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
             unchanged_article = Article.load(unchanged.article_directory)
@@ -1340,9 +1808,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
             weather_changed = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
             weather_article = Article.load(weather_changed.article_directory)
@@ -1360,9 +1828,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
             config_changed = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.ARTICLE,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.ARTICLE,
                 )
             )
             config_article = Article.load(config_changed.article_directory)
@@ -1400,9 +1868,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             rebuilt = await runner.run(
                 PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.DATA,
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.DATA,
                     override=True,
                 )
             )

@@ -218,13 +218,14 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
                 filename="body.png", content=b"png"
             )
             cover_id = await client.upload_cover(filename="cover.jpg", content=b"jpg")
+            article = Article(
+                title="[TEST] 清华绿茵",
+                body_html=f'<section><img src="{body_url}"></section>',
+                cover=CoverMediaId(cover_id),
+                author="清华绿茵",
+            )
             receipt = await client.add_draft(
-                Article(
-                    title="[TEST] 清华绿茵",
-                    body_html=f'<section><img src="{body_url}"></section>',
-                    cover=CoverMediaId(cover_id),
-                    author="清华绿茵",
-                ),
+                article,
                 thumb_media_id=cover_id,
                 open_comments=True,
                 fans_only_comments=True,
@@ -233,6 +234,7 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
             await http.aclose()
 
         self.assertEqual(receipt.media_id, "draft-media-id")
+        self.assertEqual(receipt.content_fingerprint, article.content_fingerprint)
         self.assertEqual(
             draft_payload["articles"][0]["thumb_media_id"], "cover-media-id"
         )
@@ -248,6 +250,132 @@ class DraftClientTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertFalse(hasattr(client, "publish"))
+
+    async def test_adds_ordered_multi_article_draft_in_one_request(self) -> None:
+        calls: list[str] = []
+        draft_payload: dict[str, object] = {}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            if request.url.path == "/cgi-bin/stable_token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "token", "expires_in": 7200},
+                    request=request,
+                )
+            if request.url.path == "/cgi-bin/draft/add":
+                draft_payload.update(json.loads(request.content.decode("utf-8")))
+                return httpx.Response(
+                    200, json={"media_id": "multi-draft"}, request=request
+                )
+            raise AssertionError(request.url)
+
+        articles = tuple(
+            Article(
+                title=title,
+                body_html=f"<section>{title}</section>",
+                cover=CoverMediaId(cover),
+            )
+            for title, cover in (("头条", "cover-1"), ("次条", "cover-2"))
+        )
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = WechatOfficialClient(
+            app_id="wx-test", app_secret="secret", http_client=http
+        )
+        try:
+            receipt = await client.add_draft(
+                articles,
+                thumb_media_id=("cover-1", "cover-2"),
+                open_comments=True,
+                fans_only_comments=True,
+            )
+        finally:
+            await http.aclose()
+
+        items = draft_payload["articles"]
+        assert isinstance(items, list)
+        self.assertEqual([item["title"] for item in items], ["头条", "次条"])
+        self.assertEqual(
+            [item["thumb_media_id"] for item in items], ["cover-1", "cover-2"]
+        )
+        self.assertTrue(all(item["need_open_comment"] == 1 for item in items))
+        self.assertTrue(all(item["only_fans_can_comment"] == 1 for item in items))
+        self.assertEqual(calls, ["/cgi-bin/stable_token", "/cgi-bin/draft/add"])
+        self.assertEqual(receipt.media_id, "multi-draft")
+        self.assertNotEqual(
+            receipt.content_fingerprint, articles[0].content_fingerprint
+        )
+
+    async def test_accepts_eight_articles_in_one_draft_request(self) -> None:
+        article_count = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal article_count
+            if request.url.path == "/cgi-bin/stable_token":
+                return httpx.Response(
+                    200,
+                    json={"access_token": "token", "expires_in": 7200},
+                    request=request,
+                )
+            if request.url.path == "/cgi-bin/draft/add":
+                payload = json.loads(request.content.decode("utf-8"))
+                article_count = len(payload["articles"])
+                return httpx.Response(200, json={"media_id": "eight"}, request=request)
+            raise AssertionError(request.url)
+
+        articles = tuple(
+            Article(
+                title=f"文章 {index}",
+                body_html=f"<p>{index}</p>",
+                cover=CoverMediaId(f"cover-{index}"),
+            )
+            for index in range(8)
+        )
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = WechatOfficialClient(
+            app_id="wx-test", app_secret="secret", http_client=http
+        )
+        try:
+            await client.add_draft(
+                articles,
+                thumb_media_id=tuple(f"cover-{index}" for index in range(8)),
+            )
+        finally:
+            await http.aclose()
+
+        self.assertEqual(article_count, 8)
+
+    async def test_rejects_multi_article_cover_mismatch_before_request(self) -> None:
+        calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("invalid draft must not make requests")
+
+        articles = (
+            Article("头条", "<p>一</p>", CoverMediaId("one")),
+            Article("次条", "<p>二</p>", CoverMediaId("two")),
+        )
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = WechatOfficialClient(
+            app_id="wx-test", app_secret="secret", http_client=http
+        )
+        try:
+            with self.assertRaises(DraftValidationError):
+                await client.add_draft(articles, thumb_media_id=("one",))
+            with self.assertRaises(DraftValidationError):
+                await client.add_draft(articles, thumb_media_id="one")
+            with self.assertRaises(DraftValidationError):
+                await client.add_draft(
+                    articles,
+                    thumb_media_id=("one", "two"),
+                    open_comments=1,  # type: ignore[arg-type]
+                )
+        finally:
+            await http.aclose()
+
+        self.assertEqual(calls, 0)
 
     async def test_rejects_unhosted_image_before_draft_call(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:

@@ -6,10 +6,12 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +27,23 @@ from thufootball import THUFootballQueryService
 from wechat_official import (
     Article,
     CoverFile,
+    CoverMediaId,
     WechatArticleError,
     WechatOfficialService,
 )
 
 from .config import CompetitionConfig, competition_config
-from .errors import ArtifactValidationError
+from .errors import ArtifactValidationError, NoGamesForDate, PipelineError
 from .inputs import GlobalInputStatus, ensure_global_inputs
 from .logging_utils import configure_logging
-from .models import PipelineRequest, PipelineResult, Stage
+from .models import (
+    CombinationResult,
+    Competition,
+    CoverInput,
+    PipelineRequest,
+    PipelineResult,
+    Stage,
+)
 from .source import (
     PLACEHOLDER_PREFIX,
     PreviewSourceBuilder,
@@ -47,6 +57,7 @@ from .state import (
     load_draft_history,
     load_run_state,
     new_run_state,
+    publication_fingerprint,
     read_json_object,
     sha256_bytes,
     write_json,
@@ -65,6 +76,26 @@ class _RunPaths:
     article: Path
     state: Path
     draft: Path
+
+
+@dataclass(frozen=True, slots=True)
+class _CombinationRequest:
+    preview_date: date
+    competition: Competition
+    stage: Stage
+    cover: CoverInput | None
+    override: bool
+
+
+@dataclass(slots=True)
+class _CombinationContext:
+    request: _CombinationRequest
+    config: CompetitionConfig
+    paths: _RunPaths
+    state: dict[str, Any]
+    logger: logging.Logger
+    document: PreviewSourceDocument
+    article: Article | None = field(default=None)
 
 
 def _quoted_command(arguments: list[str]) -> str:
@@ -97,7 +128,7 @@ class AutoPreviewPipeline:
         )
         self._logger = logger
 
-    def run_directory(self, request: PipelineRequest) -> Path:
+    def run_directory(self, request: _CombinationRequest) -> Path:
         return (
             self._project_root
             / "runs"
@@ -105,7 +136,7 @@ class AutoPreviewPipeline:
             / f"{request.preview_date.isoformat()}_{request.competition.value}"
         )
 
-    def _run_paths(self, request: PipelineRequest) -> _RunPaths:
+    def _run_paths(self, request: _CombinationRequest) -> _RunPaths:
         directory = self.run_directory(request)
         return _RunPaths(
             directory=directory,
@@ -116,16 +147,21 @@ class AutoPreviewPipeline:
         )
 
     def _next_command(self, request: PipelineRequest, stage: Stage) -> str:
-        return _quoted_command(
-            [
-                "python",
-                str(Path("scripts") / "auto_preview.py"),
-                request.preview_date.isoformat(),
-                request.competition.value,
-                "--stage",
-                stage.value,
-            ]
-        )
+        arguments = [
+            "python",
+            str(Path("scripts") / "auto_preview.py"),
+            "--dates",
+            *(value.isoformat() for value in request.preview_dates),
+            "--competitions",
+            *(value.value for value in request.competitions),
+            "--stage",
+            stage.value,
+        ]
+        if isinstance(request.cover, CoverFile):
+            arguments.extend(("--cover", str(request.cover.path)))
+        elif isinstance(request.cover, CoverMediaId):
+            arguments.extend(("--cover-media-id", request.cover.media_id))
+        return _quoted_command(arguments)
 
     def _display_path(self, path: str | Path) -> str:
         return os.path.relpath(Path(path).resolve(), self._project_root)
@@ -189,16 +225,41 @@ class AutoPreviewPipeline:
                 )
 
     @staticmethod
-    def _source_state(state: dict[str, Any]) -> dict[str, Any]:
+    def _source_state(
+        state: dict[str, Any],
+        request: _CombinationRequest,
+    ) -> dict[str, Any]:
         source_state = state.get("source")
         if not isinstance(source_state, dict):
             raise ArtifactValidationError(
                 "source.json 已存在但 run.json.source 缺失或损坏",
                 stage="data-validation",
             )
-        if set(source_state) != {"selected_games", "accepted_placeholder_sha256"}:
+        if set(source_state) != {
+            "status",
+            "preview_date",
+            "competition",
+            "selected_games",
+            "accepted_placeholder_sha256",
+            "queried_at",
+            "query_scope_sha256",
+        }:
             raise ArtifactValidationError(
                 "run.json.source 字段不符合当前契约",
+                stage="data-validation",
+            )
+        status = source_state.get("status")
+        if status not in {"ready", "no_games"}:
+            raise ArtifactValidationError(
+                "run.json.source.status 字段损坏",
+                stage="data-validation",
+            )
+        if (
+            source_state.get("preview_date") != request.preview_date.isoformat()
+            or source_state.get("competition") != request.competition.value
+        ):
+            raise ArtifactValidationError(
+                "run.json.source 的日期或赛事与本次请求不一致",
                 stage="data-validation",
             )
         selected = source_state.get("selected_games")
@@ -225,12 +286,38 @@ class AutoPreviewPipeline:
                 "run.json.source.accepted_placeholder_sha256 字段损坏",
                 stage="data-validation",
             )
+        queried_at = source_state.get("queried_at")
+        if queried_at is not None and (
+            not isinstance(queried_at, str) or not queried_at
+        ):
+            raise ArtifactValidationError(
+                "run.json.source.queried_at 字段损坏",
+                stage="data-validation",
+            )
+        query_scope = source_state.get("query_scope_sha256")
+        if query_scope is not None and (
+            not isinstance(query_scope, str) or len(query_scope) != 64
+        ):
+            raise ArtifactValidationError(
+                "run.json.source.query_scope_sha256 字段损坏",
+                stage="data-validation",
+            )
+        if status == "no_games" and (
+            selected
+            or accepted is not None
+            or queried_at is None
+            or query_scope is None
+        ):
+            raise ArtifactValidationError(
+                "run.json.source 的 no_games 状态损坏",
+                stage="data-validation",
+            )
         return source_state
 
     @staticmethod
     def _validate_source(
         source: PreviewSourceData | PreviewSourceDocument,
-        request: PipelineRequest,
+        request: _CombinationRequest,
         config: CompetitionConfig,
         source_state: dict[str, Any],
     ) -> None:
@@ -350,19 +437,44 @@ class AutoPreviewPipeline:
         for path, content in expected_paths.items():
             write_text(path, content)
 
+    @staticmethod
+    def _query_scope_sha256(config: CompetitionConfig) -> str:
+        return sha256_bytes(
+            json.dumps(
+                list(config.current_tournament_ids),
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+
+    @staticmethod
+    def _remove_stale_data_artifacts(paths: _RunPaths) -> None:
+        paths.source.unlink(missing_ok=True)
+        if paths.article.exists():
+            shutil.rmtree(paths.article)
+        previews = paths.directory / "previews"
+        if previews.exists():
+            shutil.rmtree(previews)
+
     async def _prepare_data(
         self,
-        request: PipelineRequest,
+        request: _CombinationRequest,
         config: CompetitionConfig,
         paths: _RunPaths,
         state: dict[str, Any],
         logger: logging.Logger,
-    ) -> PreviewSourceDocument:
+    ) -> PreviewSourceDocument | None:
         started = time.monotonic()
+        query_scope_sha256 = self._query_scope_sha256(config)
         if paths.source.exists() and not request.override:
-            source_state = self._source_state(state)
+            source_state = self._source_state(state, request)
+            if source_state["status"] != "ready":
+                raise ArtifactValidationError(
+                    "source.json 存在，但 run.json 记录为 no_games",
+                    stage="data-validation",
+                )
             document = self._load_existing_source(paths.source)
             self._validate_source(document, request, config, source_state)
+            write_json(paths.state, state)
             logger.info(
                 "↷ [1/3] data 验收通过，跳过查询（%.2fs）：%s",
                 time.monotonic() - started,
@@ -370,23 +482,28 @@ class AutoPreviewPipeline:
             )
             return document
 
-        if (
-            not paths.source.exists()
-            and state.get("source") is not None
-            and not request.override
-        ):
-            raise ArtifactValidationError(
-                "run.json 记录 data 已完成，但 source.json 缺失",
-                stage="data-validation",
-            )
+        if not paths.source.exists() and state.get("source") is not None:
+            source_state = self._source_state(state, request)
+            if not request.override and source_state["status"] == "no_games":
+                if source_state["query_scope_sha256"] == query_scope_sha256:
+                    logger.info(
+                        "↷ [1/3] data 复用已缓存的 no_games 结果（%.2fs）",
+                        time.monotonic() - started,
+                    )
+                    return None
+                logger.info("↷ [1/3] data 赛事 ID 查询范围已变化，重新查询")
+                state["source"] = None
+                state["article"] = None
+                self._remove_stale_data_artifacts(paths)
+            elif not request.override:
+                raise ArtifactValidationError(
+                    "run.json 记录 data 已完成，但 source.json 缺失",
+                    stage="data-validation",
+                )
         if (
             not request.override
             and not paths.source.exists()
-            and (
-                paths.article.exists()
-                or paths.draft.exists()
-                or state.get("article") is not None
-            )
+            and (paths.article.exists() or state.get("article") is not None)
         ):
             raise ArtifactValidationError(
                 "上游 source.json 缺失但已有下游产物；请使用 --override",
@@ -397,9 +514,29 @@ class AutoPreviewPipeline:
             "▶ [1/3] data 查询赛事 IDs=%s",
             config.current_tournament_ids,
         )
-        async with self._query_service_factory() as queries:
-            builder = PreviewSourceBuilder(queries, config, logger=logger)
-            queried_source = await builder.build(request.preview_date)
+        try:
+            async with self._query_service_factory() as queries:
+                builder = PreviewSourceBuilder(queries, config, logger=logger)
+                queried_source = await builder.build(request.preview_date)
+        except NoGamesForDate:
+            paths.directory.mkdir(parents=True, exist_ok=True)
+            self._remove_stale_data_artifacts(paths)
+            state["source"] = {
+                "status": "no_games",
+                "preview_date": request.preview_date.isoformat(),
+                "competition": request.competition.value,
+                "selected_games": [],
+                "accepted_placeholder_sha256": None,
+                "queried_at": datetime.now(UTC).isoformat(),
+                "query_scope_sha256": query_scope_sha256,
+            }
+            state["article"] = None
+            write_json(paths.state, state)
+            logger.info(
+                "↷ [1/3] data 当日无比赛，已缓存跳过结果（%.2fs）",
+                time.monotonic() - started,
+            )
+            return None
         paths.directory.mkdir(parents=True, exist_ok=True)
         source_payload = source_to_dict(queried_source)
         article_files = preview_article_files(queried_source)
@@ -414,11 +551,16 @@ class AutoPreviewPipeline:
             source_directory=paths.directory,
         )
         state["source"] = {
+            "status": "ready",
+            "preview_date": request.preview_date.isoformat(),
+            "competition": request.competition.value,
             "selected_games": [
                 {"game_id": game_id, "tournament_id": tournament_id}
                 for game_id, tournament_id in builder.selected_games
             ],
             "accepted_placeholder_sha256": None,
+            "queried_at": datetime.now(UTC).isoformat(),
+            "query_scope_sha256": query_scope_sha256,
         }
         state["article"] = None
         write_json(paths.state, state)
@@ -449,7 +591,7 @@ class AutoPreviewPipeline:
 
     def _article_rebuild_reasons(
         self,
-        request: PipelineRequest,
+        request: _CombinationRequest,
         existing: Article,
         state: dict[str, Any],
         *,
@@ -480,7 +622,7 @@ class AutoPreviewPipeline:
 
     def _prepare_article(
         self,
-        request: PipelineRequest,
+        request: _CombinationRequest,
         paths: _RunPaths,
         state: dict[str, Any],
         inputs: GlobalInputStatus,
@@ -559,144 +701,332 @@ class AutoPreviewPipeline:
         return persisted
 
     @staticmethod
-    def _matching_draft_receipt(
-        receipts: list[dict[str, Any]],
-        article: Article,
-        cover_sha256: str,
-    ) -> dict[str, Any] | None:
-        matching = [
-            receipt
-            for receipt in receipts
-            if receipt["article_fingerprint"] == article.content_fingerprint
-            and receipt["cover_fingerprint"] == cover_sha256
-        ]
-        return matching[-1] if matching else None
-
-    async def _publish_article(
-        self,
-        request: PipelineRequest,
-        paths: _RunPaths,
-        state: dict[str, Any],
-        article: Article,
-        logger: logging.Logger,
-    ) -> str:
-        article_state = self._article_state(state)
-        cover_sha256 = article_state["cover"]["sha256"]
-        started = time.monotonic()
-        history = load_draft_history(paths.draft)
-        receipts = history["receipts"]
-        matching = self._matching_draft_receipt(
-            receipts,
-            article,
-            cover_sha256,
-        )
-        if paths.draft.exists() and not request.override and matching is not None:
-            logger.info(
-                "↷ [3/3] publish 验收通过，跳过重复创建（%.2fs）",
-                time.monotonic() - started,
+    def _publication_components(
+        contexts: list[_CombinationContext],
+    ) -> list[dict[str, str]]:
+        components: list[dict[str, str]] = []
+        for context in contexts:
+            assert context.article is not None
+            article_state = AutoPreviewPipeline._article_state(context.state)
+            components.append(
+                {
+                    "preview_date": context.request.preview_date.isoformat(),
+                    "competition": context.request.competition.value,
+                    "article_fingerprint": context.article.content_fingerprint,
+                    "cover_fingerprint": article_state["cover"]["sha256"],
+                }
             )
+        return components
+
+    @staticmethod
+    def _matching_batch_receipt(
+        histories: list[dict[str, Any]],
+        fingerprint: str,
+        components: list[dict[str, str]],
+    ) -> dict[str, Any] | None:
+        if not histories:
+            return None
+        candidates = [
+            receipt
+            for receipt in histories[0]["receipts"]
+            if receipt["publication_fingerprint"] == fingerprint
+            and receipt["articles"] == components
+        ]
+        for candidate in reversed(candidates):
+            if all(
+                any(
+                    receipt["media_id"] == candidate["media_id"]
+                    and receipt["publication_fingerprint"] == fingerprint
+                    and receipt["articles"] == components
+                    for receipt in history["receipts"]
+                )
+                for history in histories[1:]
+            ):
+                return candidate
+        return None
+
+    async def _publish_articles(
+        self,
+        contexts: list[_CombinationContext],
+        *,
+        override: bool,
+    ) -> str:
+        if not 1 <= len(contexts) <= 8:
+            raise PipelineError(
+                "公众号多图文草稿必须包含 1–8 篇文章",
+                stage="publish-validation",
+            )
+        components = self._publication_components(contexts)
+        fingerprint = publication_fingerprint(components)
+        histories = [
+            load_draft_history(
+                context.paths.draft,
+                context.request.preview_date,
+                context.request.competition,
+            )
+            for context in contexts
+        ]
+        started = time.monotonic()
+        matching = self._matching_batch_receipt(
+            histories,
+            fingerprint,
+            components,
+        )
+        if not override and matching is not None:
+            for context, history in zip(contexts, histories, strict=True):
+                write_json(context.paths.draft, history)
+                context.logger.info(
+                    "↷ [3/3] publish 复用同一批次草稿（%.2fs）：%s",
+                    time.monotonic() - started,
+                    matching["media_id"],
+                )
             return matching["media_id"]
 
-        if paths.draft.exists() and not request.override:
-            logger.info("↻ [3/3] 当前 article 无匹配草稿，将创建新草稿并保留历史回执")
-
-        logger.info("▶ [3/3] publish 上传素材并创建公众号草稿")
+        for context in contexts:
+            context.logger.info(
+                "▶ [3/3] publish 加入 %s / %s",
+                context.request.preview_date.isoformat(),
+                context.request.competition.value,
+            )
+        articles = tuple(context.article for context in contexts)
+        assert all(article is not None for article in articles)
         async with self._wechat_service_factory() as wechat:
-            draft_receipt = await wechat.create_draft(article)
-        receipts.append(
-            {
-                "media_id": draft_receipt.media_id,
-                "created_at": draft_receipt.created_at.isoformat(),
-                "article_fingerprint": article.content_fingerprint,
-                "cover_fingerprint": cover_sha256,
-            }
-        )
-        write_json(paths.draft, history)
-        logger.info(
-            "✓ [3/3] publish 完成（%.2fs）：已创建公众号草稿",
-            time.monotonic() - started,
-        )
+            draft_receipt = await wechat.create_draft(articles)
+        receipt = {
+            "media_id": draft_receipt.media_id,
+            "created_at": draft_receipt.created_at.isoformat(),
+            "publication_fingerprint": fingerprint,
+            "articles": components,
+        }
+        for context, history in zip(contexts, histories, strict=True):
+            history["receipts"].append(receipt.copy())
+            write_json(context.paths.draft, history)
+            context.logger.info(
+                "✓ [3/3] publish 完成（%.2fs）：%s",
+                time.monotonic() - started,
+                draft_receipt.media_id,
+            )
         return draft_receipt.media_id
 
-    async def run(self, request: PipelineRequest) -> PipelineResult:
-        return await self._run_pipeline(request)
+    @staticmethod
+    def _combination_requests(
+        request: PipelineRequest,
+    ) -> tuple[_CombinationRequest, ...]:
+        return tuple(
+            _CombinationRequest(
+                preview_date=preview_date,
+                competition=competition,
+                stage=request.stage,
+                cover=request.cover,
+                override=request.override,
+            )
+            for preview_date, competition in request.combinations
+        )
 
-    async def _run_pipeline(self, request: PipelineRequest) -> PipelineResult:
-        config = competition_config(request.competition)
+    def _combination_result(
+        self,
+        request: _CombinationRequest,
+        context: _CombinationContext | None,
+        *,
+        completed_stage: Stage,
+        draft_media_id: str | None = None,
+    ) -> CombinationResult:
         paths = self._run_paths(request)
-        run_directory = paths.directory
-        logger = self._logger or configure_logging(
-            run_directory,
-            project_root=self._project_root,
-        )
-        source_path = paths.source
-        article_directory = paths.article
-        state_path = paths.state
-        draft_path = paths.draft
-
-        if request.override:
-            logger.warning(
-                "⚠ --override 已启用：将从 data 重做到 %s",
-                request.stage.value,
+        if context is None:
+            return CombinationResult(
+                preview_date=request.preview_date,
+                competition=request.competition,
+                status="skipped",
+                completed_stage=Stage.DATA,
+                run_directory=paths.directory,
+                reason="no_games",
             )
-            state = new_run_state(request)
-        else:
-            state = load_run_state(
-                state_path,
-                request,
-                source_path=source_path,
-                article_directory=article_directory,
-                draft_path=draft_path,
+        return CombinationResult(
+            preview_date=request.preview_date,
+            competition=request.competition,
+            status="ok",
+            completed_stage=completed_stage,
+            run_directory=paths.directory,
+            source_path=paths.source,
+            article_directory=(
+                paths.article if completed_stage is not Stage.DATA else None
+            ),
+            draft_media_id=draft_media_id,
+        )
+
+    async def run(self, request: PipelineRequest) -> PipelineResult:
+        combination_requests = self._combination_requests(request)
+        contexts: dict[tuple[date, Competition], _CombinationContext] = {}
+
+        # Phase barrier 1: finish data for every combination before any article work.
+        for combination in combination_requests:
+            config = competition_config(combination.competition)
+            paths = self._run_paths(combination)
+            logger = self._logger or configure_logging(
+                paths.directory,
+                project_root=self._project_root,
+            )
+            if combination.override:
+                logger.warning(
+                    "⚠ --override 已启用：将从 data 重做到 %s",
+                    combination.stage.value,
+                )
+                state = new_run_state(
+                    combination.preview_date,
+                    combination.competition,
+                )
+            else:
+                state = load_run_state(
+                    paths.state,
+                    combination.preview_date,
+                    combination.competition,
+                    source_path=paths.source,
+                    article_directory=paths.article,
+                    draft_path=paths.draft,
+                )
+            try:
+                document = await self._prepare_data(
+                    combination,
+                    config,
+                    paths,
+                    state,
+                    logger,
+                )
+            except Exception as exc:
+                logger.error("✗ [1/3] data 失败：%s", exc)
+                raise
+            if document is None:
+                continue
+            inputs = ensure_global_inputs(
+                paths.directory.parent,
+                combination.preview_date,
+                require_complete_config=False,
+            )
+            logger.info("人工数据：source=%s", self._display_path(paths.source))
+            logger.info(
+                "正文 Markdown：%s",
+                self._display_path(paths.directory / "previews"),
+            )
+            self._log_manual_warnings(logger, document, inputs, paths.source)
+            contexts[(combination.preview_date, combination.competition)] = (
+                _CombinationContext(
+                    request=combination,
+                    config=config,
+                    paths=paths,
+                    state=state,
+                    logger=logger,
+                    document=document,
+                )
             )
 
-        document = await self._prepare_data(request, config, paths, state, logger)
-
-        inputs = ensure_global_inputs(
-            run_directory.parent,
-            request.preview_date,
-            require_complete_config=request.stage is not Stage.DATA,
-        )
-        logger.info("人工数据：source=%s", self._display_path(source_path))
-        logger.info(
-            "正文 Markdown：%s",
-            self._display_path(run_directory / "previews"),
-        )
-        self._log_manual_warnings(logger, document, inputs, source_path)
+        ordered_contexts = [
+            contexts[key] for key in request.combinations if key in contexts
+        ]
+        if not ordered_contexts:
+            return PipelineResult(
+                status="skipped",
+                completed_stage=Stage.DATA,
+                runs=tuple(
+                    self._combination_result(
+                        combination,
+                        None,
+                        completed_stage=Stage.DATA,
+                    )
+                    for combination in combination_requests
+                ),
+            )
 
         if request.stage is Stage.DATA:
+            next_command = self._next_command(request, Stage.ARTICLE)
             return PipelineResult(
                 status="ok",
                 completed_stage=Stage.DATA,
-                run_directory=run_directory,
-                source_path=source_path,
-            )
-
-        article = self._prepare_article(request, paths, state, inputs, logger)
-
-        if request.stage is Stage.ARTICLE:
-            next_command = self._next_command(request, Stage.PUBLISH)
-            logger.info("下一步 publish 命令：%s", next_command)
-            return PipelineResult(
-                status="ok",
-                completed_stage=Stage.ARTICLE,
-                run_directory=run_directory,
-                source_path=source_path,
-                article_directory=article_directory,
+                runs=tuple(
+                    self._combination_result(
+                        combination,
+                        contexts.get(
+                            (combination.preview_date, combination.competition)
+                        ),
+                        completed_stage=Stage.DATA,
+                    )
+                    for combination in combination_requests
+                ),
                 next_command=next_command,
             )
 
-        draft_media_id = await self._publish_article(
-            request,
-            paths,
-            state,
-            article,
-            logger,
-        )
+        if request.stage is Stage.PUBLISH and len(ordered_contexts) > 8:
+            error = PipelineError(
+                "公众号多图文草稿最多包含 8 篇文章；请缩小日期或赛事范围",
+                stage="publish-validation",
+            )
+            for context in ordered_contexts:
+                context.logger.error("✗ [3/3] publish 失败：%s", error)
+            raise error
+
+        # Phase barrier 2: article work starts only after all data work succeeds.
+        for context in ordered_contexts:
+            inputs = ensure_global_inputs(
+                context.paths.directory.parent,
+                context.request.preview_date,
+                require_complete_config=True,
+            )
+            try:
+                context.article = self._prepare_article(
+                    context.request,
+                    context.paths,
+                    context.state,
+                    inputs,
+                    context.logger,
+                )
+            except Exception as exc:
+                context.logger.error("✗ [2/3] article 失败：%s", exc)
+                raise
+
+        if request.stage is Stage.ARTICLE:
+            next_command = self._next_command(request, Stage.PUBLISH)
+            for context in ordered_contexts:
+                context.logger.info("下一步 publish 命令：%s", next_command)
+            return PipelineResult(
+                status="ok",
+                completed_stage=Stage.ARTICLE,
+                runs=tuple(
+                    self._combination_result(
+                        combination,
+                        contexts.get(
+                            (combination.preview_date, combination.competition)
+                        ),
+                        completed_stage=Stage.ARTICLE,
+                    )
+                    for combination in combination_requests
+                ),
+                next_command=next_command,
+            )
+
+        try:
+            draft_media_id = await self._publish_articles(
+                ordered_contexts,
+                override=request.override,
+            )
+        except Exception as exc:
+            for context in ordered_contexts:
+                context.logger.error("✗ [3/3] publish 失败：%s", exc)
+            raise
         return PipelineResult(
             status="ok",
             completed_stage=Stage.PUBLISH,
-            run_directory=run_directory,
-            source_path=source_path,
-            article_directory=article_directory,
+            runs=tuple(
+                self._combination_result(
+                    combination,
+                    contexts.get((combination.preview_date, combination.competition)),
+                    completed_stage=Stage.PUBLISH,
+                    draft_media_id=(
+                        draft_media_id
+                        if (combination.preview_date, combination.competition)
+                        in contexts
+                        else None
+                    ),
+                )
+                for combination in combination_requests
+            ),
             draft_media_id=draft_media_id,
         )
