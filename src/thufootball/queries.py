@@ -349,8 +349,10 @@ class THUFootballQueryService:
         ):
             raise _validation_error("max_concurrency must be a positive integer")
         self._client = client
-        self._max_concurrency = max_concurrency
         self._close_client = _close_client
+        self._tournament_semaphore = asyncio.Semaphore(max_concurrency)
+        self._tournament_cache: dict[int, TournamentSnapshot] = {}
+        self._tournament_tasks: dict[int, asyncio.Task[TournamentSnapshot]] = {}
 
     @classmethod
     def from_environment(
@@ -373,6 +375,14 @@ class THUFootballQueryService:
         await self.aclose()
 
     async def aclose(self) -> None:
+        pending = tuple(self._tournament_tasks.values())
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._tournament_tasks.clear()
+        self._tournament_cache.clear()
         if self._close_client:
             await self._client.aclose()
 
@@ -390,11 +400,30 @@ class THUFootballQueryService:
         self, tournament_ids: tuple[int, ...]
     ) -> tuple[TournamentSnapshot, ...]:
         _reject_blacklisted_tournaments(tournament_ids)
-        semaphore = asyncio.Semaphore(self._max_concurrency)
 
         async def read(tournament_id: int) -> TournamentSnapshot:
-            async with semaphore:
-                return await self._client.get_tournament_info(tournament_id)
+            cached = self._tournament_cache.get(tournament_id)
+            if cached is not None:
+                return cached
+
+            task = self._tournament_tasks.get(tournament_id)
+            if task is None:
+
+                async def fetch() -> TournamentSnapshot:
+                    async with self._tournament_semaphore:
+                        snapshot = await self._client.get_tournament_info(tournament_id)
+                    self._tournament_cache[tournament_id] = snapshot
+                    return snapshot
+
+                task = asyncio.create_task(fetch())
+                self._tournament_tasks[tournament_id] = task
+
+                def discard(completed: asyncio.Task[TournamentSnapshot]) -> None:
+                    if self._tournament_tasks.get(tournament_id) is completed:
+                        self._tournament_tasks.pop(tournament_id, None)
+
+                task.add_done_callback(discard)
+            return await asyncio.shield(task)
 
         tasks = {
             tournament_id: asyncio.create_task(read(tournament_id))
@@ -511,8 +540,7 @@ class THUFootballQueryService:
             snapshots = await self._read_tournaments(tournament_ids)
         else:
             tournament_id = _positive_id(tournament_id, "tournament_id")
-            _reject_blacklisted_tournaments((tournament_id,))
-            snapshots = (await self._client.get_tournament_info(tournament_id),)
+            snapshots = await self._read_tournaments((tournament_id,))
 
         batch = self._tournament_batch(snapshots)
 

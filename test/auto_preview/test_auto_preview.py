@@ -272,23 +272,24 @@ class _BatchQueries(_FakeQueries):
     def __init__(self) -> None:
         super().__init__()
         self.no_games: set[tuple[date, tuple[int, ...]]] = set()
+        self.available_dates = (
+            date(2026, 4, 11),
+            date(2026, 4, 12),
+            date(2026, 4, 13),
+        )
 
     async def query_games(self, query: GameQuery) -> list[GameSummary]:
         self.game_queries.append(query)
-        assert query.match_date is not None
-        key = (query.match_date, query.tournament_ids)
-        if key in self.no_games:
-            return []
+        assert query.match_date is None
         tournament_id = query.tournament_ids[0]
-        game_id = query.match_date.toordinal() * 1000 + tournament_id
         return [
             _game(
-                game_id,
+                preview_date.toordinal() * 1000 + tournament_id,
                 tournament_id,
                 datetime(
-                    query.match_date.year,
-                    query.match_date.month,
-                    query.match_date.day,
+                    preview_date.year,
+                    preview_date.month,
+                    preview_date.day,
                     15,
                     30,
                     tzinfo=SHANGHAI,
@@ -296,6 +297,8 @@ class _BatchQueries(_FakeQueries):
                 status=GameStatus.SCHEDULED,
                 tournament_name=f"赛事 {tournament_id}",
             )
+            for preview_date in self.available_dates
+            if (preview_date, query.tournament_ids) not in self.no_games
         ]
 
 
@@ -1003,13 +1006,13 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             wechat = _FakeWechat()
             runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
             events: list[str] = []
-            prepare_data = runner._prepare_data
+            query_data_group = runner._query_data_group
             prepare_article = runner._prepare_article
             publish_articles = runner._publish_articles
 
-            async def traced_data(*args, **kwargs):
-                events.append("data")
-                return await prepare_data(*args, **kwargs)
+            async def traced_data_group(*args, **kwargs):
+                events.append("data-group")
+                return await query_data_group(*args, **kwargs)
 
             def traced_article(*args, **kwargs):
                 events.append("article")
@@ -1025,7 +1028,11 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 stage=Stage.PUBLISH,
             )
             with (
-                patch.object(runner, "_prepare_data", side_effect=traced_data),
+                patch.object(
+                    runner,
+                    "_query_data_group",
+                    side_effect=traced_data_group,
+                ),
                 patch.object(runner, "_prepare_article", side_effect=traced_article),
                 patch.object(
                     runner,
@@ -1037,7 +1044,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 events,
-                ["data", "data", "article", "article", "publish"],
+                ["data-group", "data-group", "article", "article", "publish"],
             )
             self.assertEqual(
                 [run.competition for run in result.runs],
@@ -1057,6 +1064,76 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 {run.draft_media_id for run in result.runs},
                 {result.draft_media_id},
             )
+
+    async def test_batch_data_queries_once_per_competition_and_logs_stages_once(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            runner, _, handler = self._pipeline(root, queries=queries)
+            request = PipelineRequest(
+                (date(2026, 4, 12), date(2026, 4, 11)),
+                (Competition.FEMALE, Competition.MALE),
+                stage=Stage.ARTICLE,
+                override=True,
+            )
+
+            result = await runner.run(request)
+
+            self.assertEqual(result.status, "ok")
+            self.assertEqual(len(queries.game_queries), 2)
+            self.assertTrue(
+                all(query.match_date is None for query in queries.game_queries)
+            )
+            messages = handler.messages
+            self.assertEqual(
+                sum(message.startswith("⚠ --override") for message in messages),
+                1,
+            )
+            for marker in (
+                "▶ [1/3] data",
+                "✓ [1/3] data",
+                "▶ [2/3] article",
+                "✓ [2/3] article",
+            ):
+                self.assertEqual(
+                    sum(message.startswith(marker) for message in messages),
+                    1,
+                    marker,
+                )
+            self.assertFalse(any("已生成" in message for message in messages))
+            self.assertFalse(any("人工数据" in message for message in messages))
+
+            source_log = next(
+                message for message in messages if message.startswith("源数据：\n")
+            )
+            markdown_log = next(
+                message
+                for message in messages
+                if message.startswith("正文 Markdown：\n")
+            )
+            self.assertEqual(source_log.count("source.json"), 4)
+            self.assertEqual(markdown_log.count("previews"), 4)
+            self.assertEqual(
+                sum("日期 2026-04-11 为全 null" in message for message in messages),
+                1,
+            )
+            self.assertEqual(
+                sum("日期 2026-04-12" in message for message in messages),
+                1,
+            )
+            data_completed = next(
+                index
+                for index, message in enumerate(messages)
+                if message.startswith("✓ [1/3] data")
+            )
+            first_placeholder_warning = next(
+                index
+                for index, message in enumerate(messages)
+                if "标题尚未填写" in message
+            )
+            self.assertLess(data_completed, first_placeholder_warning)
 
     async def test_no_games_is_cached_and_override_or_scope_change_requeries(
         self,
@@ -1197,7 +1274,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(caught.exception.stage, "publish-validation")
-            self.assertEqual(len(queries.game_queries), 9)
+            self.assertEqual(len(queries.game_queries), 3)
             self.assertEqual(wechat.articles, [])
 
     async def test_legacy_run_and_single_draft_schemas_are_upgraded(self) -> None:

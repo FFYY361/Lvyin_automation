@@ -1107,7 +1107,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             history = await service.query_team_to_team_matches(101, 202)
 
         self.assertEqual(discovery_calls, 3)
-        self.assertEqual(sorted(tournament_reads), [10, 10, 10, 20, 20, 20])
+        self.assertEqual(sorted(tournament_reads), [10, 20])
         self.assertEqual([game.game_id for game in games], [1, 2])
         self.assertEqual([match.game.game_id for match in team_matches], [2, 1])
         self.assertEqual(history.tournament_ids, (10, 20))
@@ -1261,6 +1261,100 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 await service.query_games(GameQuery(tournament_ids=(10, 10))), []
             )
         self.assertEqual(calls, 1)
+
+    async def test_tournament_snapshot_is_reused_across_query_methods(self) -> None:
+        calls = 0
+        games = [_game(1, 10, started=True, ended=True)]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(
+                200,
+                json=_tournament_payload(10, games),
+                request=request,
+            )
+
+        async with self._service(handler) as service:
+            queried_games = await service.query_games(GameQuery(tournament_ids=(10,)))
+            team_matches = await service.query_team_matches(101, 10)
+            head_to_head = await service.query_team_to_team_matches(
+                101,
+                202,
+                [10],
+            )
+            repeated_games = await service.query_games(GameQuery(tournament_ids=(10,)))
+            self.assertEqual(set(service._tournament_cache), {10})
+            await service.aclose()
+            self.assertEqual(service._tournament_cache, {})
+            self.assertEqual(service._tournament_tasks, {})
+
+        self.assertEqual(calls, 1)
+        self.assertEqual([game.game_id for game in queried_games], [1])
+        self.assertEqual([result.game.game_id for result in team_matches], [1])
+        self.assertEqual([game.game_id for game in head_to_head.matches], [1])
+        self.assertEqual(repeated_games, queried_games)
+
+    async def test_overlapping_queries_share_inflight_reads_and_global_limit(
+        self,
+    ) -> None:
+        calls: dict[int, int] = {}
+        active = 0
+        peak = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal active, peak
+            tournament_id = int(request.url.params["tourn_id"])
+            calls[tournament_id] = calls.get(tournament_id, 0) + 1
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return httpx.Response(
+                200,
+                json=_tournament_payload(tournament_id),
+                request=request,
+            )
+
+        async with self._service(handler, max_concurrency=2) as service:
+            games, head_to_head = await asyncio.gather(
+                service.query_games(GameQuery(tournament_ids=(1, 2, 3))),
+                service.query_team_to_team_matches(101, 202, [2, 3, 4]),
+            )
+
+        self.assertEqual(games, [])
+        self.assertEqual(head_to_head.matches, ())
+        self.assertEqual(calls, {1: 1, 2: 1, 3: 1, 4: 1})
+        self.assertEqual(peak, 2)
+
+    async def test_partial_batch_successes_are_cached_and_failure_is_retried(
+        self,
+    ) -> None:
+        calls: dict[int, int] = {}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            tournament_id = int(request.url.params["tourn_id"])
+            calls[tournament_id] = calls.get(tournament_id, 0) + 1
+            if tournament_id == 2 and calls[tournament_id] == 1:
+                return httpx.Response(
+                    200,
+                    json={"success": False, "info": "temporary failure"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json=_tournament_payload(tournament_id),
+                request=request,
+            )
+
+        async with self._service(handler) as service:
+            with self.assertRaises(BatchQueryError) as caught:
+                await service.query_games(GameQuery(tournament_ids=(1, 2, 3)))
+            retried = await service.query_games(GameQuery(tournament_ids=(1, 2, 3)))
+
+        self.assertEqual(caught.exception.failed_tournament_ids, (2,))
+        self.assertEqual(retried, [])
+        self.assertEqual(calls, {1: 1, 2: 2, 3: 1})
 
     async def test_multi_tournament_concurrency_is_bounded(self) -> None:
         active = 0

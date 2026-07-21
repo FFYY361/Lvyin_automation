@@ -94,7 +94,7 @@ class _CombinationContext:
     paths: _RunPaths
     state: dict[str, Any]
     logger: logging.Logger
-    document: PreviewSourceDocument
+    document: PreviewSourceDocument | None = None
     article: Article | None = field(default=None)
 
 
@@ -170,44 +170,42 @@ class AutoPreviewPipeline:
     def _has_placeholder(values: tuple[str, ...]) -> bool:
         return any(value.startswith(PLACEHOLDER_PREFIX) for value in values)
 
-    def _log_manual_warnings(
+    def _manual_warnings(
         self,
-        logger: logging.Logger,
         document: PreviewSourceDocument,
         inputs: GlobalInputStatus,
         source_path: Path,
-    ) -> None:
+    ) -> tuple[str | None, tuple[str, ...]]:
         weather_path = self._display_path(inputs.weather_path)
         preview_day = document.preview_date.isoformat()
+        weather_warning: str | None = None
         if inputs.weather_created:
-            logger.warning(
-                "⚠ %s 为新生成天气配置，日期 %s 的天气尚未填写，需要补充；本篇显示“待更新”",
-                weather_path,
-                preview_day,
+            weather_warning = (
+                f"{weather_path} 为新生成天气配置，日期 {preview_day} "
+                "的天气尚未填写，需要补充；本篇显示“待更新”"
             )
         elif inputs.weather_date_added:
-            logger.warning(
-                "⚠ %s 原本缺少日期 %s，已加入全 null 模板；天气尚未填写，需要补充；本篇显示“待更新”",
-                weather_path,
-                preview_day,
+            weather_warning = (
+                f"{weather_path} 原本缺少日期 {preview_day}，已加入全 null 模板；"
+                "天气尚未填写，需要补充；本篇显示“待更新”"
             )
         elif inputs.weather_placeholder:
-            logger.warning(
-                "⚠ %s 日期 %s 为全 null；天气尚未填写，需要补充；本篇显示“待更新”",
-                weather_path,
-                preview_day,
+            weather_warning = (
+                f"{weather_path} 日期 {preview_day} 为全 null；"
+                "天气尚未填写，需要补充；本篇显示“待更新”"
             )
 
+        warnings: list[str] = []
         if document.headline.startswith(PLACEHOLDER_PREFIX):
-            logger.warning(
-                "⚠ %s：标题尚未填写，需要补充；本篇保留占位符",
-                self._display_path(source_path),
+            warnings.append(
+                f"{self._display_path(source_path)}："
+                "标题尚未填写，需要补充；本篇保留占位符"
             )
 
         if inputs.config_created:
-            logger.warning(
-                "⚠ %s 为新生成配置：需要补充编辑、责编、审核；本篇保留占位符",
-                self._display_path(inputs.config_path),
+            warnings.append(
+                f"{self._display_path(inputs.config_path)} 为新生成配置："
+                "需要补充编辑、责编、审核；本篇保留占位符"
             )
 
         for match in document.matches:
@@ -217,12 +215,11 @@ class AutoPreviewPipeline:
             if self._has_placeholder(match.writers):
                 missing.append("作者")
             if missing:
-                logger.warning(
-                    "⚠ 前瞻“%s vs %s”：需要补充%s；本篇保留占位符",
-                    match.home.short_name,
-                    match.away.short_name,
-                    "、".join(missing),
+                warnings.append(
+                    f"前瞻“{match.home.short_name} vs {match.away.short_name}”："
+                    f"需要补充{'、'.join(missing)}；本篇保留占位符"
                 )
+        return weather_warning, tuple(warnings)
 
     @staticmethod
     def _source_state(
@@ -455,16 +452,12 @@ class AutoPreviewPipeline:
         if previews.exists():
             shutil.rmtree(previews)
 
-    async def _prepare_data(
-        self,
-        request: _CombinationRequest,
-        config: CompetitionConfig,
-        paths: _RunPaths,
-        state: dict[str, Any],
-        logger: logging.Logger,
-    ) -> PreviewSourceDocument | None:
-        started = time.monotonic()
-        query_scope_sha256 = self._query_scope_sha256(config)
+    def _load_reusable_data(self, context: _CombinationContext) -> bool:
+        request = context.request
+        config = context.config
+        paths = context.paths
+        state = context.state
+        query_scope_sha256 = self._query_scope_sha256(context.config)
         if paths.source.exists() and not request.override:
             source_state = self._source_state(state, request)
             if source_state["status"] != "ready":
@@ -475,23 +468,14 @@ class AutoPreviewPipeline:
             document = self._load_existing_source(paths.source)
             self._validate_source(document, request, config, source_state)
             write_json(paths.state, state)
-            logger.info(
-                "↷ [1/3] data 验收通过，跳过查询（%.2fs）：%s",
-                time.monotonic() - started,
-                self._display_path(paths.source),
-            )
-            return document
+            context.document = document
+            return True
 
         if not paths.source.exists() and state.get("source") is not None:
             source_state = self._source_state(state, request)
             if not request.override and source_state["status"] == "no_games":
                 if source_state["query_scope_sha256"] == query_scope_sha256:
-                    logger.info(
-                        "↷ [1/3] data 复用已缓存的 no_games 结果（%.2fs）",
-                        time.monotonic() - started,
-                    )
-                    return None
-                logger.info("↷ [1/3] data 赛事 ID 查询范围已变化，重新查询")
+                    return True
                 state["source"] = None
                 state["article"] = None
                 self._remove_stale_data_artifacts(paths)
@@ -509,34 +493,37 @@ class AutoPreviewPipeline:
                 "上游 source.json 缺失但已有下游产物；请使用 --override",
                 stage="data-validation",
             )
+        return False
 
-        logger.info(
-            "▶ [1/3] data 查询赛事 IDs=%s",
-            config.current_tournament_ids,
-        )
-        try:
-            async with self._query_service_factory() as queries:
-                builder = PreviewSourceBuilder(queries, config, logger=logger)
-                queried_source = await builder.build(request.preview_date)
-        except NoGamesForDate:
-            paths.directory.mkdir(parents=True, exist_ok=True)
-            self._remove_stale_data_artifacts(paths)
-            state["source"] = {
-                "status": "no_games",
-                "preview_date": request.preview_date.isoformat(),
-                "competition": request.competition.value,
-                "selected_games": [],
-                "accepted_placeholder_sha256": None,
-                "queried_at": datetime.now(UTC).isoformat(),
-                "query_scope_sha256": query_scope_sha256,
-            }
-            state["article"] = None
-            write_json(paths.state, state)
-            logger.info(
-                "↷ [1/3] data 当日无比赛，已缓存跳过结果（%.2fs）",
-                time.monotonic() - started,
-            )
-            return None
+    def _record_no_games(self, context: _CombinationContext) -> None:
+        request = context.request
+        paths = context.paths
+        state = context.state
+        query_scope_sha256 = self._query_scope_sha256(context.config)
+        paths.directory.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_data_artifacts(paths)
+        state["source"] = {
+            "status": "no_games",
+            "preview_date": request.preview_date.isoformat(),
+            "competition": request.competition.value,
+            "selected_games": [],
+            "accepted_placeholder_sha256": None,
+            "queried_at": datetime.now(UTC).isoformat(),
+            "query_scope_sha256": query_scope_sha256,
+        }
+        state["article"] = None
+        write_json(paths.state, state)
+
+    def _record_queried_data(
+        self,
+        context: _CombinationContext,
+        builder: PreviewSourceBuilder,
+        queried_source: PreviewSourceData,
+    ) -> None:
+        request = context.request
+        paths = context.paths
+        state = context.state
+        query_scope_sha256 = self._query_scope_sha256(context.config)
         paths.directory.mkdir(parents=True, exist_ok=True)
         source_payload = source_to_dict(queried_source)
         article_files = preview_article_files(queried_source)
@@ -546,7 +533,7 @@ class AutoPreviewPipeline:
             override=request.override,
         )
         write_source(paths.source, source_payload)
-        document = parse_preview_document(
+        context.document = parse_preview_document(
             source_payload,
             source_directory=paths.directory,
         )
@@ -564,18 +551,31 @@ class AutoPreviewPipeline:
         }
         state["article"] = None
         write_json(paths.state, state)
-        logger.info(
-            "✓ [1/3] data 完成（%.2fs）：%s 场比赛，%s",
-            time.monotonic() - started,
-            len(document.matches),
-            self._display_path(paths.source),
-        )
-        logger.info(
-            "✓ 已生成 %s 份正文 Markdown：%s",
-            len(article_files),
-            self._display_path(paths.directory / "previews"),
-        )
-        return document
+
+    async def _query_data_group(
+        self,
+        contexts: list[_CombinationContext],
+    ) -> None:
+        if not contexts:
+            return
+        config = contexts[0].config
+        async with self._query_service_factory() as queries:
+            builder = PreviewSourceBuilder(
+                queries,
+                config,
+                logger=contexts[0].logger,
+            )
+            games = await builder.query_current_games()
+            for context in contexts:
+                try:
+                    queried_source = await builder.build(
+                        context.request.preview_date,
+                        games=games,
+                    )
+                except NoGamesForDate:
+                    self._record_no_games(context)
+                    continue
+                self._record_queried_data(context, builder, queried_source)
 
     @staticmethod
     def _render_input_sha256(source: PreviewSourceData) -> str:
@@ -637,7 +637,6 @@ class AutoPreviewPipeline:
         preview_service = PreviewService.from_template(
             self._project_root / "templates" / "qhly_preview_v1" / "template.html",
         )
-        started = time.monotonic()
         existing: Article | None = None
         rebuild_reasons: list[str] = []
         render_article = request.override or not paths.article.exists()
@@ -660,20 +659,14 @@ class AutoPreviewPipeline:
 
         if not render_article:
             assert existing is not None
-            logger.info(
-                "↷ [2/3] article 验收通过，跳过渲染（%.2fs）：%s",
-                time.monotonic() - started,
-                self._display_path(paths.article),
-            )
             return existing
 
         if rebuild_reasons:
             logger.info(
-                "↻ [2/3] article 可覆盖重渲染：%s",
+                "↻ article 可覆盖重渲染：%s（%s）",
+                self._display_path(paths.article),
                 "；".join(dict.fromkeys(rebuild_reasons)),
             )
-        else:
-            logger.info("▶ [2/3] article 渲染模板")
         cover = (
             request.cover
             or (existing.cover if existing is not None else None)
@@ -693,11 +686,6 @@ class AutoPreviewPipeline:
             "cover": article_cover_descriptor(persisted),
         }
         write_json(paths.state, state)
-        logger.info(
-            "✓ [2/3] article 完成（%.2fs）：%s",
-            time.monotonic() - started,
-            self._display_path(paths.article),
-        )
         return persisted
 
     @staticmethod
@@ -856,9 +844,8 @@ class AutoPreviewPipeline:
 
     async def run(self, request: PipelineRequest) -> PipelineResult:
         combination_requests = self._combination_requests(request)
-        contexts: dict[tuple[date, Competition], _CombinationContext] = {}
+        all_contexts: dict[tuple[date, Competition], _CombinationContext] = {}
 
-        # Phase barrier 1: finish data for every combination before any article work.
         for combination in combination_requests:
             config = competition_config(combination.competition)
             paths = self._run_paths(combination)
@@ -867,10 +854,6 @@ class AutoPreviewPipeline:
                 project_root=self._project_root,
             )
             if combination.override:
-                logger.warning(
-                    "⚠ --override 已启用：将从 data 重做到 %s",
-                    combination.stage.value,
-                )
                 state = new_run_state(
                     combination.preview_date,
                     combination.competition,
@@ -884,40 +867,109 @@ class AutoPreviewPipeline:
                     article_directory=paths.article,
                     draft_path=paths.draft,
                 )
-            try:
-                document = await self._prepare_data(
-                    combination,
-                    config,
-                    paths,
-                    state,
-                    logger,
-                )
-            except Exception as exc:
-                logger.error("✗ [1/3] data 失败：%s", exc)
-                raise
-            if document is None:
-                continue
-            inputs = ensure_global_inputs(
-                paths.directory.parent,
-                combination.preview_date,
-                require_complete_config=False,
-            )
-            logger.info("人工数据：source=%s", self._display_path(paths.source))
-            logger.info(
-                "正文 Markdown：%s",
-                self._display_path(paths.directory / "previews"),
-            )
-            self._log_manual_warnings(logger, document, inputs, paths.source)
-            contexts[(combination.preview_date, combination.competition)] = (
+            all_contexts[(combination.preview_date, combination.competition)] = (
                 _CombinationContext(
                     request=combination,
                     config=config,
                     paths=paths,
                     state=state,
                     logger=logger,
-                    document=document,
                 )
             )
+
+        ordered_all_contexts = [all_contexts[key] for key in request.combinations]
+        batch_logger = ordered_all_contexts[0].logger
+        if request.override:
+            batch_logger.warning(
+                "⚠ --override 已启用：将从 data 重做到 %s",
+                request.stage.value,
+            )
+
+        # Phase barrier 1: finish data for every combination before any article work.
+        data_started = time.monotonic()
+        batch_logger.info(
+            "▶ [1/3] data 处理 %s 个组合（%s 个赛事）",
+            len(ordered_all_contexts),
+            len(request.competitions),
+        )
+        pending_by_competition: dict[Competition, list[_CombinationContext]] = {
+            competition: [] for competition in request.competitions
+        }
+        manual_warnings: list[str] = []
+        weather_warning_dates: set[date] = set()
+        try:
+            for context in ordered_all_contexts:
+                if not self._load_reusable_data(context):
+                    pending_by_competition[context.request.competition].append(context)
+
+            for competition in request.competitions:
+                await self._query_data_group(
+                    pending_by_competition[competition],
+                )
+
+            ready_contexts = [
+                context
+                for context in ordered_all_contexts
+                if context.document is not None
+            ]
+            for context in ready_contexts:
+                assert context.document is not None
+                inputs = ensure_global_inputs(
+                    context.paths.directory.parent,
+                    context.request.preview_date,
+                    require_complete_config=False,
+                )
+                weather_warning, warnings = self._manual_warnings(
+                    context.document,
+                    inputs,
+                    context.paths.source,
+                )
+                if (
+                    weather_warning is not None
+                    and context.request.preview_date not in weather_warning_dates
+                ):
+                    manual_warnings.append(weather_warning)
+                    weather_warning_dates.add(context.request.preview_date)
+                manual_warnings.extend(warnings)
+        except Exception as exc:
+            batch_logger.error("✗ [1/3] data 失败：%s", exc)
+            raise
+
+        if ready_contexts:
+            batch_logger.info(
+                "源数据：\n%s",
+                "\n".join(
+                    self._display_path(context.paths.source)
+                    for context in ready_contexts
+                ),
+            )
+            batch_logger.info(
+                "正文 Markdown：\n%s",
+                "\n".join(
+                    self._display_path(context.paths.directory / "previews")
+                    for context in ready_contexts
+                ),
+            )
+        skipped_count = len(ordered_all_contexts) - len(ready_contexts)
+        match_count = sum(
+            len(context.document.matches)
+            for context in ready_contexts
+            if context.document is not None
+        )
+        batch_logger.info(
+            "✓ [1/3] data 完成（%.2fs）：%s 个有效组合，%s 个无比赛，%s 场比赛",
+            time.monotonic() - data_started,
+            len(ready_contexts),
+            skipped_count,
+            match_count,
+        )
+        for warning in manual_warnings:
+            batch_logger.warning("⚠ %s", warning)
+
+        contexts = {
+            (context.request.preview_date, context.request.competition): context
+            for context in ready_contexts
+        }
 
         ordered_contexts = [
             contexts[key] for key in request.combinations if key in contexts
@@ -959,18 +1011,22 @@ class AutoPreviewPipeline:
                 "公众号多图文草稿最多包含 8 篇文章；请缩小日期或赛事范围",
                 stage="publish-validation",
             )
-            for context in ordered_contexts:
-                context.logger.error("✗ [3/3] publish 失败：%s", error)
+            batch_logger.error("✗ [3/3] publish 失败：%s", error)
             raise error
 
         # Phase barrier 2: article work starts only after all data work succeeds.
-        for context in ordered_contexts:
-            inputs = ensure_global_inputs(
-                context.paths.directory.parent,
-                context.request.preview_date,
-                require_complete_config=True,
-            )
-            try:
+        article_started = time.monotonic()
+        batch_logger.info(
+            "▶ [2/3] article 处理 %s 个组合",
+            len(ordered_contexts),
+        )
+        try:
+            for context in ordered_contexts:
+                inputs = ensure_global_inputs(
+                    context.paths.directory.parent,
+                    context.request.preview_date,
+                    require_complete_config=True,
+                )
                 context.article = self._prepare_article(
                     context.request,
                     context.paths,
@@ -978,9 +1034,14 @@ class AutoPreviewPipeline:
                     inputs,
                     context.logger,
                 )
-            except Exception as exc:
-                context.logger.error("✗ [2/3] article 失败：%s", exc)
-                raise
+        except Exception as exc:
+            batch_logger.error("✗ [2/3] article 失败：%s", exc)
+            raise
+        batch_logger.info(
+            "✓ [2/3] article 完成（%.2fs）：%s 篇文章",
+            time.monotonic() - article_started,
+            len(ordered_contexts),
+        )
 
         if request.stage is Stage.ARTICLE:
             next_command = self._next_command(request, Stage.PUBLISH)
@@ -1006,8 +1067,7 @@ class AutoPreviewPipeline:
                 override=request.override,
             )
         except Exception as exc:
-            for context in ordered_contexts:
-                context.logger.error("✗ [3/3] publish 失败：%s", exc)
+            batch_logger.error("✗ [3/3] publish 失败：%s", exc)
             raise
         return PipelineResult(
             status="ok",

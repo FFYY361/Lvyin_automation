@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from datetime import date, datetime
 
 from preview import (
@@ -348,14 +349,32 @@ class PreviewSourceBuilder:
             current_results=results,
         )
 
-    async def build(self, preview_date: date) -> PreviewSourceData:
-        games = await self._queries.query_games(
-            GameQuery(
-                tournament_ids=self._config.current_tournament_ids,
-                match_date=preview_date,
-                include_unfinished=True,
+    async def query_current_games(self) -> tuple[GameSummary, ...]:
+        """Load the configured competition once for batch date filtering."""
+
+        return tuple(
+            await self._queries.query_games(
+                GameQuery(
+                    tournament_ids=self._config.current_tournament_ids,
+                    include_unfinished=True,
+                )
             )
         )
+
+    async def build(
+        self,
+        preview_date: date,
+        *,
+        games: Sequence[GameSummary] | None = None,
+    ) -> PreviewSourceData:
+        if games is None:
+            games = await self._queries.query_games(
+                GameQuery(
+                    tournament_ids=self._config.current_tournament_ids,
+                    match_date=preview_date,
+                    include_unfinished=True,
+                )
+            )
         eligible = [
             game
             for game in games
