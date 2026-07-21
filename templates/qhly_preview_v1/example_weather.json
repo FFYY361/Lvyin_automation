@@ -1,0 +1,14 @@
+{
+  "2026-04-11": {
+    "low_c": 12,
+    "high_c": 23,
+    "wind_direction": "南风",
+    "wind_level": "1级"
+  },
+  "2026-04-12": {
+    "low_c": 11,
+    "high_c": 23,
+    "wind_direction": "南风",
+    "wind_level": "1级"
+  }
+}

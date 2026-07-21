@@ -15,7 +15,7 @@ from .errors import ArtifactValidationError
 from .models import PipelineRequest
 
 
-RUN_SCHEMA_VERSION = 1
+RUN_SCHEMA_VERSION = 2
 DRAFT_SCHEMA_VERSION = 1
 
 
@@ -66,6 +66,10 @@ def write_json(path: Path, payload: object) -> None:
     )
 
 
+def write_text(path: Path, content: str) -> None:
+    _atomic_write(path, content)
+
+
 def write_source(path: Path, payload: Mapping[str, object]) -> None:
     write_json(path, payload)
 
@@ -87,6 +91,10 @@ def _read_object(path: Path, *, stage: str) -> dict[str, Any]:
             f"已有产物必须是 JSON 对象：{path}", stage=stage
         )
     return value
+
+
+def read_json_object(path: Path, *, stage: str) -> dict[str, Any]:
+    return _read_object(path, stage=stage)
 
 
 def new_run_state(request: PipelineRequest) -> dict[str, Any]:
@@ -173,4 +181,3 @@ def load_draft_history(path: Path) -> dict[str, Any]:
             "draft.json.receipts 字段损坏", stage="draft-validation"
         )
     return payload
-

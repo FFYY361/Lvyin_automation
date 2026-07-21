@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shlex
 import sys
 import time
@@ -10,7 +12,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from preview import PreviewError, PreviewService, PreviewSourceData, load_preview_source
+from preview import (
+    PreviewError,
+    PreviewService,
+    PreviewSourceData,
+    PreviewSourceDocument,
+    load_preview_bundle,
+    parse_preview_document,
+)
 from thufootball import THUFootballQueryService
 from wechat_official import (
     Article,
@@ -21,11 +30,14 @@ from wechat_official import (
 
 from .config import CompetitionConfig, competition_config
 from .errors import ArtifactValidationError
+from .inputs import GlobalInputStatus, ensure_global_inputs
 from .logging_utils import configure_logging
 from .models import PipelineRequest, PipelineResult, Stage
 from .source import (
+    PLACEHOLDER_PREFIX,
     PreviewSourceBuilder,
-    contains_placeholders,
+    preview_article_files,
+    preview_data_to_dict,
     source_to_dict,
 )
 from .state import (
@@ -34,22 +46,17 @@ from .state import (
     load_draft_history,
     load_run_state,
     new_run_state,
-    sha256_file,
+    read_json_object,
+    sha256_bytes,
     write_json,
     write_source,
+    write_text,
 )
 
 
 Prompt = Callable[[str], bool]
 ServiceFactory = Callable[[], Any]
-
-
-def _default_prompt(message: str) -> bool:
-    try:
-        answer = input(message).strip().casefold()
-    except EOFError:
-        return False
-    return answer in {"y", "yes"}
+AUTO_PREVIEW_DIGEST = "马杯前瞻"
 
 
 def _quoted_command(arguments: list[str]) -> str:
@@ -81,7 +88,7 @@ class AutoPreviewPipeline:
         self._wechat_service_factory = (
             wechat_service_factory or WechatOfficialService.from_environment
         )
-        self._prompt = prompt or _default_prompt
+        # 保留 prompt 参数以兼容既有调用方；pipeline 已改为仅 warning、不再询问。
         self._logger = logger
 
     def run_directory(self, request: PipelineRequest) -> Path:
@@ -95,14 +102,75 @@ class AutoPreviewPipeline:
     def _next_command(self, request: PipelineRequest, stage: Stage) -> str:
         return _quoted_command(
             [
-                sys.executable,
-                str(self._project_root / "scripts" / "auto_preview.py"),
+                "python",
+                str(Path("scripts") / "auto_preview.py"),
                 request.preview_date.isoformat(),
                 request.competition.value,
                 "--stage",
                 stage.value,
             ]
         )
+
+    def _display_path(self, path: str | Path) -> str:
+        return os.path.relpath(Path(path).resolve(), self._project_root)
+
+    @staticmethod
+    def _has_placeholder(values: tuple[str, ...]) -> bool:
+        return any(value.startswith(PLACEHOLDER_PREFIX) for value in values)
+
+    def _log_manual_warnings(
+        self,
+        logger: logging.Logger,
+        document: PreviewSourceDocument,
+        inputs: GlobalInputStatus,
+        source_path: Path,
+    ) -> None:
+        weather_path = self._display_path(inputs.weather_path)
+        preview_day = document.preview_date.isoformat()
+        if inputs.weather_created:
+            logger.warning(
+                "⚠ %s 为新生成天气配置，日期 %s 的天气尚未填写，需要补充；本篇显示“待更新”",
+                weather_path,
+                preview_day,
+            )
+        elif inputs.weather_date_added:
+            logger.warning(
+                "⚠ %s 原本缺少日期 %s，已加入全 null 模板；天气尚未填写，需要补充；本篇显示“待更新”",
+                weather_path,
+                preview_day,
+            )
+        elif inputs.weather_placeholder:
+            logger.warning(
+                "⚠ %s 日期 %s 为全 null；天气尚未填写，需要补充；本篇显示“待更新”",
+                weather_path,
+                preview_day,
+            )
+
+        if document.headline.startswith(PLACEHOLDER_PREFIX):
+            logger.warning(
+                "⚠ %s：标题尚未填写，需要补充；本篇保留占位符",
+                self._display_path(source_path),
+            )
+
+        if inputs.config_created:
+            logger.warning(
+                "⚠ %s 为新生成配置：需要补充编辑、责编、审核；本篇保留占位符",
+                self._display_path(inputs.config_path),
+            )
+
+        for match in document.matches:
+            missing: list[str] = []
+            if self._has_placeholder(match.preview_paragraphs):
+                missing.append("前瞻内容")
+            if self._has_placeholder(match.writers):
+                missing.append("作者")
+            if missing:
+                logger.warning(
+                    "⚠ 前瞻“%s vs %s”：需要补充%s；本篇保留占位符",
+                    match.home.short_name,
+                    match.away.short_name,
+                    "、".join(missing),
+                )
 
     @staticmethod
     def _source_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -145,7 +213,7 @@ class AutoPreviewPipeline:
 
     @staticmethod
     def _validate_source(
-        source: PreviewSourceData,
+        source: PreviewSourceData | PreviewSourceDocument,
         request: PipelineRequest,
         config: CompetitionConfig,
         source_state: dict[str, Any],
@@ -182,15 +250,15 @@ class AutoPreviewPipeline:
     @staticmethod
     def _article_state(state: dict[str, Any]) -> dict[str, Any]:
         article_state = state.get("article")
-        required = {"source_sha256", "template_version", "cover"}
+        required = {"input_sha256", "template_version", "cover"}
         if not isinstance(article_state, dict) or set(article_state) != required:
             raise ArtifactValidationError(
                 "article 已存在但 run.json.article 缺失或损坏",
                 stage="article-validation",
             )
-        if not isinstance(article_state.get("source_sha256"), str):
+        if not isinstance(article_state.get("input_sha256"), str):
             raise ArtifactValidationError(
-                "run.json.article.source_sha256 字段损坏",
+                "run.json.article.input_sha256 字段损坏",
                 stage="article-validation",
             )
         if not isinstance(article_state.get("template_version"), str):
@@ -212,9 +280,12 @@ class AutoPreviewPipeline:
         return article_state
 
     @staticmethod
-    def _load_existing_source(path: Path) -> PreviewSourceData:
+    def _load_existing_source(path: Path) -> PreviewSourceDocument:
         try:
-            return load_preview_source(path)
+            return parse_preview_document(
+                read_json_object(path, stage="data-validation"),
+                source_directory=path.resolve().parent,
+            )
         except (PreviewError, OSError, ValueError) as exc:
             raise ArtifactValidationError(
                 f"已有 source.json 验收失败：{exc}",
@@ -231,10 +302,45 @@ class AutoPreviewPipeline:
                 stage="article-validation",
             ) from exc
 
+    def _write_preview_articles(
+        self,
+        run_directory: Path,
+        articles: dict[str, str],
+        *,
+        override: bool,
+    ) -> None:
+        expected_paths = {
+            (run_directory / reference).resolve(): content
+            for reference, content in articles.items()
+        }
+        previews_directory = (run_directory / "previews").resolve()
+        previews_directory.mkdir(parents=True, exist_ok=True)
+        for path in expected_paths:
+            if path.parent != previews_directory:
+                raise ArtifactValidationError(
+                    f"Markdown 路径越出运行目录：{self._display_path(path)}",
+                    stage="data-build",
+                )
+            if path.exists() and not override:
+                raise ArtifactValidationError(
+                    "source.json 尚未生成，但正文文件已存在："
+                    f"{self._display_path(path)}；请使用 --override 明确覆盖",
+                    stage="data-validation",
+                )
+        if override:
+            for existing in previews_directory.glob("*.md"):
+                if existing.resolve() not in expected_paths:
+                    existing.unlink()
+        for path, content in expected_paths.items():
+            write_text(path, content)
+
     async def run(self, request: PipelineRequest) -> PipelineResult:
         config = competition_config(request.competition)
         run_directory = self.run_directory(request)
-        logger = self._logger or configure_logging(run_directory)
+        logger = self._logger or configure_logging(
+            run_directory,
+            project_root=self._project_root,
+        )
         source_path = run_directory / "source.json"
         article_directory = run_directory / "article"
         state_path = run_directory / "run.json"
@@ -258,12 +364,12 @@ class AutoPreviewPipeline:
         data_started = time.monotonic()
         if source_path.exists() and not request.override:
             source_state = self._source_state(state)
-            source = self._load_existing_source(source_path)
-            self._validate_source(source, request, config, source_state)
+            document = self._load_existing_source(source_path)
+            self._validate_source(document, request, config, source_state)
             logger.info(
                 "↷ [1/3] data 验收通过，跳过查询（%.2fs）：%s",
                 time.monotonic() - data_started,
-                source_path,
+                self._display_path(source_path),
             )
         else:
             if (
@@ -294,9 +400,20 @@ class AutoPreviewPipeline:
             )
             async with self._query_service_factory() as queries:
                 builder = PreviewSourceBuilder(queries, config, logger=logger)
-                source = await builder.build(request.preview_date)
+                queried_source = await builder.build(request.preview_date)
             run_directory.mkdir(parents=True, exist_ok=True)
-            write_source(source_path, source_to_dict(source))
+            source_payload = source_to_dict(queried_source)
+            article_files = preview_article_files(queried_source)
+            self._write_preview_articles(
+                run_directory,
+                article_files,
+                override=request.override,
+            )
+            write_source(source_path, source_payload)
+            document = parse_preview_document(
+                source_payload,
+                source_directory=run_directory,
+            )
             state["source"] = {
                 "selected_games": [
                     {"game_id": game_id, "tournament_id": tournament_id}
@@ -309,9 +426,26 @@ class AutoPreviewPipeline:
             logger.info(
                 "✓ [1/3] data 完成（%.2fs）：%s 场比赛，%s",
                 time.monotonic() - data_started,
-                len(source.matches),
-                source_path,
+                len(document.matches),
+                self._display_path(source_path),
             )
+            logger.info(
+                "✓ 已生成 %s 份正文 Markdown：%s",
+                len(article_files),
+                self._display_path(run_directory / "previews"),
+            )
+
+        inputs = ensure_global_inputs(
+            run_directory.parent,
+            request.preview_date,
+            require_complete_config=request.stage is not Stage.DATA,
+        )
+        logger.info("人工数据：source=%s", self._display_path(source_path))
+        logger.info(
+            "正文 Markdown：%s",
+            self._display_path(run_directory / "previews"),
+        )
+        self._log_manual_warnings(logger, document, inputs, source_path)
 
         if request.stage is Stage.DATA:
             return PipelineResult(
@@ -321,30 +455,20 @@ class AutoPreviewPipeline:
                 source_path=source_path,
             )
 
-        source_state = self._source_state(state)
-        source_sha256 = sha256_file(source_path)
-        accepted_placeholder_sha256: str | None = None
-        if (
-            contains_placeholders(source)
-            and source_state.get("accepted_placeholder_sha256") != source_sha256
-        ):
-            proceed = self._prompt(
-                "source.json 仍含待填写占位符，是否保留占位符继续？[y/N] "
-            )
-            if not proceed:
-                next_command = self._next_command(request, Stage.ARTICLE)
-                logger.info("↷ 已暂停；请编辑 %s", source_path)
-                logger.info("继续命令：%s", next_command)
-                return PipelineResult(
-                    status="paused",
-                    completed_stage=Stage.DATA,
-                    run_directory=run_directory,
-                    source_path=source_path,
-                    next_command=next_command,
-                )
-            accepted_placeholder_sha256 = source_sha256
-            logger.info("✓ 已确认保留当前 source.json 中的占位符")
-
+        source = load_preview_bundle(
+            source_path,
+            inputs.weather_path,
+            inputs.config_path,
+        )
+        render_payload = preview_data_to_dict(source)
+        input_sha256 = sha256_bytes(
+            json.dumps(
+                render_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
         preview_service = PreviewService.from_template(
             self._project_root / "templates" / "qhly_preview_v1" / "template.html",
         )
@@ -360,13 +484,17 @@ class AutoPreviewPipeline:
                 rebuild_reasons.append(f"article 无法加载（{exc}）")
             if existing_article is not None:
                 actual_cover = article_cover_descriptor(existing_article)
+                if existing_article.digest != AUTO_PREVIEW_DIGEST:
+                    rebuild_reasons.append("article 摘要不是固定值“马杯前瞻”")
                 try:
                     article_state = self._article_state(state)
                 except ArtifactValidationError as exc:
                     rebuild_reasons.append(f"run.json.article 无法验收（{exc}）")
                 else:
-                    if article_state["source_sha256"] != source_sha256:
-                        rebuild_reasons.append("source 指纹已变化")
+                    if article_state["input_sha256"] != input_sha256:
+                        rebuild_reasons.append(
+                            "source、正文 Markdown、天气或人员配置已变化"
+                        )
                     if (
                         article_state["template_version"]
                         != preview_service.template_version
@@ -384,15 +512,10 @@ class AutoPreviewPipeline:
         if not render_article:
             assert existing_article is not None
             article = existing_article
-            if accepted_placeholder_sha256 is not None:
-                source_state["accepted_placeholder_sha256"] = (
-                    accepted_placeholder_sha256
-                )
-                write_json(state_path, state)
             logger.info(
                 "↷ [2/3] article 验收通过，跳过渲染（%.2fs）：%s",
                 time.monotonic() - article_started,
-                article_directory,
+                self._display_path(article_directory),
             )
         else:
             if rebuild_reasons:
@@ -413,24 +536,21 @@ class AutoPreviewPipeline:
                 source,
                 cover=cover,
                 author="清华绿茵",
+                digest=AUTO_PREVIEW_DIGEST,
             )
             article.save(article_directory)
             persisted_article = Article.load(article_directory)
             state["article"] = {
-                "source_sha256": source_sha256,
+                "input_sha256": input_sha256,
                 "template_version": preview_service.template_version,
                 "cover": article_cover_descriptor(persisted_article),
             }
-            if accepted_placeholder_sha256 is not None:
-                source_state["accepted_placeholder_sha256"] = (
-                    accepted_placeholder_sha256
-                )
             write_json(state_path, state)
             article = persisted_article
             logger.info(
                 "✓ [2/3] article 完成（%.2fs）：%s",
                 time.monotonic() - article_started,
-                article_directory,
+                self._display_path(article_directory),
             )
 
         if request.stage is Stage.ARTICLE:

@@ -9,18 +9,20 @@ from pathlib import Path
 
 from wechat_official import CoverFile, CoverMediaId, WechatArticleError
 
+from .bundle import load_preview_bundle
 from .errors import PreviewError
-from .models import load_preview_source
 from .service import PreviewService
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="本地校验前瞻 data 并渲染文章目录")
+    parser = argparse.ArgumentParser(description="本地合成三份前瞻 JSON 并渲染文章目录")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    render = subparsers.add_parser("render", help="从模板和 data 生成完整文章目录")
+    render = subparsers.add_parser("render", help="从模板和三份 JSON 生成文章目录")
     render.add_argument("template", help="HTML 模板路径")
-    render.add_argument("--source", required=True, help="前瞻 JSON data 路径")
+    render.add_argument("--source", required=True, help="前瞻 source.json 路径")
+    render.add_argument("--weather", required=True, help="全局 weather.json 路径")
+    render.add_argument("--config", required=True, help="全局 config.json 路径")
     render.add_argument("--output", required=True, help="文章输出目录")
     render.add_argument("--version", help="显式模板版本")
     cover = render.add_mutually_exclusive_group(required=True)
@@ -35,7 +37,7 @@ def _parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> dict[str, object]:
     if args.command != "render":
         raise AssertionError("unreachable command")
-    source = load_preview_source(args.source)
+    source = load_preview_bundle(args.source, args.weather, args.config)
     service = PreviewService.from_template(args.template, version=args.version)
     cover = (
         CoverFile(Path(args.cover))

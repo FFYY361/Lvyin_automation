@@ -1,27 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.qhly/templates/qhly-preview-source-v1.schema.json",
-  "title": "清华绿茵比赛前瞻源数据 v1",
+  "$id": "https://local.qhly/templates/qhly-preview-source-v2.schema.json",
+  "title": "清华绿茵比赛前瞻人工源数据 v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "column", "preview_date", "headline", "matches", "credits"],
+  "required": ["schema_version", "column", "preview_date", "headline", "previews", "matches"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "column": {"$ref": "#/$defs/columnConfig"},
     "preview_date": {"type": "string", "format": "date"},
     "headline": {"$ref": "#/$defs/nonEmptyString"},
-    "weather": {
-      "anyOf": [
-        {"$ref": "#/$defs/weather"},
-        {"type": "null"}
-      ]
+    "previews": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/nonEmptyString"},
+      "additionalProperties": {"$ref": "#/$defs/previewEntry"}
     },
     "matches": {
       "type": "array",
       "minItems": 1,
       "items": {"$ref": "#/$defs/previewMatch"}
-    },
-    "credits": {"$ref": "#/$defs/credits"}
+    }
   },
   "$defs": {
     "nonEmptyString": {
@@ -52,17 +51,22 @@
       "minItems": 1,
       "items": {"$ref": "#/$defs/nonEmptyString"}
     },
-    "weather": {
+    "previewEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["forecast_date", "low_c", "high_c", "wind_direction", "wind_level"],
+      "required": ["authors"],
       "properties": {
-        "forecast_date": {"type": "string", "format": "date"},
-        "low_c": {"type": "integer"},
-        "high_c": {"type": "integer"},
-        "wind_direction": {"$ref": "#/$defs/nonEmptyString"},
-        "wind_level": {"$ref": "#/$defs/nonEmptyString"}
-      }
+        "article": {"$ref": "#/$defs/nonEmptyString"},
+        "article_file": {
+          "type": "string",
+          "pattern": "^previews/[^<>:\"/\\\\|?*]+vs[^<>:\"/\\\\|?*]+\\.md$"
+        },
+        "authors": {"$ref": "#/$defs/nameArray"}
+      },
+      "oneOf": [
+        {"required": ["article"]},
+        {"required": ["article_file"]}
+      ]
     },
     "teamRef": {
       "type": "object",
@@ -135,9 +139,7 @@
         "venue",
         "home",
         "away",
-        "head_to_head",
-        "preview_paragraphs",
-        "writers"
+        "head_to_head"
       ],
       "properties": {
         "game_id": {"$ref": "#/$defs/gameId"},
@@ -154,23 +156,7 @@
         "head_to_head": {
           "type": "array",
           "items": {"$ref": "#/$defs/playedMatch"}
-        },
-        "preview_paragraphs": {
-          "type": "array",
-          "minItems": 1,
-          "items": {"$ref": "#/$defs/nonEmptyString"}
-        },
-        "writers": {"$ref": "#/$defs/nameArray"}
-      }
-    },
-    "credits": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["editors", "reviewers", "approvers"],
-      "properties": {
-        "editors": {"$ref": "#/$defs/nameArray"},
-        "reviewers": {"$ref": "#/$defs/nameArray"},
-        "approvers": {"$ref": "#/$defs/nameArray"}
+        }
       }
     }
   }

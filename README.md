@@ -5,10 +5,14 @@
 `thufootball_automation` 用于搭建所有与 THUFootball 相关的自动化任务。仓库以可组合的中层 Service 为核心，目前提供：
 
 - `thufootball`：只读查询比赛、球队赛果、赛事成绩和交锋记录。
-- `preview`：把结构化 data 渲染为文章，是当前实现的一项具体自动化能力，并不限定整个库的用途。
+- `preview`：把结构化前瞻 data 渲染为前瞻文章。
 - `wechat_official`：接收完整文章，处理图片和封面，并创建微信公众号草稿。
 
-当前不提供自动串联三者的管线。THUFootball 侧不会修改服务端数据；`preview` 完全在本地运行；微信公众号侧只创建草稿，不自动发布或群发。模块边界见 [项目架构](docs/architecture.md)。
+THUFootball 侧不会修改服务端数据；`preview` 完全在本地运行；微信公众号侧只创建草稿，不自动发布或群发。模块边界见 [项目架构](docs/architecture.md)。
+
+当前提供一个联动管线:
+
+- `auto_preview`: 自动查询、渲染、创建前瞻草稿。
 
 ## 环境
 
@@ -36,9 +40,81 @@ preview --help
 wechat-official --help
 ```
 
-各模块的凭据要求分别写在对应章节。`preview` 不需要 `.env`。
+需要在`./.env` 中配置thufootball和公众号所需要的权限凭证，详见 格式详见`./.env.example`, 注意保密！thufootball凭证需要你自己在浏览器中获取，公众号凭证可以向我索要。
 
-## thufootball
+## 自动化前瞻 auto_preview
+
+`auto_preview` 按日期和赛事串联 `thufootball`、`preview` 与 `wechat_official`。入口是纯 Python 脚本：
+
+```powershell
+python scripts/auto_preview.py 2026-04-11 female
+python scripts/auto_preview.py 2026-04-11 male --stage data
+python scripts/auto_preview.py 2026-04-11 futsal --stage publish
+```
+
+赛事参数仅支持 `male`、`female`、`futsal`。`--stage` 支持：
+
+| stage | 行为 |
+| --- | --- |
+| `data` | 读取固定赛事 ID，生成前瞻文章所需的原始数据 |
+| `article` | 完成 data 后渲染 Article；这是默认值 |
+| `publish` | 完成前两阶段后创建微信公众号草稿 |
+
+运行产物位于 `runs/auto_preview/YYYY-MM-DD_赛事/`。自动生成data后，需要填写以下人工内容：
+
+- `runs/auto_preview/config.json`：长期复用编辑、责编和审核，仅需填写一次;
+- `runs/auto_preview/weather.json`：按日期填写天气；
+- 运行目录内的 `source.json`：填写标题和每场作者；
+- 运行目录内的 `previews/*.md`：直接粘贴每场前瞻正文。
+
+首次运行时，如果 `weather.json` 不存在或缺少当日天气，会创建当前日期的全 `null` 模板；如果 `config.json` 不存在，会创建带有编辑、责编和审核占位符的模板。Pipeline 会分别 warning 天气、标题、新建人员配置，以及每场尚未填写的前瞻内容和作者。天气必须全 `null` 或全非 `null`，若前者，文章中天气使用占位符。人工修改后的 `config.json` 中，`editors`、`reviewers`、`approvers` 均必须是非空数组。
+
+新版 `source.json` 的 `schema_version` 为 `2`。
+
+关于前瞻正文，顶层 `previews` 使用 `主队简称 vs 客队简称` 映射到正文文件和作者，例如：
+
+```json
+{
+  "headline": "本周比赛前瞻",
+  "previews": {
+    "集电 vs 美院": {
+      "article_file": "previews/集电vs美院.md",
+      "authors": ["张三", "李四"]
+    }
+  }
+}
+```
+
+data 阶段按“主队简称vs客队简称”自动生成 Markdown 文件名，不含空格，例如 `集电vs美院.md`。直接在文件中粘贴多段正文即可；一个或多个空白行表示分段，内容始终按纯文本转义，不解析 Markdown HTML。
+
+不传封面时自动使用随包提供的“默认封面 / 发布前请替换”图片；也可以显式指定本地封面或已有公众号永久素材：
+
+```powershell
+python scripts/auto_preview.py 2026-04-11 female --cover path/to/cover.png
+python scripts/auto_preview.py 2026-04-11 female --cover-media-id MEDIA_ID
+```
+
+data 阶段完成后，可以人工填写或修改 `weather.json`、`config.json`、`source.json` 和 `previews/*.md`，data 内容受到保护，若不开启 `--override`，不会自动覆盖渲染。若 data 内容发生变化，则 article 阶段会自动重新渲染，无论是否开启 `--override`。
+
+```powershell
+python scripts/auto_preview.py 2026-04-11 female --stage article
+```
+
+`--override` 会从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json` 和正文 Markdown，仅在确实需要重新查询数据时使用；它不会覆盖全局 `weather.json` 或 `config.json`。`publish` 会复用与当前 Article 完全匹配的草稿回执；Article 变化后则创建新草稿，并在 `draft.json` 中保留旧回执。
+
+`publish` 只创建公众号草稿，不正式发布或群发。每次运行的阶段日志追加到对应目录的 `auto_preview.log`，草稿回执历史保存在 `draft.json`。
+
+失败时终端和日志会输出错误类别、失败阶段、异常类型、安全上下文、是否可重试以及处置建议。批量赛事查询失败会按赛事 ID 展开子错误，以区分权限、认证、网络、限流、远端数据与本地校验问题；不会记录凭据、令牌或底层异常的完整消息。
+
+球队名称和简称优先采用 `src/thufootball/notes/teams.json` 中由院系信息汇总表维护的官方值，官方简称不受长度限制。未登记球队才采用 `GameSummary` 中长度不超过 5 个字符的数据库 `brief_name`；数据库简称缺失或过长时，改用球队全称前两个字符并记录 warning。`src/auto_preview/source.py` 顶层的 `CURRENT_RESULTS_TEAM_ALWAYS_HOME` 默认为 `True`，控制是否将每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
+
+比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；交手记录以“赛季-等级”标识赛事，例如 `23-24-甲`、`22-23-甲`，近三年没有直接交手记录时显示“无”。已有 Article 会在 source 或模板变化后自动重新渲染。
+
+---
+> **以下内容是 GPT 写的，关于三个中层 service 的说明，没有进行过人工检查。若你是一个使用者，那么你只读到这里就可以了。若你想要进行二次开发，请提示你的 AI 配合代码确认真实用法和行为。**
+---
+
+## service/thufootball
 
 `thufootball` 提供通用的 THUFootball 领域查询，不包含文章或公众号逻辑。
 
@@ -102,7 +178,7 @@ asyncio.run(main())
 
 完整查询规则见 [THUFootball 查询能力实现设计](docs/thufootball/thufootball_query_implementation.md)，底层接口字段见 [THUFootball HTTP API 清单](docs/thufootball/thufootball_http_api_inventory.md)。
 
-## preview
+## service/preview
 
 `PreviewService` 校验结构化 data、渲染模板并生成统一 `Article`。该过程纯本地运行。
 
@@ -113,6 +189,8 @@ asyncio.run(main())
 ```powershell
 preview render templates/qhly_preview_v1/template.html `
   --source templates/qhly_preview_v1/example_data.json `
+  --weather templates/qhly_preview_v1/example_weather.json `
+  --config templates/qhly_preview_v1/example_config.json `
   --cover tmp\wechat-test-cover.png `
   --version qhly-preview-v1 `
   --output tmp/qhly_preview_v1/article
@@ -127,10 +205,14 @@ preview render templates/qhly_preview_v1/template.html `
 ```python
 from pathlib import Path
 
-from preview import PreviewService, load_preview_source
+from preview import PreviewService, load_preview_bundle
 from wechat_official import CoverFile
 
-source = load_preview_source("templates/qhly_preview_v1/example_data.json")
+source = load_preview_bundle(
+    "templates/qhly_preview_v1/example_data.json",
+    "templates/qhly_preview_v1/example_weather.json",
+    "templates/qhly_preview_v1/example_config.json",
+)
 service = PreviewService.from_template(
     "templates/qhly_preview_v1/template.html",
     version="qhly-preview-v1",
@@ -155,9 +237,9 @@ article.save("tmp/qhly_preview_v1/article")
 | `digest` | 文章摘要，可为空 |
 | `source_url` | “阅读原文”链接，可为空 |
 
-data 契约、模板语法和文章目录说明见 [前瞻模板与渲染教程](docs/preview/preview_template_tutorial.md)，当前模板字段见 [qhly_preview_v1 模板说明](templates/qhly_preview_v1/README.md)。
+三文件契约、模板语法和文章目录说明见 [前瞻模板与渲染教程](docs/preview/preview_template_tutorial.md)，当前模板字段见 [qhly_preview_v1 模板说明](templates/qhly_preview_v1/README.md)。
 
-## wechat_official
+## service/wechat_official
 
 `WechatOfficialService` 不接收模板或前瞻 data，只接收完整 `Article` 或由 `Article.save()` 生成的文章目录。
 
@@ -203,46 +285,3 @@ asyncio.run(main())
 评论默认关闭；需要时使用 `create_draft(article, open_comments=True)`，仅粉丝评论还需同时传入 `fans_only_comments=True`。正文图片当前支持允许域名的 HTTPS 图片和 `data:` 图片，不读取本地正文资源路径。
 
 凭据、IP 白名单、图片与草稿排错见 [微信公众号草稿教程](docs/wechat_official/wechat_official_draft_tutorial.md)。
-
-## 自动化前瞻 auto_preview
-
-`auto_preview` 按日期和赛事串联 `thufootball`、`preview` 与 `wechat_official`。入口是纯 Python 脚本，可在 Windows、macOS 和 Linux 使用：
-
-```powershell
-python scripts/auto_preview.py 2026-04-11 female
-python scripts/auto_preview.py 2026-04-11 male --stage data
-python scripts/auto_preview.py 2026-04-11 futsal --stage publish
-```
-
-赛事参数仅支持 `male`、`female`、`futsal`。`--stage` 支持：
-
-| stage | 行为 |
-| --- | --- |
-| `data` | 读取固定赛事 ID，生成 `source.json` |
-| `article` | 完成 data 后渲染 Article；这是默认值 |
-| `publish` | 完成前两阶段后创建微信公众号草稿 |
-
-运行产物位于 `runs/auto_preview/YYYY-MM-DD_赛事/`。新生成的 `source.json` 中，标题、前瞻段落和人员字段带有 `【待填写】` 占位符。进入 article 前可以选择保留占位符继续，也可以暂停、编辑 JSON 后重新运行命令。
-
-不传封面时自动使用随包提供的“默认封面 / 发布前请替换”图片；也可以显式指定本地封面或已有公众号永久素材：
-
-```powershell
-python scripts/auto_preview.py 2026-04-11 female --cover path/to/cover.png
-python scripts/auto_preview.py 2026-04-11 female --cover-media-id MEDIA_ID
-```
-
-`source.json` 是受保护的人工数据：非 override 模式只校验并复用，不会重新查询或覆盖。`article/` 是可重建产物：当 `source.json`、模板或显式指定的封面发生变化，或者已有 Article 无法加载时，会自动覆盖渲染，不需要 `--override`。因此，手工修改 source 后直接重新运行 article 命令即可：
-
-```powershell
-python scripts/auto_preview.py 2026-04-11 female --stage article
-```
-
-`--override` 会从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json`，仅在确实需要重新查询数据时使用。`publish` 会复用与当前 Article 完全匹配的草稿回执；Article 变化后则创建新草稿，并在 `draft.json` 中保留旧回执。
-
-`publish` 只创建公众号草稿，不正式发布或群发。每次运行的阶段日志追加到对应目录的 `auto_preview.log`，草稿回执历史保存在 `draft.json`。
-
-失败时终端和日志会输出错误类别、失败阶段、异常类型、安全上下文、是否可重试以及处置建议。批量赛事查询失败会按赛事 ID 展开子错误，以区分权限、认证、网络、限流、远端数据与本地校验问题；不会记录凭据、令牌或底层异常的完整消息。
-
-球队名称和简称优先采用 `src/thufootball/notes/teams.json` 中由院系信息汇总表维护的官方值，官方简称不受长度限制。未登记球队才采用 `GameSummary` 中长度不超过 5 个字符的数据库 `brief_name`；数据库简称缺失或过长时，改用球队全称前两个字符并记录 warning。`src/auto_preview/source.py` 顶层的 `CURRENT_RESULTS_TEAM_ALWAYS_HOME` 默认为 `True`，控制是否将每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
-
-比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；交手记录以“赛季-等级”标识赛事，例如 `23-24-甲`、`22-23-甲`，近三年没有直接交手记录时显示“无”。已有 Article 会在 source 或模板变化后自动重新渲染。

@@ -34,7 +34,7 @@ from auto_preview.diagnostics import failure_lines
 from auto_preview.logging_utils import configure_logging
 from auto_preview.source import PreviewSourceBuilder
 from auto_preview.state import sha256_file
-from preview import SeasonOutcome
+from preview import PreviewValidationError, SeasonOutcome
 from preview.template import _head_to_head_line
 from thufootball import (
     BatchQueryError,
@@ -324,9 +324,13 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
                 for result in source.matches[0].away.current_results
             )
         )
-        self.assertEqual(
-            sum("2022~2023 无法获取排名，按未参赛展示" in item for item in handler.messages),
-            2,
+        self.assertFalse(
+            any(
+                "按未参赛展示" in message
+                or "current_results 查询" in message
+                or "current_results 缓存命中" in message
+                for message in handler.messages
+            )
         )
 
     def test_current_tournament_names_are_fixed_short_labels(self) -> None:
@@ -550,16 +554,30 @@ class LoggingTests(unittest.TestCase):
 
     def test_file_log_is_utf8_plain_text_without_ansi(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_directory = (
+                root / "runs" / "auto_preview" / "2026-04-11_female"
+            )
             with redirect_stderr(StringIO()):
-                logger = configure_logging(Path(directory))
-                logger.warning("⚠ [1/3] 测试日志")
+                logger = configure_logging(
+                    run_directory,
+                    project_root=root,
+                )
+                logger.warning("⚠ [1/3] 测试日志：%s", run_directory)
             for handler in logger.handlers:
                 handler.flush()
-            content = (Path(directory) / "auto_preview.log").read_text(encoding="utf-8")
+            content = (run_directory / "auto_preview.log").read_text(
+                encoding="utf-8"
+            )
             for handler in tuple(logger.handlers):
                 logger.removeHandler(handler)
                 handler.close()
         self.assertIn("[1/3] 测试日志", content)
+        self.assertIn(
+            str(Path("runs") / "auto_preview" / "2026-04-11_female"),
+            content,
+        )
+        self.assertNotIn(str(root.resolve()), content)
         self.assertNotIn("\x1b", content)
 
     def test_batch_permission_error_has_actionable_child_details(self) -> None:
@@ -616,7 +634,10 @@ class LoggingTests(unittest.TestCase):
         self.assertIn("底层异常=OSError", network)
         self.assertNotIn("sensitive low-level message", network)
         self.assertIn("类别：本地产物校验错误", local)
-        self.assertIn("--override 仅用于重新查询并覆盖 source.json", local)
+        self.assertIn(
+            "--override 仅用于重新查询并覆盖 source 和正文 Markdown",
+            local,
+        )
         self.assertNotIn("secret-session", redacted)
         self.assertNotIn("secret-token", redacted)
         self.assertEqual(redacted.count("<redacted>"), 2)
@@ -647,13 +668,46 @@ class _FakeWechat:
 
 
 class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
-    def _root(self, directory: str) -> Path:
+    def _root(self, directory: str, *, with_global_inputs: bool = True) -> Path:
         root = Path(directory)
         template_directory = root / "templates" / "qhly_preview_v1"
         template_directory.mkdir(parents=True)
         shutil.copyfile(
             _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "template.html",
             template_directory / "template.html",
+        )
+        if not with_global_inputs:
+            return root
+        inputs_directory = root / "runs" / "auto_preview"
+        inputs_directory.mkdir(parents=True)
+        (inputs_directory / "weather.json").write_text(
+            json.dumps(
+                {
+                    "2026-04-11": {
+                        "low_c": None,
+                        "high_c": None,
+                        "wind_direction": None,
+                        "wind_level": None,
+                    }
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (inputs_directory / "config.json").write_text(
+            json.dumps(
+                {
+                    "editors": ["测试编辑"],
+                    "reviewers": ["测试责编"],
+                    "approvers": ["测试审核"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
         return root
 
@@ -708,6 +762,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             article = Article.load(first.article_directory)
             self.assertIsInstance(article.cover, CoverFile)
             self.assertEqual(article.cover.path.name, "cover.png")
+            self.assertEqual(article.digest, "马杯前瞻")
 
             reused = await runner.run(
                 PipelineRequest(
@@ -742,15 +797,16 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(len(history["receipts"]), 3)
 
-    async def test_pause_edit_source_and_resume_without_querying_again(self) -> None:
+    async def test_placeholders_warn_and_continue_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
             queries = _FakeQueries()
-            logger, _ = _logger()
+            logger, handler = _logger()
+            prompts: list[str] = []
             runner = AutoPreviewPipeline(
                 project_root=root,
                 query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: False,
+                prompt=lambda message: prompts.append(message) or False,
                 logger=logger,
             )
             request = PipelineRequest(
@@ -759,11 +815,21 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 Stage.ARTICLE,
             )
 
-            paused = await runner.run(request)
-            self.assertEqual(paused.status, "paused")
-            self.assertFalse((paused.run_directory / "article").exists())
+            initial = await runner.run(request)
+            self.assertEqual(initial.status, "ok")
+            self.assertTrue(initial.article_directory.is_dir())
+            self.assertEqual(prompts, [])
+            self.assertTrue(
+                any("标题尚未填写" in message for message in handler.messages)
+            )
+            self.assertTrue(
+                any(
+                    "需要补充前瞻内容、作者" in message
+                    for message in handler.messages
+                )
+            )
 
-            raw = json.loads(paused.source_path.read_text(encoding="utf-8"))
+            raw = json.loads(initial.source_path.read_text(encoding="utf-8"))
 
             def fill(value):
                 if isinstance(value, str) and value.startswith("【待填写"):
@@ -774,10 +840,15 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                     return {key: fill(item) for key, item in value.items()}
                 return value
 
-            paused.source_path.write_text(
+            initial.source_path.write_text(
                 json.dumps(fill(raw), ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
+            for preview in raw["previews"].values():
+                (initial.run_directory / preview["article_file"]).write_text(
+                    "已填写的前瞻正文。\n",
+                    encoding="utf-8",
+                )
             resumed = await runner.run(request)
 
             self.assertEqual(resumed.status, "ok")
@@ -825,17 +896,107 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(
                 article.content_fingerprint, before_article.content_fingerprint
             )
-            self.assertEqual(
-                state["article"]["source_sha256"], sha256_file(complete.source_path)
-            )
+            self.assertEqual(len(state["article"]["input_sha256"]), 64)
+            self.assertNotIn("source_sha256", state["article"])
             self.assertEqual(
                 state["article"]["cover"]["sha256"],
                 sha256_file(article.cover.path),
             )
             self.assertEqual(len(queries.game_queries), 1)
             self.assertTrue(
-                any("source 指纹已变化" in message for message in handler.messages)
+                any(
+                    "source、正文 Markdown、天气或人员配置已变化" in message
+                    for message in handler.messages
+                )
             )
+    async def test_edited_markdown_rebuilds_article_without_querying_again(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, handler = _logger()
+            prompts: list[str] = []
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda message: prompts.append(message) or True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.ARTICLE,
+                override=True,
+            )
+            complete = await runner.run(request)
+            before = Article.load(complete.article_directory)
+            raw = json.loads(complete.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            markdown_path = complete.run_directory / preview["article_file"]
+            markdown_path.write_text(
+                "第一段直接粘贴的正文。\n\n第二段直接粘贴的正文。\n",
+                encoding="utf-8",
+            )
+
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+
+            article = Article.load(rebuilt.article_directory)
+            self.assertIn("第一段直接粘贴的正文。", article.body_html)
+            self.assertIn("第二段直接粘贴的正文。", article.body_html)
+            self.assertNotEqual(
+                article.content_fingerprint,
+                before.content_fingerprint,
+            )
+            self.assertEqual(len(queries.game_queries), 1)
+            self.assertEqual(prompts, [])
+            self.assertTrue(
+                any(
+                    "source、正文 Markdown、天气或人员配置已变化" in message
+                    for message in handler.messages
+                )
+            )
+            await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+            self.assertEqual(prompts, [])
+
+    async def test_missing_markdown_is_not_recreated_without_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, handler = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.DATA,
+            )
+            complete = await runner.run(request)
+            raw = json.loads(complete.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            markdown_path = complete.run_directory / preview["article_file"]
+            markdown_path.unlink()
+
+            with self.assertRaises(ArtifactValidationError) as caught:
+                await runner.run(request)
+
+            self.assertIn("无法读取 Markdown 文件", str(caught.exception))
+            self.assertFalse(markdown_path.exists())
+            self.assertEqual(len(queries.game_queries), 1)
 
     async def test_invalid_article_is_rebuilt_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -913,6 +1074,596 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(
                 any("模板指纹已变化" in message for message in handler.messages)
             )
+
+    async def test_data_writes_schema_v2_manual_document(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, handler = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+
+            result = await runner.run(
+                PipelineRequest(
+                    datetime(2026, 4, 11).date(),
+                    Competition.FEMALE,
+                    Stage.DATA,
+                )
+            )
+            raw = json.loads(result.source_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                list(raw),
+                [
+                    "schema_version",
+                    "column",
+                    "preview_date",
+                    "headline",
+                    "previews",
+                    "matches",
+                ],
+            )
+            self.assertEqual(raw["schema_version"], 2)
+            self.assertNotIn("weather", raw)
+            self.assertNotIn("credits", raw)
+            match = raw["matches"][0]
+            key = f'{match["home"]["short_name"]} vs {match["away"]["short_name"]}'
+            self.assertEqual(list(raw["previews"]), [key])
+            self.assertEqual(
+                set(raw["previews"][key]), {"article_file", "authors"}
+            )
+            article_reference = raw["previews"][key]["article_file"]
+            self.assertEqual(
+                article_reference,
+                f'previews/{match["home"]["short_name"]}vs{match["away"]["short_name"]}.md',
+            )
+            article_path = result.run_directory / article_reference
+            self.assertTrue(article_path.is_file())
+            self.assertIn("【待填写", article_path.read_text(encoding="utf-8"))
+            self.assertNotIn("preview_paragraphs", match)
+            self.assertNotIn("writers", match)
+            self.assertTrue(
+                any(
+                    "为全 null；天气尚未填写，需要补充；本篇显示“待更新”" in message
+                    for message in handler.messages
+                )
+            )
+            self.assertTrue(
+                any("标题尚未填写" in message for message in handler.messages)
+            )
+            self.assertTrue(
+                any(
+                    "需要补充前瞻内容、作者" in message
+                    for message in handler.messages
+                )
+            )
+            self.assertFalse(
+                any(str(root.resolve()) in message for message in handler.messages)
+            )
+            self.assertTrue(
+                any(
+                    str(Path("runs") / "auto_preview") in message
+                    for message in handler.messages
+                )
+            )
+
+    async def test_missing_global_files_warn_and_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory, with_global_inputs=False)
+            queries = _FakeQueries()
+            logger, handler = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.ARTICLE,
+            )
+
+            result = await runner.run(request)
+
+            self.assertEqual(result.status, "ok")
+            inputs = root / "runs" / "auto_preview"
+            self.assertEqual(
+                json.loads((inputs / "weather.json").read_text(encoding="utf-8")),
+                {
+                    "2026-04-11": {
+                        "low_c": None,
+                        "high_c": None,
+                        "wind_direction": None,
+                        "wind_level": None,
+                    }
+                },
+            )
+            self.assertEqual(
+                json.loads((inputs / "config.json").read_text(encoding="utf-8")),
+                {
+                    "editors": ["【待填写：编辑】"],
+                    "reviewers": ["【待填写：责编】"],
+                    "approvers": ["【待填写：审核】"],
+                },
+            )
+            self.assertTrue(result.article_directory.is_dir())
+            self.assertEqual(len(queries.game_queries), 1)
+            self.assertEqual(
+                sum(
+                    "需要补充编辑、责编、审核" in message
+                    for message in handler.messages
+                ),
+                1,
+            )
+            self.assertTrue(
+                any("为新生成天气配置" in message for message in handler.messages)
+            )
+            self.assertTrue(
+                any("标题尚未填写" in message for message in handler.messages)
+            )
+            self.assertTrue(
+                any(
+                    "需要补充前瞻内容、作者" in message
+                    for message in handler.messages
+                )
+            )
+            self.assertFalse(
+                any(str(root.resolve()) in message for message in handler.messages)
+            )
+
+            (inputs / "config.json").write_text(
+                json.dumps(
+                    {
+                        "editors": ["编辑"],
+                        "reviewers": ["责编"],
+                        "approvers": ["审核"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            resumed = await runner.run(request)
+            self.assertEqual(resumed.status, "ok")
+            self.assertEqual(len(queries.game_queries), 1)
+            self.assertEqual(
+                sum(
+                    "需要补充编辑、责编、审核" in message
+                    for message in handler.messages
+                ),
+                1,
+            )
+
+    async def test_missing_weather_date_is_added_but_does_not_pause(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            inputs = root / "runs" / "auto_preview"
+            (inputs / "weather.json").write_text(
+                json.dumps(
+                    {
+                        "2026-04-10": {
+                            "low_c": 6,
+                            "high_c": 16,
+                            "wind_direction": "东风",
+                            "wind_level": "2级",
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            queries = _FakeQueries()
+            logger, handler = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+
+            result = await runner.run(
+                PipelineRequest(
+                    datetime(2026, 4, 11).date(),
+                    Competition.FEMALE,
+                    Stage.ARTICLE,
+                )
+            )
+
+            self.assertEqual(result.status, "ok")
+            weather = json.loads(
+                (inputs / "weather.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(weather["2026-04-11"], {
+                "low_c": None,
+                "high_c": None,
+                "wind_direction": None,
+                "wind_level": None,
+            })
+            article = Article.load(result.article_directory)
+            self.assertIn("待更新", article.body_html)
+            self.assertTrue(
+                any("缺少日期 2026-04-11" in message for message in handler.messages)
+            )
+
+    async def test_existing_empty_config_only_blocks_article_or_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            inputs = root / "runs" / "auto_preview"
+            (inputs / "config.json").write_text(
+                json.dumps(
+                    {"editors": [], "reviewers": [], "approvers": []},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            day = datetime(2026, 4, 11).date()
+
+            data = await runner.run(
+                PipelineRequest(day, Competition.FEMALE, Stage.DATA)
+            )
+            with self.assertRaises(ArtifactValidationError) as caught:
+                await runner.run(
+                    PipelineRequest(day, Competition.FEMALE, Stage.ARTICLE)
+                )
+
+            self.assertEqual(data.status, "ok")
+            self.assertEqual(caught.exception.stage, "config-validation")
+            self.assertIn("config.json.editors", str(caught.exception))
+            self.assertEqual(len(queries.game_queries), 1)
+
+    async def test_partial_weather_and_invalid_config_are_never_rewritten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            inputs = root / "runs" / "auto_preview"
+            weather_path = inputs / "weather.json"
+            weather_path.write_text(
+                json.dumps(
+                    {
+                        "2026-04-11": {
+                            "low_c": 9,
+                            "high_c": None,
+                            "wind_direction": None,
+                            "wind_level": None,
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            weather_before = weather_path.read_bytes()
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.ARTICLE,
+            )
+
+            with self.assertRaises(ArtifactValidationError) as weather_error:
+                await runner.run(request)
+            self.assertEqual(weather_error.exception.stage, "weather-validation")
+            self.assertIn("high_c", str(weather_error.exception))
+            self.assertIn("wind_direction", str(weather_error.exception))
+            self.assertEqual(weather_path.read_bytes(), weather_before)
+
+            weather_path.write_text(
+                json.dumps(
+                    {
+                        "2026-04-10": {
+                            "low_c": 9,
+                            "high_c": None,
+                            "wind_direction": None,
+                            "wind_level": None,
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            unrelated_invalid_before = weather_path.read_bytes()
+            with self.assertRaises(ArtifactValidationError):
+                await runner.run(request)
+            self.assertEqual(weather_path.read_bytes(), unrelated_invalid_before)
+
+            weather_path.write_text(
+                json.dumps(
+                    {
+                        "2026-04-11": {
+                            "low_c": None,
+                            "high_c": None,
+                            "wind_direction": None,
+                            "wind_level": None,
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            config_path = inputs / "config.json"
+            config_path.write_text(
+                '{"editors": ["编辑"], "reviewers": "错误", "approvers": ["审核"]}\n',
+                encoding="utf-8",
+            )
+            config_before = config_path.read_bytes()
+            with self.assertRaises(ArtifactValidationError) as config_error:
+                await runner.run(request)
+            self.assertEqual(config_error.exception.stage, "config-validation")
+            self.assertIn("$config.reviewers", str(config_error.exception))
+            self.assertEqual(config_path.read_bytes(), config_before)
+
+    async def test_only_current_weather_and_config_affect_article_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            inputs = root / "runs" / "auto_preview"
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.ARTICLE,
+                override=True,
+            )
+            first = await runner.run(request)
+            first_article = Article.load(first.article_directory)
+            first_state = json.loads(
+                (first.run_directory / "run.json").read_text(encoding="utf-8")
+            )
+
+            weather_path = inputs / "weather.json"
+            weather = json.loads(weather_path.read_text(encoding="utf-8"))
+            weather["2026-04-12"] = {
+                "low_c": 11,
+                "high_c": 21,
+                "wind_direction": "南风",
+                "wind_level": "3级",
+            }
+            weather_path.write_text(
+                json.dumps(weather, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            unchanged = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+            unchanged_article = Article.load(unchanged.article_directory)
+            unchanged_state = json.loads(
+                (unchanged.run_directory / "run.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                unchanged_article.content_fingerprint,
+                first_article.content_fingerprint,
+            )
+            self.assertEqual(
+                unchanged_state["article"]["input_sha256"],
+                first_state["article"]["input_sha256"],
+            )
+
+            weather["2026-04-11"] = {
+                "low_c": 8,
+                "high_c": 18,
+                "wind_direction": "东南风",
+                "wind_level": "2级",
+            }
+            weather_path.write_text(
+                json.dumps(weather, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            weather_changed = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+            weather_article = Article.load(weather_changed.article_directory)
+            self.assertNotEqual(
+                weather_article.content_fingerprint,
+                first_article.content_fingerprint,
+            )
+
+            config_path = inputs / "config.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["editors"] = ["新编辑"]
+            config_path.write_text(
+                json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            config_changed = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.ARTICLE,
+                )
+            )
+            config_article = Article.load(config_changed.article_directory)
+            self.assertNotEqual(
+                config_article.content_fingerprint,
+                weather_article.content_fingerprint,
+            )
+            self.assertEqual(len(queries.game_queries), 1)
+
+    async def test_override_preserves_weather_and_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            inputs = root / "runs" / "auto_preview"
+            weather_before = (inputs / "weather.json").read_bytes()
+            config_before = (inputs / "config.json").read_bytes()
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+
+            await runner.run(
+                PipelineRequest(
+                    datetime(2026, 4, 11).date(),
+                    Competition.FEMALE,
+                    Stage.ARTICLE,
+                    override=True,
+                )
+            )
+
+            self.assertEqual((inputs / "weather.json").read_bytes(), weather_before)
+            self.assertEqual((inputs / "config.json").read_bytes(), config_before)
+
+    async def test_override_rebuilds_markdown_and_removes_stale_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.DATA,
+            )
+            first = await runner.run(request)
+            raw = json.loads(first.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            markdown_path = first.run_directory / preview["article_file"]
+            markdown_path.write_text("人工正文。\n", encoding="utf-8")
+            stale_path = first.run_directory / "previews" / "旧比赛.md"
+            stale_path.write_text("旧内容。\n", encoding="utf-8")
+
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.DATA,
+                    override=True,
+                )
+            )
+
+            self.assertIn("【待填写", markdown_path.read_text(encoding="utf-8"))
+            self.assertFalse(stale_path.exists())
+            self.assertEqual(rebuilt.status, "ok")
+            self.assertEqual(len(queries.game_queries), 2)
+
+    async def test_old_source_and_run_contracts_require_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+            request = PipelineRequest(
+                datetime(2026, 4, 11).date(),
+                Competition.FEMALE,
+                Stage.DATA,
+            )
+            created = await runner.run(request)
+            source = json.loads(created.source_path.read_text(encoding="utf-8"))
+            source["schema_version"] = 1
+            created.source_path.write_text(
+                json.dumps(source, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ArtifactValidationError) as source_error:
+                await runner.run(request)
+            self.assertIn("仅支持版本 2", str(source_error.exception))
+
+            restored = await runner.run(
+                PipelineRequest(
+                    request.preview_date,
+                    request.competition,
+                    Stage.DATA,
+                    override=True,
+                )
+            )
+            state_path = restored.run_directory / "run.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["schema_version"] = 1
+            state_path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ArtifactValidationError) as state_error:
+                await runner.run(request)
+            self.assertIn("run.json 版本不受支持", str(state_error.exception))
+
+    async def test_duplicate_short_matchup_fails_with_game_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _FakeQueries()
+            queries.targets.append(
+                _game(
+                    501,
+                    123,
+                    datetime(2026, 4, 11, 19, 0, tzinfo=SHANGHAI),
+                    status=GameStatus.SCHEDULED,
+                )
+            )
+            logger, _ = _logger()
+            runner = AutoPreviewPipeline(
+                project_root=root,
+                query_service_factory=lambda: _Context(queries),
+                prompt=lambda _: True,
+                logger=logger,
+            )
+
+            with self.assertRaises(PreviewValidationError) as caught:
+                await runner.run(
+                    PipelineRequest(
+                        datetime(2026, 4, 11).date(),
+                        Competition.FEMALE,
+                        Stage.DATA,
+                    )
+                )
+
+            self.assertIn("对阵简称重复", str(caught.exception))
+            self.assertIn("500", str(caught.exception))
+            self.assertIn("501", str(caught.exception))
 
 
 if __name__ == "__main__":

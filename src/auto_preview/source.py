@@ -13,8 +13,12 @@ from preview import (
     PreviewMatch,
     PreviewSourceData,
     PreviewTeam,
+    PreviewValidationError,
+    SOURCE_DOCUMENT_SCHEMA_VERSION,
     SeasonOutcome,
     TeamRef,
+    matchup_key,
+    preview_article_file,
     validate_preview_source,
 )
 from thufootball import (
@@ -113,7 +117,6 @@ class PreviewSourceBuilder:
             for season in config.historical_seasons
             for tournament_id in season.tournament_ids
         }
-        self._outcome_warnings: set[int] = set()
         self.selected_games: tuple[tuple[int, int], ...] = ()
 
     def _short_name(
@@ -239,18 +242,6 @@ class PreviewSourceBuilder:
                 include_unfinished=False,
             )
             self._team_results[key] = results
-            self._logger.info(
-                "current_results 查询：team_id=%s tournament_id=%s count=%s",
-                team_id,
-                tournament_id,
-                len(results),
-            )
-        else:
-            self._logger.info(
-                "current_results 缓存命中：team_id=%s tournament_id=%s",
-                team_id,
-                tournament_id,
-            )
         eligible = sorted(
             (
                 result
@@ -286,7 +277,6 @@ class PreviewSourceBuilder:
             outcome.tournament_id: outcome for outcome in outcomes
         }
         resolved: list[SeasonOutcome] = []
-        missing_seasons: list[str] = []
         for season in self._config.historical_seasons:
             outcome = next(
                 (
@@ -298,7 +288,6 @@ class PreviewSourceBuilder:
             )
             season_label = _season_label(season.label) or season.label
             if outcome is None:
-                missing_seasons.append(season.label)
                 resolved.append(
                     SeasonOutcome(
                         season=season_label,
@@ -317,13 +306,6 @@ class PreviewSourceBuilder:
                 )
             )
 
-        if missing_seasons and team_id not in self._outcome_warnings:
-            self._logger.warning(
-                "team_id=%s 的 %s 无法获取排名，按未参赛展示",
-                team_id,
-                "、".join(missing_seasons),
-            )
-            self._outcome_warnings.add(team_id)
         return tuple(resolved)
 
     async def _meetings(
@@ -491,7 +473,7 @@ def contains_placeholders(source: PreviewSourceData) -> bool:
     return any(value.startswith(PLACEHOLDER_PREFIX) for value in values)
 
 
-def source_to_dict(source: PreviewSourceData) -> dict[str, object]:
+def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
     def team_ref(team: TeamRef) -> dict[str, object]:
         return {
             "team_id": team.team_id,
@@ -585,3 +567,97 @@ def source_to_dict(source: PreviewSourceData) -> dict[str, object]:
             "approvers": list(source.credits.approvers),
         },
     }
+
+
+def _manual_preview_entries(
+    source: PreviewSourceData,
+) -> tuple[tuple[PreviewMatch, str, str], ...]:
+    entries: list[tuple[PreviewMatch, str, str]] = []
+    keys: dict[str, list[int]] = {}
+    files: dict[str, tuple[str, list[int]]] = {}
+    for match in source.matches:
+        key = matchup_key(match)
+        try:
+            article_file = preview_article_file(
+                match.home.short_name,
+                match.away.short_name,
+            )
+        except ValueError as exc:
+            raise PreviewValidationError(
+                f"$.previews[{key!r}]: {exc}",
+                stage="data-build",
+            ) from exc
+        keys.setdefault(key, []).append(match.game_id)
+        _, file_game_ids = files.setdefault(
+            article_file.casefold(),
+            (article_file, []),
+        )
+        file_game_ids.append(match.game_id)
+        entries.append((match, key, article_file))
+
+    duplicate_keys = {
+        key: game_ids for key, game_ids in keys.items() if len(game_ids) > 1
+    }
+    duplicate_files = {
+        path: game_ids
+        for path, game_ids in files.values()
+        if len(game_ids) > 1
+    }
+    if duplicate_keys or duplicate_files:
+        details = [
+            *(f"{key} game_ids={ids}" for key, ids in duplicate_keys.items()),
+            *(
+                f"{path} game_ids={ids}"
+                for path, ids in duplicate_files.items()
+                if path not in duplicate_keys
+            ),
+        ]
+        raise PreviewValidationError(
+            "$.previews: 对阵简称重复或 Markdown 文件名重复：" + "；".join(details),
+            stage="data-build",
+        )
+    return tuple(entries)
+
+
+def preview_article_files(source: PreviewSourceData) -> dict[str, str]:
+    """Return generated Markdown paths and initial placeholder content."""
+
+    return {
+        article_file: "\n\n".join(match.preview_paragraphs).strip() + "\n"
+        for match, _, article_file in _manual_preview_entries(source)
+    }
+
+
+def source_to_dict(source: PreviewSourceData) -> dict[str, object]:
+    """Serialise query results as the human-oriented schema-v2 source document."""
+
+    full = preview_data_to_dict(source)
+    raw_matches = full["matches"]
+    assert isinstance(raw_matches, list)
+    previews: dict[str, object] = {}
+    matches: list[dict[str, object]] = []
+    entries = _manual_preview_entries(source)
+    for (match, key, article_file), raw_match in zip(
+        entries,
+        raw_matches,
+        strict=True,
+    ):
+        assert isinstance(raw_match, dict)
+        previews[key] = {
+            "article_file": article_file,
+            "authors": list(match.writers),
+        }
+        payload = dict(raw_match)
+        payload.pop("preview_paragraphs")
+        payload.pop("writers")
+        matches.append(payload)
+
+    result: dict[str, object] = {
+        "schema_version": SOURCE_DOCUMENT_SCHEMA_VERSION,
+        "column": full["column"],
+        "preview_date": full["preview_date"],
+        "headline": full["headline"],
+        "previews": previews,
+        "matches": matches,
+    }
+    return result
