@@ -7,7 +7,6 @@ import re
 from datetime import date, datetime
 
 from preview import (
-    SOURCE_DOCUMENT_SCHEMA_VERSION,
     PlayedMatch,
     PreviewColumnConfig,
     PreviewCredits,
@@ -38,8 +37,6 @@ from thufootball.rankings import (
 from .config import CompetitionConfig
 from .errors import NoGamesForDate
 
-# 顶层开关：开启时，每支球队的本赛事历史战绩都从该队的主队视角展示。
-CURRENT_RESULTS_TEAM_ALWAYS_HOME = True
 MAX_TRUSTED_TEAM_SHORT_NAME_LENGTH = 5
 
 PLACEHOLDER_PREFIX = "【待填写"
@@ -171,8 +168,7 @@ class PreviewSourceBuilder:
         current_results_team_id: int | None = None,
     ) -> PlayedMatch:
         swap_sides = (
-            CURRENT_RESULTS_TEAM_ALWAYS_HOME
-            and current_results_team_id is not None
+            current_results_team_id is not None
             and game.away_team_id == current_results_team_id
         )
         if swap_sides:
@@ -429,7 +425,6 @@ class PreviewSourceBuilder:
             )
 
         source = PreviewSourceData(
-            schema_version=1,
             column=PreviewColumnConfig(
                 competition_full_name=self._config.full_name,
                 competition_short_name=self._config.short_name,
@@ -511,7 +506,6 @@ def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
         }
 
     return {
-        "schema_version": source.schema_version,
         "column": {
             "competition_full_name": source.column.competition_full_name,
             "competition_short_name": source.column.competition_short_name,
@@ -615,7 +609,7 @@ def preview_article_files(source: PreviewSourceData) -> dict[str, str]:
 
 
 def source_to_dict(source: PreviewSourceData) -> dict[str, object]:
-    """Serialise query results as the human-oriented schema-v2 source document."""
+    """Serialise query results for the preview template's source schema."""
 
     full = preview_data_to_dict(source)
     raw_matches = full["matches"]
@@ -639,7 +633,6 @@ def source_to_dict(source: PreviewSourceData) -> dict[str, object]:
         matches.append(payload)
 
     result: dict[str, object] = {
-        "schema_version": SOURCE_DOCUMENT_SCHEMA_VERSION,
         "column": full["column"],
         "preview_date": full["preview_date"],
         "headline": full["headline"],

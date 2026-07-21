@@ -335,23 +335,9 @@ Python 函数使用参数名 `game_type`，发送 HTTP 请求时会映射为接�
 | `parent_field_id` | `int` | 上级场地 ID；没有上级时为 `0` |
 | `status` | `bool` | 场地记录状态 |
 
-#### 查询命令
-
-查询 `2026-04-19` 当天的全部公开比赛：
-
-```powershell
-python .\src\thufootball\api\get_current_games.py --history-bound 2026-04-19 --future-bound 2026-04-20
-```
-
-输出完整接口 JSON：
-
-```powershell
-python .\src\thufootball\api\get_current_games.py --history-bound 2026-04-19 --future-bound 2026-04-20 --full-response
-```
-
 #### 示例输出
 
-该区间真实返回 3 场比赛，比赛 ID 分别为 `4245`、`4260`、`4261`。下面保留真实响应结构并展示第一场比赛；其余比赛的字段结构相同，可通过上述 `--full-response` 命令完整查看。
+该区间真实返回 3 场比赛，比赛 ID 分别为 `4245`、`4260`、`4261`。下面保留真实响应结构并展示第一场比赛；其余比赛的字段结构相同。
 
 ```json
 {
@@ -656,23 +642,9 @@ python .\src\thufootball\api\get_current_games.py --history-bound 2026-04-19 --f
 | `web_login_code` | `str \| null` | Web 登录码 |
 | `web_login_status` | `str \| null` | Web 登录状态 |
 
-#### 查询命令
-
-查询赛事 `122`：
-
-```powershell
-python .\src\thufootball\api\get_tourn_info.py --tourn-id 122
-```
-
-输出完整接口 JSON：
-
-```powershell
-python .\src\thufootball\api\get_tourn_info.py --tourn-id 122 --full-response
-```
-
 #### 示例输出
 
-赛事 `122` 的真实响应包含 16 支球队、468 名报名球员、35 场比赛、5 条停赛记录和 0 名赛事工作人员。以下示例保留真实顶层结构，各大型数组仅展示第一项，嵌套对象只保留代表性字段；完整内容可通过上述 `--full-response` 命令查看。
+赛事 `122` 的真实响应包含 16 支球队、468 名报名球员、35 场比赛、5 条停赛记录和 0 名赛事工作人员。以下示例保留真实顶层结构，各大型数组仅展示第一项，嵌套对象只保留代表性字段。
 
 ```json
 {
@@ -995,23 +967,9 @@ python .\src\thufootball\api\get_tourn_info.py --tourn-id 122 --full-response
 
 > **计时状态注意：** 比赛 `4245` 的 `game_info.end=true` 且已有最终比分，但 `game_time_metadata.status` 仍为 `START`，`stoppage_minute` 还会随请求时间增长。这说明计时元数据可能因现场操作未正常结束而残留。判断比赛是否完赛时应优先使用 `game_info.end`、`game_info.result` 和进球字段，不应单独依赖 `game_time_metadata` 或 `stoppage_minute`。
 
-#### 查询命令
-
-查询比赛 `4245`：
-
-```powershell
-python .\src\thufootball\api\get_game_info.py --game-id 4245
-```
-
-输出完整接口 JSON：
-
-```powershell
-python .\src\thufootball\api\get_game_info.py --game-id 4245 --full-response
-```
-
 #### 示例输出
 
-比赛 `4245` 的真实响应包含 30 名主队球员、31 名客队球员、33 个比赛事件、0 条评论、0 条裁判安排、18 名工作人员和 4 个比赛时段。以下示例保留全部顶层字段，大型数组只展示第一项，嵌套对象只保留代表性字段；完整内容可通过上述 `--full-response` 命令查看。
+比赛 `4245` 的真实响应包含 30 名主队球员、31 名客队球员、33 个比赛事件、0 条评论、0 条裁判安排、18 名工作人员和 4 个比赛时段。以下示例保留全部顶层字段，大型数组只展示第一项，嵌套对象只保留代表性字段。
 
 ```json
 {
@@ -1232,21 +1190,9 @@ python .\src\thufootball\api\get_game_info.py --game-id 4245 --full-response
 
 > **接口范围注意：** 当前账号实测返回 121 个跨多个赛季、由不同用户创建的赛事，其中 `visible=true` 110 个、`visible=false` 11 个，且 `tourns[]` 不包含当前用户的参赛角色或管理权限。因此接口名称中的 “My” 不等于“我创建/管理/参加的赛事”，它更接近当前登录用户可取得的协会赛事列表。若要判断用户与赛事的具体关系，不能只依赖此接口。
 
-#### 查询命令
-
-```powershell
-python .\src\thufootball\api\get_my_tournaments.py
-```
-
-输出完整接口 JSON：
-
-```powershell
-python .\src\thufootball\api\get_my_tournaments.py --full-response
-```
-
 #### 示例输出
 
-当前账号真实返回 121 个赛事。以下示例只展示其中的赛事 `122`；完整数组可通过上述 `--full-response` 命令查看。
+当前账号真实返回 121 个赛事。以下示例只展示其中的赛事 `122`。
 
 ```json
 {

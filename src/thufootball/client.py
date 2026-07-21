@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import httpx
 
-from .api.utils import load_credentials
+from .config import load_credentials
 from .errors import (
     AuthenticationError,
     ConfigurationError,

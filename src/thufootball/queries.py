@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -13,9 +12,9 @@ from .client import THUFootballClient
 from .errors import (
     BatchQueryError,
     DataConflict,
-    InvalidGameDataWarning,
     InvalidResponse,
     QueryValidationError,
+    SchemaError,
     THUFootballError,
 )
 from .models import (
@@ -54,7 +53,6 @@ class _ResolvedGame:
 @dataclass(frozen=True)
 class _TournamentBatch:
     games: list[GameSummary]
-    invalid_game_ids: list[int]
     players_per_side: dict[int, int]
 
 
@@ -126,18 +124,21 @@ def _resolve_finished_game(
     game: GameSummary,
     *,
     players_per_side: int,
-) -> _ResolvedGame | None:
-    if (
-        game.status is not GameStatus.FINISHED
-        or not game.record_active
-        or not game.valid
-    ):
-        return None
+) -> _ResolvedGame:
+    def invalid(field: str) -> SchemaError:
+        return SchemaError(
+            f"game.{field}",
+            tournament_id=game.tournament_id,
+            game_id=game.game_id,
+        )
+
+    if game.status is not GameStatus.FINISHED:
+        raise invalid("status")
 
     home_abandon = game.home_abandon is True
     away_abandon = game.away_abandon is True
     if home_abandon and away_abandon:
-        return None
+        raise invalid("home_abandon")
     if home_abandon or away_abandon:
         awarded_goals = 5 if players_per_side == 5 else 3
         home_score = 0 if home_abandon else awarded_goals
@@ -158,8 +159,10 @@ def _resolve_finished_game(
 
     home_score = game.home_score
     away_score = game.away_score
-    if home_score is None or away_score is None:
-        return None
+    if home_score is None:
+        raise invalid("home_score")
+    if away_score is None:
+        raise invalid("away_score")
     if home_score != away_score:
         normalised = replace(
             game,
@@ -186,8 +189,10 @@ def _resolve_finished_game(
 
     home_penalty = game.home_penalty
     away_penalty = game.away_penalty
-    if home_penalty is None or away_penalty is None or home_penalty == away_penalty:
-        return None
+    if home_penalty is None:
+        raise invalid("home_penalty")
+    if away_penalty is None or home_penalty == away_penalty:
+        raise invalid("away_penalty")
     normalised = replace(
         game,
         result_text=(f"{home_score}({home_penalty}):{away_score}({away_penalty})"),
@@ -256,13 +261,6 @@ def _team_game_result(
         score_text=score_text,
         result=home_result if is_home else _opposite_result(home_result),
     )
-
-
-def _warn_invalid_games(game_ids: list[int]) -> None:
-    if not game_ids:
-        return
-    unique_ids = tuple(dict.fromkeys(game_ids))
-    warnings.warn(InvalidGameDataWarning(unique_ids), stacklevel=3)
 
 
 def _summary(counts: list[int]) -> HeadToHeadSummary:
@@ -450,11 +448,6 @@ class THUFootballQueryService:
             games=self._deduplicate(
                 [game for snapshot in snapshots for game in snapshot.games]
             ),
-            invalid_game_ids=[
-                game_id
-                for snapshot in snapshots
-                for game_id in snapshot.invalid_game_ids
-            ],
             players_per_side={
                 snapshot.tournament_id: snapshot.players_per_side
                 for snapshot in snapshots
@@ -463,12 +456,10 @@ class THUFootballQueryService:
 
     async def query_games(self, query: GameQuery) -> list[GameSummary]:
         validated = _validate_query(query)
-        invalid_game_ids: list[int] = []
         if validated.tournament_ids:
             snapshots = await self._read_tournaments(validated.tournament_ids)
             batch = self._tournament_batch(snapshots)
             games = batch.games
-            invalid_game_ids = batch.invalid_game_ids
         elif validated.match_date is not None:
             games = await self._client.get_current_games(
                 history_bound=validated.match_date - timedelta(days=1),
@@ -479,7 +470,6 @@ class THUFootballQueryService:
             snapshots = await self._read_tournaments(tournament_ids)
             batch = self._tournament_batch(snapshots)
             games = batch.games
-            invalid_game_ids = batch.invalid_game_ids
 
         filtered: list[GameSummary] = []
         requested_teams = set(validated.team_ids)
@@ -504,7 +494,6 @@ class THUFootballQueryService:
                     continue
             filtered.append(game)
 
-        _warn_invalid_games(invalid_game_ids)
         return sorted(
             filtered,
             key=lambda game: (game.kickoff_local, game.tournament_id, game.game_id),
@@ -530,21 +519,16 @@ class THUFootballQueryService:
         batch = self._tournament_batch(snapshots)
 
         results: list[TeamGameResult] = []
-        invalid_game_ids = batch.invalid_game_ids
         for game in batch.games:
             if team_id not in {game.home_team_id, game.away_team_id}:
                 continue
             if not game.record_active or not game.valid:
-                invalid_game_ids.append(game.game_id)
                 continue
             if game.status is GameStatus.FINISHED:
                 resolved = _resolve_finished_game(
                     game,
                     players_per_side=batch.players_per_side[game.tournament_id],
                 )
-                if resolved is None:
-                    invalid_game_ids.append(game.game_id)
-                    continue
                 results.append(
                     _team_game_result(
                         resolved.game,
@@ -557,7 +541,6 @@ class THUFootballQueryService:
                     _team_game_result(game, team_id=team_id, home_result=None)
                 )
 
-        _warn_invalid_games(invalid_game_ids)
         return sorted(
             results,
             key=lambda result: (result.game.kickoff_local, result.game.game_id),
@@ -653,7 +636,6 @@ class THUFootballQueryService:
             tournament_id: [0, 0, 0] for tournament_id in normalised_tournament_ids
         }
         matches: list[GameSummary] = []
-        invalid_game_ids = batch.invalid_game_ids
         for game in batch.games:
             if game.home_team_id in team_a_ids and game.away_team_id in team_b_ids:
                 team_a_is_home = True
@@ -662,16 +644,12 @@ class THUFootballQueryService:
             else:
                 continue
             if not game.record_active or not game.valid:
-                invalid_game_ids.append(game.game_id)
                 continue
             if game.status is GameStatus.FINISHED:
                 resolved = _resolve_finished_game(
                     game,
                     players_per_side=batch.players_per_side[game.tournament_id],
                 )
-                if resolved is None:
-                    invalid_game_ids.append(game.game_id)
-                    continue
                 matches.append(resolved.game)
                 team_a_result = (
                     resolved.home_result
@@ -683,7 +661,6 @@ class THUFootballQueryService:
             elif include_unfinished:
                 matches.append(game)
 
-        _warn_invalid_games(invalid_game_ids)
         matches.sort(key=lambda game: (game.kickoff_local, game.game_id), reverse=True)
         by_tournament = MappingProxyType(
             {

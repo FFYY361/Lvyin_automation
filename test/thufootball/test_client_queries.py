@@ -6,7 +6,6 @@ import json
 import sys
 import tempfile
 import unittest
-import warnings
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
@@ -30,7 +29,6 @@ from thufootball import (
     DataConflict,
     GameQuery,
     GameStatus,
-    InvalidGameDataWarning,
     InvalidResponse,
     MatchResult,
     QueryValidationError,
@@ -110,11 +108,11 @@ def _game(
     away_tournament_team_id: int = 1202,
     home_goal: object = 2,
     away_goal: object = 1,
-    penalty_shootout: int = 1,
-    home_penalty: object = 5,
-    away_penalty: object = 4,
+    penalty_shootout: int = 0,
+    home_penalty: object = None,
+    away_penalty: object = None,
     home_abandon: object = None,
-    away_abandon: object = 0,
+    away_abandon: object = None,
 ) -> dict[str, Any]:
     return {
         "id": game_id,
@@ -309,40 +307,31 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
             games = []
             team_matches = []
             team_to_team_matches = None
-            with warnings.catch_warnings(record=True) as caught_warnings:
-                warnings.simplefilter("always", InvalidGameDataWarning)
-                if config.team_id is None:
-                    games = await service.query_games(
-                        GameQuery(
-                            tournament_ids=config.tournament_ids,
-                            match_date=query_date,
-                        )
+            if config.team_id is None:
+                games = await service.query_games(
+                    GameQuery(
+                        tournament_ids=config.tournament_ids,
+                        match_date=query_date,
                     )
-                elif config.opponent_id is None:
-                    team_matches = await service.query_team_matches(
-                        config.team_id,
-                        (config.tournament_ids[0] if config.tournament_ids else None),
-                        include_unfinished=config.include_unfinished,
-                    )
-                else:
-                    team_to_team_matches = await service.query_team_to_team_matches(
-                        config.team_id,
-                        config.opponent_id,
-                        config.tournament_ids or None,
-                        include_unfinished=config.include_unfinished,
-                    )
+                )
+            elif config.opponent_id is None:
+                team_matches = await service.query_team_matches(
+                    config.team_id,
+                    (config.tournament_ids[0] if config.tournament_ids else None),
+                    include_unfinished=config.include_unfinished,
+                )
+            else:
+                team_to_team_matches = await service.query_team_to_team_matches(
+                    config.team_id,
+                    config.opponent_id,
+                    config.tournament_ids or None,
+                    include_unfinished=config.include_unfinished,
+                )
             detail = (
                 await client.get_game_info(config.game_id)
                 if config.game_id is not None
                 else None
             )
-
-        warning_game_ids = [
-            game_id
-            for warning in caught_warnings
-            if isinstance(warning.message, InvalidGameDataWarning)
-            for game_id in warning.message.game_ids
-        ]
 
         self.assertIsInstance(probe.user_registered, bool)
         self.assertIsInstance(tournaments, list)
@@ -375,7 +364,6 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "games": games,
                 "team_matches": team_matches,
                 "team_to_team_matches": team_to_team_matches,
-                "warning_game_ids": warning_game_ids,
                 "game_detail": detail,
             }
         else:
@@ -404,7 +392,6 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                     if team_to_team_matches is not None
                     else None
                 ),
-                "warning_game_ids": warning_game_ids,
                 "requested_game_id": config.game_id,
                 "detail_loaded": detail is not None,
                 "detail_event_count": len(detail.events) if detail else 0,
@@ -436,59 +423,83 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(scheduled.away_team_brief_name, "客202")
         self.assertEqual(scheduled.tournament_name, "赛事10")
         self.assertEqual(scheduled.home_score, 2)
-        self.assertTrue(scheduled.penalty_shootout)
-        self.assertFalse(scheduled.away_abandon)
+        self.assertFalse(scheduled.penalty_shootout)
+        self.assertIsNone(scheduled.away_abandon)
 
-    def test_invalid_optional_scores_become_none(self) -> None:
-        summary = map_game_summary(
-            _game(home_goal=-1, away_goal="2"),
-            "game",
-            now=datetime(2026, 7, 14, tzinfo=UTC),
+    def test_invalid_and_legacy_game_fields_fail_strictly(self) -> None:
+        cases = (
+            ("game.home_goal", {"home_goal": -1}),
+            ("game.away_goal", {"away_goal": "2"}),
+            ("game.valid", {"valid": None}),
+            ("game.penalty_shootout", {"penalty_shootout": None}),
+            ("game.home_abandon", {"home_abandon": 2}),
         )
-        self.assertIsNone(summary.home_score)
-        self.assertIsNone(summary.away_score)
+        for field_path, changes in cases:
+            with self.subTest(field_path=field_path):
+                with self.assertRaises(SchemaError) as caught:
+                    map_game_summary(_game(**changes), "game")
+                self.assertEqual(caught.exception.field_path, field_path)
 
-    def test_legacy_tournament_fields_are_mapped_safely(self) -> None:
-        game = _game(
-            1,
-            10,
-            started=True,
-            ended=True,
-            valid=None,
-            penalty_shootout=None,
-            home_tournament_team_id=1001,
-            away_tournament_team_id=1002,
-            home_team_id=101,
-            away_team_id=102,
+    def test_inconsistent_finished_games_fail_strictly(self) -> None:
+        cases = (
+            (
+                "game.home_abandon",
+                {"home_abandon": 1, "away_abandon": 1},
+            ),
+            ("game.home_goal", {"home_goal": None}),
+            (
+                "game.penalty_shootout",
+                {
+                    "penalty_shootout": 1,
+                    "home_penalty": 3,
+                    "away_penalty": 2,
+                },
+            ),
+            (
+                "game.away_penalty",
+                {
+                    "home_goal": 2,
+                    "away_goal": 2,
+                    "penalty_shootout": 1,
+                    "home_penalty": 3,
+                    "away_penalty": 3,
+                },
+            ),
         )
-        game["home_tourn_team_info"] = None
-        game["away_tourn_team_info"] = None
-        payload = _tournament_payload(10, [game], players_per_side=0)
-        payload["season_ids"] = {"": 10}
-        payload["registered_teams"][0]["draw"] = -1
+        for field_path, changes in cases:
+            with self.subTest(field_path=field_path):
+                with self.assertRaises(SchemaError) as caught:
+                    map_game_summary(
+                        _game(started=True, ended=True, **changes),
+                        "game",
+                    )
+                self.assertEqual(caught.exception.field_path, field_path)
 
-        snapshot = map_tournament_snapshot(payload)
-
-        self.assertEqual(snapshot.players_per_side, 0)
-        self.assertEqual(dict(snapshot.season_ids), {})
-        self.assertEqual(snapshot.teams[0].draws, 0)
-        self.assertEqual(snapshot.games[0].home_team_id, 101)
-        self.assertEqual(snapshot.games[0].away_team_id, 102)
-        self.assertFalse(snapshot.games[0].valid)
-        self.assertFalse(snapshot.games[0].penalty_shootout)
-        self.assertEqual(snapshot.invalid_game_ids, ())
-
-        unresolved = _game(2, 10, penalty_shootout=None)
-        unresolved["home_tourn_team_id"] = None
-        unresolved["away_tourn_team_id"] = None
-        unresolved["home_tourn_team_info"] = None
-        unresolved["away_tourn_team_info"] = None
-        unresolved_payload = _tournament_payload(10, [unresolved])
-
-        unresolved_snapshot = map_tournament_snapshot(unresolved_payload)
-
-        self.assertEqual(unresolved_snapshot.games, ())
-        self.assertEqual(unresolved_snapshot.invalid_game_ids, (2,))
+    def test_legacy_tournament_shapes_fail_strictly(self) -> None:
+        cases = ("missing_team", "blank_season", "negative_counter")
+        for scenario in cases:
+            with self.subTest(scenario=scenario):
+                game = _game(
+                    1,
+                    10,
+                    home_tournament_team_id=1001,
+                    away_tournament_team_id=1002,
+                    home_team_id=101,
+                    away_team_id=102,
+                )
+                payload = _tournament_payload(10, [game])
+                if scenario == "missing_team":
+                    game["home_tourn_team_info"] = None
+                    expected = "games[0].home_tourn_team_info"
+                elif scenario == "blank_season":
+                    payload["season_ids"] = {"": 10}
+                    expected = "season_ids.<key>"
+                else:
+                    payload["registered_teams"][0]["draw"] = -1
+                    expected = "registered_teams[0].draw"
+                with self.assertRaises(SchemaError) as caught:
+                    map_tournament_snapshot(payload)
+                self.assertEqual(caught.exception.field_path, expected)
 
     def test_game_detail_is_a_sensitive_field_whitelist(self) -> None:
         detail = map_game_detail(_detail_payload(), expected_game_id=1001)
@@ -1073,15 +1084,11 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 service.query_team_matches(101, 28),
                 service.query_team_to_team_matches(101, 202, [10, 28]),
             )
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                for call in calls:
-                    with self.assertRaises(QueryValidationError):
-                        await call
+            for call in calls:
+                with self.assertRaises(QueryValidationError):
+                    await call
 
-        self.assertEqual(caught, [])
-
-    async def test_unresolved_legacy_games_warn_without_aborting(self) -> None:
+    async def test_unresolved_legacy_game_fails_the_query(self) -> None:
         game = _game(91, 10, penalty_shootout=None)
         game["home_tourn_team_id"] = None
         game["away_tourn_team_id"] = None
@@ -1096,19 +1103,19 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async with self._service(handler) as service:
-            with warnings.catch_warnings(record=True) as team_warnings:
-                warnings.simplefilter("always", InvalidGameDataWarning)
-                team_matches = await service.query_team_matches(101, 10)
-            with warnings.catch_warnings(record=True) as game_warnings:
-                warnings.simplefilter("always", InvalidGameDataWarning)
-                games = await service.query_games(GameQuery(tournament_ids=(10,)))
+            with self.assertRaises(SchemaError) as team_error:
+                await service.query_team_matches(101, 10)
+            with self.assertRaises(SchemaError) as game_error:
+                await service.query_games(GameQuery(tournament_ids=(10,)))
 
-        self.assertEqual(team_matches, [])
-        self.assertEqual(games, [])
-        self.assertEqual(len(team_warnings), 1)
-        self.assertEqual(len(game_warnings), 1)
-        self.assertEqual(team_warnings[0].message.game_ids, (91,))
-        self.assertEqual(game_warnings[0].message.game_ids, (91,))
+        self.assertEqual(
+            team_error.exception.field_path,
+            "games[0].home_tourn_team_info",
+        )
+        self.assertEqual(
+            game_error.exception.field_path,
+            "games[0].home_tourn_team_info",
+        )
 
     async def test_tournament_and_date_route_only_uses_tournament_api(self) -> None:
         paths: list[str] = []
@@ -1296,7 +1303,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(DataConflict):
                 await service.query_games(GameQuery(tournament_ids=(1, 2)))
 
-    async def test_query_team_matches_normalises_results_and_warns(self) -> None:
+    async def test_query_team_matches_normalises_results(self) -> None:
         games = [
             _game(
                 10,
@@ -1370,37 +1377,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 away_penalty=0,
             ),
             _game(
-                5,
-                10,
-                kickoff="2026-07-14 12:00:00",
-                started=True,
-                ended=True,
-                home_goal=2,
-                away_goal=2,
-                penalty_shootout=1,
-                home_penalty=0,
-                away_penalty=0,
-            ),
-            _game(
-                6,
-                10,
-                kickoff="2026-07-14 13:00:00",
-                started=True,
-                ended=True,
-                home_abandon=1,
-                away_abandon=1,
-            ),
-            _game(
-                7,
-                10,
-                kickoff="2026-07-14 14:00:00",
-                started=True,
-                ended=True,
-                home_goal=None,
-                away_goal=1,
-                penalty_shootout=0,
-            ),
-            _game(
                 8,
                 10,
                 kickoff="2026-07-14 15:00:00",
@@ -1418,20 +1394,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async with self._service(handler) as service:
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always", InvalidGameDataWarning)
-                results = await service.query_team_matches(101, 10)
-            with warnings.catch_warnings(record=True) as unfinished_caught:
-                warnings.simplefilter("always", InvalidGameDataWarning)
-                with_unfinished = await service.query_team_matches(
-                    101, 10, include_unfinished=True
-                )
+            results = await service.query_team_matches(101, 10)
+            with_unfinished = await service.query_team_matches(
+                101, 10, include_unfinished=True
+            )
             no_matches = await service.query_team_matches(999, 10)
 
-        self.assertEqual(len(caught), 1)
-        self.assertEqual(len(unfinished_caught), 1)
-        self.assertIsInstance(caught[0].message, InvalidGameDataWarning)
-        self.assertEqual(caught[0].message.game_ids, (5, 6, 7, 8))
         self.assertEqual([item.game.game_id for item in results], [3, 2, 1, 9, 10])
         by_game_id = {item.game.game_id: item for item in results}
         self.assertEqual(by_game_id[9].score_text, "1:2")
@@ -1536,15 +1504,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     ended=False,
                     penalty_shootout=0,
                 ),
-                _game(
-                    24,
-                    20,
-                    kickoff="2026-07-14 13:00:00",
-                    started=True,
-                    ended=True,
-                    home_abandon=1,
-                    away_abandon=1,
-                ),
             ],
             30: [],
         }
@@ -1560,19 +1519,14 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async with self._service(handler) as service:
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always", InvalidGameDataWarning)
-                history = await service.query_team_to_team_matches(
-                    101,
-                    202,
-                    [10, 20, 30, 10],
-                    include_unfinished=True,
-                )
+            history = await service.query_team_to_team_matches(
+                101,
+                202,
+                [10, 20, 30, 10],
+                include_unfinished=True,
+            )
             empty = await service.query_team_to_team_matches(101, 202, [30])
 
-        self.assertEqual(len(caught), 1)
-        self.assertIsInstance(caught[0].message, InvalidGameDataWarning)
-        self.assertEqual(caught[0].message.game_ids, (24,))
         self.assertEqual(history.tournament_ids, (10, 20, 30))
         self.assertEqual(
             [game.game_id for game in history.matches], [23, 22, 21, 12, 11]

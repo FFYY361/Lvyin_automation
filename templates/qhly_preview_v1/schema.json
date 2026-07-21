@@ -1,12 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.qhly/templates/qhly-preview-source-v2.schema.json",
-  "title": "清华绿茵比赛前瞻人工源数据 v2",
+  "$id": "https://local.qhly/templates/qhly_preview_v1/schema.json",
+  "title": "清华绿茵比赛前瞻模板 v1 源数据",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "column", "preview_date", "headline", "previews", "matches"],
+  "required": ["column", "preview_date", "headline", "previews", "matches"],
   "properties": {
-    "schema_version": {"const": 2},
     "column": {"$ref": "#/$defs/columnConfig"},
     "preview_date": {"type": "string", "format": "date"},
     "headline": {"$ref": "#/$defs/nonEmptyString"},
@@ -54,19 +53,14 @@
     "previewEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["authors"],
+      "required": ["article_file", "authors"],
       "properties": {
-        "article": {"$ref": "#/$defs/nonEmptyString"},
         "article_file": {
           "type": "string",
           "pattern": "^previews/[^<>:\"/\\\\|?*]+vs[^<>:\"/\\\\|?*]+\\.md$"
         },
         "authors": {"$ref": "#/$defs/nameArray"}
-      },
-      "oneOf": [
-        {"required": ["article"]},
-        {"required": ["article_file"]}
-      ]
+      }
     },
     "teamRef": {
       "type": "object",

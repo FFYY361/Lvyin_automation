@@ -69,7 +69,7 @@ python scripts/auto_preview.py 2026-04-11 futsal --stage publish
 
 首次运行时，如果 `weather.json` 不存在或缺少当日天气，会创建当前日期的全 `null` 模板；如果 `config.json` 不存在，会创建带有编辑、责编和审核占位符的模板。Pipeline 会分别 warning 天气、标题、新建人员配置，以及每场尚未填写的前瞻内容和作者。天气必须全 `null` 或全非 `null`，若前者，文章中天气使用占位符。人工修改后的 `config.json` 中，`editors`、`reviewers`、`approvers` 均必须是非空数组。
 
-新版 `source.json` 的 `schema_version` 为 `2`。
+`source.json` 遵循 `templates/qhly_preview_v1/schema.json`。
 
 关于前瞻正文，顶层 `previews` 使用 `主队简称 vs 客队简称` 映射到正文文件和作者，例如：
 
@@ -106,7 +106,7 @@ python scripts/auto_preview.py 2026-04-11 female --stage article
 
 失败时终端和日志会输出错误类别、失败阶段、异常类型、安全上下文、是否可重试以及处置建议。批量赛事查询失败会按赛事 ID 展开子错误，以区分权限、认证、网络、限流、远端数据与本地校验问题；不会记录凭据、令牌或底层异常的完整消息。
 
-球队名称和简称优先采用 `src/thufootball/notes/teams.json` 中由院系信息汇总表维护的官方值，官方简称不受长度限制。未登记球队才采用 `GameSummary` 中长度不超过 5 个字符的数据库 `brief_name`；数据库简称缺失或过长时，改用球队全称前两个字符并记录 warning。`src/auto_preview/source.py` 顶层的 `CURRENT_RESULTS_TEAM_ALWAYS_HOME` 默认为 `True`，控制是否将每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
+球队名称和简称优先采用 `src/thufootball/notes/teams.json` 中由院系信息汇总表维护的官方值，官方简称不受长度限制。未登记球队才采用 `GameSummary` 中长度不超过 5 个字符的数据库 `brief_name`；数据库简称缺失或过长时，改用球队全称前两个字符并记录 warning。每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
 
 比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；交手记录以“赛季-等级”标识赛事，例如 `23-24-甲`、`22-23-甲`，近三年没有直接交手记录时显示“无”。已有 Article 会在 source 或模板变化后自动重新渲染。
 
