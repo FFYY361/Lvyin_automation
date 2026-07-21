@@ -71,7 +71,7 @@ class GameSummary:
     home_score: int | None
     away_score: int | None
     result_text: str | None
-    penalty_shootout: bool
+    penalty_shootout: bool  # Rule enabled; not proof that a shootout occurred.
     home_penalty: int | None
     away_penalty: int | None
     home_abandon: bool | None
@@ -79,6 +79,22 @@ class GameSummary:
     field_name: str | None
     home_team_brief_name: str | None = None
     away_team_brief_name: str | None = None
+
+    @property
+    def decided_by_penalty_shootout(self) -> bool:
+        """Whether the finished result was actually decided on penalties."""
+
+        return (
+            self.status is GameStatus.FINISHED
+            and self.penalty_shootout
+            and self.home_abandon is not True
+            and self.away_abandon is not True
+            and self.home_score is not None
+            and self.home_score == self.away_score
+            and self.home_penalty is not None
+            and self.away_penalty is not None
+            and self.home_penalty != self.away_penalty
+        )
 
 
 @dataclass(frozen=True)

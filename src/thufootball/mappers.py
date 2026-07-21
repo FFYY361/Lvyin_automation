@@ -303,10 +303,10 @@ def _validate_finished_game(game: GameSummary, path: str) -> None:
         raise _schema(f"{path}.home_goal")
     if game.away_score is None:
         raise _schema(f"{path}.away_goal")
+    if game.home_score != game.away_score:
+        return
     if not game.penalty_shootout:
         return
-    if game.home_score != game.away_score:
-        raise _schema(f"{path}.penalty_shootout")
     if game.home_penalty is None:
         raise _schema(f"{path}.home_penalty")
     if game.away_penalty is None or game.home_penalty == game.away_penalty:

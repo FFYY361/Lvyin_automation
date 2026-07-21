@@ -448,14 +448,6 @@ class MapperTests(unittest.TestCase):
             ),
             ("game.home_goal", {"home_goal": None}),
             (
-                "game.penalty_shootout",
-                {
-                    "penalty_shootout": 1,
-                    "home_penalty": 3,
-                    "away_penalty": 2,
-                },
-            ),
-            (
                 "game.away_penalty",
                 {
                     "home_goal": 2,
@@ -474,6 +466,37 @@ class MapperTests(unittest.TestCase):
                         "game",
                     )
                 self.assertEqual(caught.exception.field_path, field_path)
+
+    def test_penalty_shootout_is_rule_flag_not_occurrence_flag(self) -> None:
+        non_draw = map_game_summary(
+            _game(
+                started=True,
+                ended=True,
+                home_goal=5,
+                away_goal=0,
+                penalty_shootout=1,
+                home_penalty=0,
+                away_penalty=0,
+            ),
+            "game",
+        )
+        decided_on_penalties = map_game_summary(
+            _game(
+                started=True,
+                ended=True,
+                home_goal=1,
+                away_goal=1,
+                penalty_shootout=1,
+                home_penalty=4,
+                away_penalty=3,
+            ),
+            "game",
+        )
+
+        self.assertTrue(non_draw.penalty_shootout)
+        self.assertFalse(non_draw.decided_by_penalty_shootout)
+        self.assertTrue(decided_on_penalties.penalty_shootout)
+        self.assertTrue(decided_on_penalties.decided_by_penalty_shootout)
 
     def test_legacy_tournament_shapes_fail_strictly(self) -> None:
         cases = ("missing_team", "blank_season", "negative_counter")
@@ -1335,7 +1358,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 ended=True,
                 home_goal=3,
                 away_goal=1,
-                penalty_shootout=0,
+                penalty_shootout=1,
                 home_penalty=0,
                 away_penalty=0,
             ),
@@ -1406,12 +1429,17 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_game_id[9].result, MatchResult.LOSS)
         self.assertEqual(by_game_id[10].score_text, "1:1")
         self.assertEqual(by_game_id[10].result, MatchResult.DRAW)
+        self.assertEqual(by_game_id[1].score_text, "3:1")
+        self.assertTrue(by_game_id[1].game.penalty_shootout)
+        self.assertFalse(by_game_id[1].game.decided_by_penalty_shootout)
+        self.assertIsNone(by_game_id[1].penalty_goals_for)
         self.assertEqual(results[0].score_text, "3:0")
         self.assertEqual(results[0].game.result_text, "3:0")
         self.assertEqual(results[0].result, MatchResult.WIN)
         self.assertEqual(results[1].venue, "away")
         self.assertEqual(results[1].score_text, "2(4):2(3)")
         self.assertEqual(results[1].game.result_text, "2(3):2(4)")
+        self.assertTrue(results[1].game.decided_by_penalty_shootout)
         self.assertEqual(results[1].penalty_goals_for, 4)
         self.assertEqual(results[1].penalty_goals_against, 3)
         self.assertEqual(results[1].result, MatchResult.WIN)
