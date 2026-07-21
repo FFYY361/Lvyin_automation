@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +15,7 @@ from typing import Literal
 from .errors import DraftValidationError
 
 ARTICLE_SCHEMA_VERSION = 1
+MAX_DRAFT_ARTICLES = 8
 _MANIFEST_NAME = "article.json"
 _BODY_NAME = "body.html"
 _MANIFEST_FIELDS = frozenset(
@@ -309,6 +310,46 @@ class Article:
                 "article content fingerprint does not match", stage="article-load"
             )
         return article
+
+
+def _normalize_draft_articles(
+    value: Article | Sequence[Article],
+) -> tuple[Article, ...]:
+    if isinstance(value, Article):
+        return (value,)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise DraftValidationError(
+            "draft articles must be an Article or a sequence of Article",
+            stage="draft-validation",
+        )
+    articles = tuple(value)
+    if not articles:
+        raise DraftValidationError(
+            "draft must contain at least one article",
+            stage="draft-validation",
+        )
+    if len(articles) > MAX_DRAFT_ARTICLES:
+        raise DraftValidationError(
+            f"draft must contain no more than {MAX_DRAFT_ARTICLES} articles",
+            stage="draft-validation",
+        )
+    if any(not isinstance(article, Article) for article in articles):
+        raise DraftValidationError(
+            "draft articles must all be Article instances",
+            stage="draft-validation",
+        )
+    return articles
+
+
+def _draft_content_fingerprint(articles: Sequence[Article]) -> str:
+    normalized = _normalize_draft_articles(articles)
+    if len(normalized) == 1:
+        return normalized[0].content_fingerprint
+    serialised = json.dumps(
+        [article.content_fingerprint for article in normalized],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialised).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

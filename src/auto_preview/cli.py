@@ -33,9 +33,17 @@ def _parser() -> argparse.ArgumentParser:
         prog="auto_preview.py",
         description="Read THUFootball data, render a preview, and create a WeChat draft",
     )
-    parser.add_argument("preview_date", type=_date, metavar="YYYY-MM-DD")
     parser.add_argument(
-        "competition",
+        "--dates",
+        nargs="+",
+        required=True,
+        type=_date,
+        metavar="YYYY-MM-DD",
+    )
+    parser.add_argument(
+        "--competitions",
+        nargs="+",
+        required=True,
         type=Competition,
         choices=tuple(Competition),
     )
@@ -65,11 +73,18 @@ def _relative_path(path: Path, project_root: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     project_root = Path(__file__).resolve().parents[2]
+    first_date = min(args.dates)
+    competition_order = {
+        Competition.MALE: 0,
+        Competition.FEMALE: 1,
+        Competition.FUTSAL: 2,
+    }
+    first_competition = min(args.competitions, key=competition_order.__getitem__)
     run_directory = (
         project_root
         / "runs"
         / "auto_preview"
-        / f"{args.preview_date.isoformat()}_{args.competition.value}"
+        / f"{first_date.isoformat()}_{first_competition.value}"
     )
     log_path = run_directory / "auto_preview.log"
     display_log_path = _relative_path(log_path, project_root)
@@ -104,13 +119,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             cover = None
         request = PipelineRequest(
-            preview_date=args.preview_date,
-            competition=args.competition,
+            preview_dates=args.dates,
+            competitions=args.competitions,
             stage=args.stage,
             cover=cover,
             override=args.override,
         )
-        runner = AutoPreviewPipeline(project_root=project_root, logger=logger)
+        runner = AutoPreviewPipeline(project_root=project_root)
         result = asyncio.run(runner.run(request))
     except KeyboardInterrupt:
         logger.error("✗ auto_preview 已由用户中断")
@@ -124,16 +139,35 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "status": result.status,
                 "completed_stage": result.completed_stage.value,
-                "run_directory": str(
-                    _relative_path(result.run_directory, project_root)
-                ),
-                "source": str(_relative_path(result.source_path, project_root)),
-                "article": (
-                    str(_relative_path(result.article_directory, project_root))
-                    if result.article_directory is not None
-                    else None
-                ),
                 "draft_media_id": result.draft_media_id,
+                "runs": [
+                    {
+                        "preview_date": run.preview_date.isoformat(),
+                        "competition": run.competition.value,
+                        "status": run.status,
+                        "run_directory": str(
+                            _relative_path(run.run_directory, project_root)
+                        ),
+                        "source": (
+                            str(_relative_path(run.source_path, project_root))
+                            if run.source_path is not None
+                            else None
+                        ),
+                        "article": (
+                            str(
+                                _relative_path(
+                                    run.article_directory,
+                                    project_root,
+                                )
+                            )
+                            if run.article_directory is not None
+                            else None
+                        ),
+                        "draft_media_id": run.draft_media_id,
+                        "reason": run.reason,
+                    }
+                    for run in result.runs
+                ],
                 "next_command": result.next_command,
             },
             ensure_ascii=False,

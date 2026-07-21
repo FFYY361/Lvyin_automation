@@ -1,13 +1,21 @@
-"""High-level service that submits a complete article as a WeChat draft."""
+"""High-level service that submits one or more articles as a WeChat draft."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from .client import WechatOfficialClient
 from .errors import DraftValidationError, MediaUploadError
 from .media import MediaPublisher
-from .models import Article, CoverFile, CoverMediaId, DraftReceipt
+from .models import (
+    Article,
+    CoverFile,
+    CoverMediaId,
+    DraftReceipt,
+    _draft_content_fingerprint,
+    _normalize_draft_articles,
+)
 
 
 class WechatOfficialService:
@@ -50,11 +58,12 @@ class WechatOfficialService:
 
     async def create_draft(
         self,
-        article: Article,
+        article: Article | Sequence[Article],
         *,
         open_comments: bool = False,
         fans_only_comments: bool = False,
     ) -> DraftReceipt:
+        articles = _normalize_draft_articles(article)
         if not isinstance(open_comments, bool) or not isinstance(
             fans_only_comments, bool
         ):
@@ -68,50 +77,66 @@ class WechatOfficialService:
                 stage="draft-validation",
             )
 
-        cover_bytes: bytes | None = None
-        cover_name: str | None = None
-        if isinstance(article.cover, CoverMediaId):
-            thumb_media_id = article.cover.media_id
-        elif isinstance(article.cover, CoverFile):
-            cover = article.cover.path
+        covers: list[tuple[str | None, bytes | None, str]] = []
+        for item in articles:
+            if isinstance(item.cover, CoverMediaId):
+                covers.append((None, None, item.cover.media_id))
+                continue
+            if not isinstance(item.cover, CoverFile):
+                raise DraftValidationError(
+                    "article cover must be CoverFile or CoverMediaId",
+                    stage="cover-validation",
+                )
+            cover = item.cover.path
             try:
                 cover_bytes = cover.read_bytes()
             except OSError as exc:
                 raise MediaUploadError(
                     "cover file could not be read", stage="cover-read"
                 ) from exc
-            cover_name = cover.name
-            thumb_media_id = ""
+            covers.append((cover.name, cover_bytes, ""))
+
+        submitted: list[Article] = []
+        thumb_media_ids: list[str] = []
+        for item, (cover_name, cover_bytes, existing_media_id) in zip(
+            articles, covers, strict=True
+        ):
+            published = await self._media.publish_body_images(item.body_html)
+            thumb_media_id = existing_media_id
+            if cover_bytes is not None:
+                assert cover_name is not None
+                thumb_media_id = await self._client.upload_cover(
+                    filename=cover_name,
+                    content=cover_bytes,
+                )
+            thumb_media_ids.append(thumb_media_id)
+            submitted.append(
+                Article(
+                    title=item.title,
+                    body_html=published.body_html,
+                    cover=CoverMediaId(thumb_media_id),
+                    author=item.author,
+                    digest=item.digest,
+                    source_url=item.source_url,
+                )
+            )
+
+        submitted_input: Article | Sequence[Article]
+        thumb_input: str | Sequence[str]
+        if len(submitted) == 1:
+            submitted_input = submitted[0]
+            thumb_input = thumb_media_ids[0]
         else:
-            raise DraftValidationError(
-                "article cover must be CoverFile or CoverMediaId",
-                stage="cover-validation",
-            )
-
-        published = await self._media.publish_body_images(article.body_html)
-        if cover_bytes is not None:
-            assert cover_name is not None
-            thumb_media_id = await self._client.upload_cover(
-                filename=cover_name,
-                content=cover_bytes,
-            )
-
-        submitted = Article(
-            title=article.title,
-            body_html=published.body_html,
-            cover=CoverMediaId(thumb_media_id),
-            author=article.author,
-            digest=article.digest,
-            source_url=article.source_url,
-        )
+            submitted_input = tuple(submitted)
+            thumb_input = tuple(thumb_media_ids)
         receipt = await self._client.add_draft(
-            submitted,
-            thumb_media_id=thumb_media_id,
+            submitted_input,
+            thumb_media_id=thumb_input,
             open_comments=open_comments,
             fans_only_comments=fans_only_comments,
         )
         return DraftReceipt(
             media_id=receipt.media_id,
-            content_fingerprint=article.content_fingerprint,
+            content_fingerprint=_draft_content_fingerprint(articles),
             created_at=receipt.created_at,
         )

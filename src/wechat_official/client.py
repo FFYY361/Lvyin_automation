@@ -8,7 +8,7 @@ import mimetypes
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,7 +29,12 @@ from .errors import (
     WechatTimeout,
 )
 from .html_tools import collect_media_references
-from .models import Article, DraftReceipt
+from .models import (
+    Article,
+    DraftReceipt,
+    _draft_content_fingerprint,
+    _normalize_draft_articles,
+)
 
 DEFAULT_API_BASE_URL = "https://api.weixin.qq.com"
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
@@ -379,31 +384,65 @@ class WechatOfficialClient:
 
     async def add_draft(
         self,
-        article: Article,
+        article: Article | Sequence[Article],
         *,
-        thumb_media_id: str,
+        thumb_media_id: str | Sequence[str],
         open_comments: bool = False,
         fans_only_comments: bool = False,
     ) -> DraftReceipt:
-        self.validate_draft(article, thumb_media_id)
+        is_single_article = isinstance(article, Article)
+        articles = _normalize_draft_articles(article)
+        if is_single_article:
+            if not isinstance(thumb_media_id, str):
+                raise DraftValidationError(
+                    "single article draft requires one thumb_media_id",
+                    stage="draft-validation",
+                )
+            thumb_media_ids = (thumb_media_id,)
+        else:
+            if isinstance(thumb_media_id, str) or not isinstance(
+                thumb_media_id, Sequence
+            ):
+                raise DraftValidationError(
+                    "multi-article draft requires a sequence of thumb_media_id values",
+                    stage="draft-validation",
+                )
+            thumb_media_ids = tuple(thumb_media_id)
+            if len(thumb_media_ids) != len(articles):
+                raise DraftValidationError(
+                    "article and thumb_media_id counts must match",
+                    stage="draft-validation",
+                )
+        if not isinstance(open_comments, bool) or not isinstance(
+            fans_only_comments, bool
+        ):
+            raise DraftValidationError(
+                "comment options must be bool",
+                stage="draft-validation",
+            )
         if fans_only_comments and not open_comments:
             raise DraftValidationError(
                 "fans_only_comments requires open_comments",
                 stage="draft-validation",
             )
-        item: dict[str, Any] = {
-            "article_type": "news",
-            "title": article.title,
-            "author": article.author,
-            "digest": article.digest,
-            "content": article.body_html,
-            "content_source_url": article.source_url,
-            "thumb_media_id": thumb_media_id,
-            "need_open_comment": 1 if open_comments else 0,
-            "only_fans_can_comment": 1 if fans_only_comments else 0,
-        }
+        items: list[dict[str, Any]] = []
+        for item, item_thumb_media_id in zip(articles, thumb_media_ids, strict=True):
+            self.validate_draft(item, item_thumb_media_id)
+            items.append(
+                {
+                    "article_type": "news",
+                    "title": item.title,
+                    "author": item.author,
+                    "digest": item.digest,
+                    "content": item.body_html,
+                    "content_source_url": item.source_url,
+                    "thumb_media_id": item_thumb_media_id,
+                    "need_open_comment": 1 if open_comments else 0,
+                    "only_fans_can_comment": 1 if fans_only_comments else 0,
+                }
+            )
         payload = await self._request_with_token(
-            "POST", "/cgi-bin/draft/add", json_body={"articles": [item]}
+            "POST", "/cgi-bin/draft/add", json_body={"articles": items}
         )
         media_id = payload.get("media_id")
         if not isinstance(media_id, str) or not media_id:
@@ -412,7 +451,7 @@ class WechatOfficialClient:
             )
         return DraftReceipt(
             media_id=media_id,
-            content_fingerprint=article.content_fingerprint,
+            content_fingerprint=_draft_content_fingerprint(articles),
             created_at=datetime.now(UTC),
         )
 

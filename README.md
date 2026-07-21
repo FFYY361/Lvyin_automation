@@ -47,20 +47,35 @@ wechat-official --help
 `auto_preview` 按日期和赛事串联 `thufootball`、`preview` 与 `wechat_official`。入口是纯 Python 脚本：
 
 ```powershell
-python scripts/auto_preview.py 2026-04-11 female
-python scripts/auto_preview.py 2026-04-11 male --stage data
-python scripts/auto_preview.py 2026-04-11 futsal --stage publish
+python scripts/auto_preview.py --dates 2026-04-11 --competitions female
+python scripts/auto_preview.py --dates 2026-04-11 2026-04-12 --competitions male female futsal --stage data
+python scripts/auto_preview.py --dates 2026-04-11 2026-04-12 --competitions male female --stage publish
 ```
 
-赛事参数仅支持 `male`、`female`、`futsal`。`--stage` 支持：
+`--dates` 和 `--competitions` 均为必填批量参数，不再接受旧的位置参数。赛事仅支持 `male`、`female`、`futsal`；日期和赛事会展开为笛卡尔积，自动去重，并固定按“日期升序，同日 male → female → futsal”处理。`--stage` 支持：
+
+Python 调用同样只使用批次请求，单组合传入单元素元组：
+
+```python
+from datetime import date
+
+from auto_preview import Competition, PipelineRequest, Stage
+
+request = PipelineRequest(
+    preview_dates=(date(2026, 4, 11), date(2026, 4, 12)),
+    competitions=(Competition.MALE, Competition.FEMALE),
+    stage=Stage.PUBLISH,
+)
+result = await pipeline.run(request)
+```
 
 | stage | 行为 |
 | --- | --- |
 | `data` | 读取固定赛事 ID，生成前瞻文章所需的原始数据 |
 | `article` | 完成 data 后渲染 Article；这是默认值 |
-| `publish` | 完成前两阶段后创建微信公众号草稿 |
+| `publish` | 完成全部组合的前两阶段后，一次创建一个微信公众号多图文草稿 |
 
-运行产物位于 `runs/auto_preview/YYYY-MM-DD_赛事/`。自动生成data后，需要填写以下人工内容：
+批次严格执行“全部 data → 全部 article → 一次 publish”，不会在其他组合尚未完成 data 时提前渲染文章。每个组合仍有独立产物目录 `runs/auto_preview/YYYY-MM-DD_赛事/`。自动生成 data 后，需要填写以下人工内容：
 
 - `runs/auto_preview/config.json`：长期复用编辑、责编和审核，仅需填写一次;
 - `runs/auto_preview/weather.json`：按日期填写天气；
@@ -90,19 +105,21 @@ data 阶段按“主队简称vs客队简称”自动生成 Markdown 文件名，
 不传封面时自动使用随包提供的“默认封面 / 发布前请替换”图片；也可以显式指定本地封面或已有公众号永久素材：
 
 ```powershell
-python scripts/auto_preview.py 2026-04-11 female --cover path/to/cover.png
-python scripts/auto_preview.py 2026-04-11 female --cover-media-id MEDIA_ID
+python scripts/auto_preview.py --dates 2026-04-11 --competitions female --cover path/to/cover.png
+python scripts/auto_preview.py --dates 2026-04-11 --competitions female --cover-media-id MEDIA_ID
 ```
+
+封面参数应用于批次内所有文章。没有比赛的组合会记录为可复用的 `no_games` 并跳过；普通重跑不会再次查询，使用 `--override` 或赛事 ID 查询范围变化时才会重新查询。若全部组合均无比赛，命令以成功状态退出且不会进入 article 或调用微信。
 
 data 阶段完成后，可以人工填写或修改 `weather.json`、`config.json`、`source.json` 和 `previews/*.md`，data 内容受到保护，若不开启 `--override`，不会自动覆盖渲染。若 data 内容发生变化，则 article 阶段会自动重新渲染，无论是否开启 `--override`。
 
 ```powershell
-python scripts/auto_preview.py 2026-04-11 female --stage article
+python scripts/auto_preview.py --dates 2026-04-11 --competitions female --stage article
 ```
 
-`--override` 会从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json` 和正文 Markdown，仅在确实需要重新查询数据时使用；它不会覆盖全局 `weather.json` 或 `config.json`。`publish` 会复用与当前 Article 完全匹配的草稿回执；Article 变化后则创建新草稿，并在 `draft.json` 中保留旧回执。
+`--override` 会对每个组合从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json` 和正文 Markdown，仅在确实需要重新查询数据时使用；它不会覆盖全局 `weather.json` 或 `config.json`。`publish` 只接收 1–8 篇实际生成的文章，超过八篇会在调用微信前失败，不自动拆分。批次成员、顺序、正文或封面不变，且所有组合都保存了同一回执时，才会复用草稿。
 
-`publish` 只创建公众号草稿，不正式发布或群发。每次运行的阶段日志追加到对应目录的 `auto_preview.log`，草稿回执历史保存在 `draft.json`。
+`publish` 只创建公众号草稿，不正式发布或群发。多篇文章按规范顺序成为头条和次条，整个草稿只有一个 `media_id`，同一回执会写入所有参与组合的 `draft.json`。每个组合的阶段日志分别追加到自己的 `auto_preview.log`。
 
 失败时终端和日志会输出错误类别、失败阶段、异常类型、安全上下文、是否可重试以及处置建议。批量赛事查询失败会按赛事 ID 展开子错误，以区分权限、认证、网络、限流、远端数据与本地校验问题；不会记录凭据、令牌或底层异常的完整消息。
 
@@ -241,7 +258,7 @@ article.save("tmp/qhly_preview_v1/article")
 
 ## service/wechat_official
 
-`WechatOfficialService` 不接收模板或前瞻 data，只接收完整 `Article` 或由 `Article.save()` 生成的文章目录。
+`WechatOfficialService` 不接收模板或前瞻 data，只接收完整 `Article`。同一个草稿可包含 1–8 篇文章，传入顺序依次对应头条和次条。
 
 ### CLI
 
@@ -251,10 +268,16 @@ article.save("tmp/qhly_preview_v1/article")
 wechat-official create-draft tmp/qhly_preview_v1/article
 ```
 
+多图文草稿按顺序传入多个由 `Article.save()` 生成的文章目录：
+
+```powershell
+wechat-official create-draft tmp/headline tmp/second tmp/third
+```
+
 确认后显式增加 `--execute` 才会上传正文图片、处理封面并创建草稿：
 
 ```powershell
-wechat-official create-draft tmp/qhly_preview_v1/article --execute
+wechat-official create-draft tmp/headline tmp/second tmp/third --execute
 ```
 
 真实写入前，在仓库根目录 `.env` 中配置公众号凭据，并把运行机器的出口 IP 加入公众号后台白名单：
@@ -273,15 +296,19 @@ from wechat_official import Article, WechatOfficialService
 
 
 async def main() -> None:
-    article = Article.load("tmp/qhly_preview_v1/article")
+    articles = [
+        Article.load("tmp/headline"),
+        Article.load("tmp/second"),
+        Article.load("tmp/third"),
+    ]
     async with WechatOfficialService.from_environment() as service:
-        receipt = await service.create_draft(article)
+        receipt = await service.create_draft(articles)
     print(receipt.media_id, receipt.content_fingerprint)
 
 
 asyncio.run(main())
 ```
 
-评论默认关闭；需要时使用 `create_draft(article, open_comments=True)`，仅粉丝评论还需同时传入 `fans_only_comments=True`。正文图片当前支持允许域名的 HTTPS 图片和 `data:` 图片，不读取本地正文资源路径。
+传入单个 `Article` 的调用方式保持不变。多图文只创建一个草稿并返回一个 `media_id`；评论默认关闭，开启时相同设置应用于组内全部文章，仅粉丝评论还需同时传入 `fans_only_comments=True`。正文图片当前支持允许域名的 HTTPS 图片和 `data:` 图片，不读取本地正文资源路径。
 
 凭据、IP 白名单、图片与草稿排错见 [微信公众号草稿教程](docs/wechat_official/wechat_official_draft_tutorial.md)。
