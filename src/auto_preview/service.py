@@ -984,8 +984,6 @@ class AutoPreviewPipeline:
 
         if request.stage is Stage.ARTICLE:
             next_command = self._next_command(request, Stage.PUBLISH)
-            for context in ordered_contexts:
-                context.logger.info("下一步 publish 命令：%s", next_command)
             return PipelineResult(
                 status="ok",
                 completed_stage=Stage.ARTICLE,

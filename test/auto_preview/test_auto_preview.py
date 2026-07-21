@@ -625,22 +625,21 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             PipelineRequest(date(2026, 4, 11), Competition.MALE)  # type: ignore[arg-type]
 
-    def test_cli_outputs_ordered_batch_runs(self) -> None:
+    def test_cli_logs_next_command_once_without_json_output(self) -> None:
         captured_request: list[PipelineRequest] = []
         run_directory = _PROJECT_ROOT / "runs" / "auto_preview" / "2026-04-11_male"
         result = PipelineResult(
             status="ok",
-            completed_stage=Stage.PUBLISH,
+            completed_stage=Stage.ARTICLE,
             runs=(
                 CombinationResult(
                     preview_date=date(2026, 4, 11),
                     competition=Competition.MALE,
                     status="ok",
-                    completed_stage=Stage.PUBLISH,
+                    completed_stage=Stage.ARTICLE,
                     run_directory=run_directory,
                     source_path=run_directory / "source.json",
                     article_directory=run_directory / "article",
-                    draft_media_id="batch-media-id",
                 ),
                 CombinationResult(
                     preview_date=date(2026, 4, 11),
@@ -651,7 +650,10 @@ class CliTests(unittest.TestCase):
                     reason="no_games",
                 ),
             ),
-            draft_media_id="batch-media-id",
+            next_command=(
+                "python scripts\\auto_preview.py --dates 2026-04-11 "
+                "--competitions male female --stage publish"
+            ),
         )
 
         class _Runner:
@@ -660,7 +662,7 @@ class CliTests(unittest.TestCase):
                 return result
 
         output = StringIO()
-        logger, _ = _logger()
+        logger, handler = _logger()
         with (
             patch("auto_preview.cli.configure_logging", return_value=logger),
             patch("auto_preview.cli.AutoPreviewPipeline", return_value=_Runner()),
@@ -674,21 +676,22 @@ class CliTests(unittest.TestCase):
                     "female",
                     "male",
                     "--stage",
-                    "publish",
+                    "article",
                 ]
             )
 
-        payload = json.loads(output.getvalue())
         self.assertEqual(status, 0)
+        self.assertEqual(output.getvalue(), "")
         self.assertEqual(
             captured_request[0].competitions, (Competition.MALE, Competition.FEMALE)
         )
-        self.assertEqual(payload["draft_media_id"], "batch-media-id")
+        next_commands = [
+            message for message in handler.messages if message.startswith("下一步 ")
+        ]
         self.assertEqual(
-            [(run["competition"], run["status"]) for run in payload["runs"]],
-            [("male", "ok"), ("female", "skipped")],
+            next_commands,
+            [f"下一步 publish 命令：{result.next_command}"],
         )
-        self.assertEqual(payload["runs"][1]["reason"], "no_games")
 
 
 class DefaultCoverAssetTests(unittest.TestCase):

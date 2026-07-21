@@ -432,6 +432,8 @@ class MapperTests(unittest.TestCase):
             ("game.away_goal", {"away_goal": "2"}),
             ("game.valid", {"valid": None}),
             ("game.penalty_shootout", {"penalty_shootout": None}),
+            ("game.home_penalty", {"home_penalty": -1}),
+            ("game.away_penalty", {"away_penalty": "3"}),
             ("game.home_abandon", {"home_abandon": 2}),
         )
         for field_path, changes in cases:
@@ -440,23 +442,13 @@ class MapperTests(unittest.TestCase):
                     map_game_summary(_game(**changes), "game")
                 self.assertEqual(caught.exception.field_path, field_path)
 
-    def test_inconsistent_finished_games_fail_strictly(self) -> None:
+    def test_inconsistent_finished_core_fields_fail_strictly(self) -> None:
         cases = (
             (
                 "game.home_abandon",
                 {"home_abandon": 1, "away_abandon": 1},
             ),
             ("game.home_goal", {"home_goal": None}),
-            (
-                "game.away_penalty",
-                {
-                    "home_goal": 2,
-                    "away_goal": 2,
-                    "penalty_shootout": 1,
-                    "home_penalty": 3,
-                    "away_penalty": 3,
-                },
-            ),
         )
         for field_path, changes in cases:
             with self.subTest(field_path=field_path):
@@ -480,6 +472,30 @@ class MapperTests(unittest.TestCase):
             ),
             "game",
         )
+        enabled_without_shootout = map_game_summary(
+            _game(
+                started=True,
+                ended=True,
+                home_goal=1,
+                away_goal=1,
+                penalty_shootout=1,
+                home_penalty=0,
+                away_penalty=0,
+            ),
+            "game",
+        )
+        disabled_with_penalty_scores = map_game_summary(
+            _game(
+                started=True,
+                ended=True,
+                home_goal=1,
+                away_goal=1,
+                penalty_shootout=0,
+                home_penalty=4,
+                away_penalty=3,
+            ),
+            "game",
+        )
         decided_on_penalties = map_game_summary(
             _game(
                 started=True,
@@ -495,6 +511,10 @@ class MapperTests(unittest.TestCase):
 
         self.assertTrue(non_draw.penalty_shootout)
         self.assertFalse(non_draw.decided_by_penalty_shootout)
+        self.assertTrue(enabled_without_shootout.penalty_shootout)
+        self.assertFalse(enabled_without_shootout.decided_by_penalty_shootout)
+        self.assertFalse(disabled_with_penalty_scores.penalty_shootout)
+        self.assertFalse(disabled_with_penalty_scores.decided_by_penalty_shootout)
         self.assertTrue(decided_on_penalties.penalty_shootout)
         self.assertTrue(decided_on_penalties.decided_by_penalty_shootout)
 
@@ -1337,6 +1357,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 home_goal=1,
                 away_goal=1,
                 penalty_shootout=0,
+                home_penalty=3,
+                away_penalty=4,
             ),
             _game(
                 9,
@@ -1429,6 +1451,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_game_id[9].result, MatchResult.LOSS)
         self.assertEqual(by_game_id[10].score_text, "1:1")
         self.assertEqual(by_game_id[10].result, MatchResult.DRAW)
+        self.assertFalse(by_game_id[10].game.penalty_shootout)
+        self.assertFalse(by_game_id[10].game.decided_by_penalty_shootout)
         self.assertEqual(by_game_id[1].score_text, "3:1")
         self.assertTrue(by_game_id[1].game.penalty_shootout)
         self.assertFalse(by_game_id[1].game.decided_by_penalty_shootout)
@@ -1439,6 +1463,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[1].venue, "away")
         self.assertEqual(results[1].score_text, "2(4):2(3)")
         self.assertEqual(results[1].game.result_text, "2(3):2(4)")
+        self.assertTrue(results[1].game.penalty_shootout)
         self.assertTrue(results[1].game.decided_by_penalty_shootout)
         self.assertEqual(results[1].penalty_goals_for, 4)
         self.assertEqual(results[1].penalty_goals_against, 3)

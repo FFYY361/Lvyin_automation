@@ -176,7 +176,7 @@ def _resolve_finished_game(
             ),
         )
 
-    if not game.penalty_shootout:
+    if not game.decided_by_penalty_shootout:
         normalised = replace(
             game,
             result_text=f"{home_score}:{away_score}",
