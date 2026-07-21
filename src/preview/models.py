@@ -11,7 +11,6 @@ from typing import TypeVar
 
 from .errors import PreviewValidationError
 
-SCHEMA_VERSION = 1
 CHINA_UTC_OFFSET = timedelta(hours=8)
 
 
@@ -85,7 +84,6 @@ class PreviewCredits:
 
 @dataclass(frozen=True)
 class PreviewSourceData:
-    schema_version: int
     column: PreviewColumnConfig
     preview_date: date
     headline: str
@@ -423,109 +421,6 @@ def _parse_preview_match(value: object, path: str, stage: str) -> PreviewMatch:
     )
 
 
-def _parse_weather(value: object, path: str, stage: str) -> PreviewWeather:
-    obj = _ObjectReader(
-        value,
-        path=path,
-        required=("forecast_date", "low_c", "high_c", "wind_direction", "wind_level"),
-        stage=stage,
-    )
-    return PreviewWeather(
-        forecast_date=_date(
-            obj.get("forecast_date"), obj.child_path("forecast_date"), stage=stage
-        ),
-        low_c=_integer(obj.get("low_c"), obj.child_path("low_c"), stage=stage),
-        high_c=_integer(obj.get("high_c"), obj.child_path("high_c"), stage=stage),
-        wind_direction=_string(
-            obj.get("wind_direction"), obj.child_path("wind_direction"), stage=stage
-        ),
-        wind_level=_string(
-            obj.get("wind_level"), obj.child_path("wind_level"), stage=stage
-        ),
-    )
-
-
-def _parse_credits(value: object, path: str, stage: str) -> PreviewCredits:
-    obj = _ObjectReader(
-        value,
-        path=path,
-        required=("editors", "reviewers", "approvers"),
-        stage=stage,
-    )
-    return PreviewCredits(
-        editors=_tuple_of(
-            obj.get("editors"),
-            obj.child_path("editors"),
-            _parse_string,
-            stage=stage,
-            minimum_items=1,
-        ),
-        reviewers=_tuple_of(
-            obj.get("reviewers"),
-            obj.child_path("reviewers"),
-            _parse_string,
-            stage=stage,
-            minimum_items=1,
-        ),
-        approvers=_tuple_of(
-            obj.get("approvers"),
-            obj.child_path("approvers"),
-            _parse_string,
-            stage=stage,
-            minimum_items=1,
-        ),
-    )
-
-
-def parse_preview_source(value: object) -> PreviewSourceData:
-    """Parse a strict JSON-compatible object into clean preview source data."""
-
-    stage = "preview-source"
-    obj = _ObjectReader(
-        value,
-        path="$",
-        required=(
-            "schema_version",
-            "column",
-            "preview_date",
-            "headline",
-            "matches",
-            "credits",
-        ),
-        optional=("weather",),
-        stage=stage,
-    )
-    raw_weather = obj.get("weather")
-    source = PreviewSourceData(
-        schema_version=_integer(
-            obj.get("schema_version"),
-            obj.child_path("schema_version"),
-            stage=stage,
-            minimum=1,
-        ),
-        column=_parse_column_config(obj.get("column"), obj.child_path("column"), stage),
-        preview_date=_date(
-            obj.get("preview_date"), obj.child_path("preview_date"), stage=stage
-        ),
-        headline=_string(obj.get("headline"), obj.child_path("headline"), stage=stage),
-        weather=(
-            None
-            if raw_weather is None
-            else _parse_weather(raw_weather, obj.child_path("weather"), stage)
-        ),
-        matches=_tuple_of(
-            obj.get("matches"),
-            obj.child_path("matches"),
-            _parse_preview_match,
-            stage=stage,
-            minimum_items=1,
-        ),
-        credits=_parse_credits(obj.get("credits"), obj.child_path("credits"), stage),
-    )
-    validate_preview_source(source)
-    return source
-
-
 def _parse_column_config(value: object, path: str, stage: str) -> PreviewColumnConfig:
     obj = _ObjectReader(
         value,
@@ -553,9 +448,26 @@ def _parse_column_config(value: object, path: str, stage: str) -> PreviewColumnC
     )
 
 
-def _validate_schema_version(value: int, path: str, *, stage: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or value != SCHEMA_VERSION:
-        raise _error(path, f"仅支持版本 {SCHEMA_VERSION}，实际为 {value}", stage=stage)
+def _parse_preview_fields(
+    *,
+    column: object,
+    preview_date: object,
+    headline: object,
+    matches: object,
+) -> tuple[PreviewColumnConfig, date, str, tuple[PreviewMatch, ...]]:
+    stage = "preview-source"
+    return (
+        _parse_column_config(column, "$.column", stage),
+        _date(preview_date, "$.preview_date", stage=stage),
+        _string(headline, "$.headline", stage=stage),
+        _tuple_of(
+            matches,
+            "$.matches",
+            _parse_preview_match,
+            stage=stage,
+            minimum_items=1,
+        ),
+    )
 
 
 def _validate_nonempty(value: str, path: str, *, stage: str) -> None:
@@ -641,7 +553,6 @@ def validate_preview_source(source: PreviewSourceData) -> None:
     """Validate both decoded and directly instantiated source objects."""
 
     stage = "preview-source"
-    _validate_schema_version(source.schema_version, "$.schema_version", stage=stage)
     _validate_preview_config(source.column, path="$.column", stage=stage)
     if not isinstance(source.preview_date, date) or isinstance(
         source.preview_date, datetime
@@ -739,7 +650,3 @@ def _load_json(path: str | Path, *, stage: str) -> object:
             f"JSON 格式错误（第 {exc.lineno} 行，第 {exc.colno} 列）",
             stage=stage,
         ) from exc
-
-
-def load_preview_source(path: str | Path) -> PreviewSourceData:
-    return parse_preview_source(_load_json(path, stage="preview-source"))

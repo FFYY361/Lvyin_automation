@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 
@@ -26,7 +27,6 @@ from preview import (
     load_preview_template,
     parse_preview_bundle,
     parse_preview_document,
-    parse_preview_source,
 )
 from preview.cli import main as cli_main
 from preview.html_tools import sanitise_html
@@ -73,21 +73,34 @@ def _load_example(path: Path = _DATA_PATH):
 
 
 def _raw_source() -> dict[str, object]:
-    raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
-    previews = raw.pop("previews")
-    raw["schema_version"] = 1
-    weather = json.loads(_WEATHER_PATH.read_text(encoding="utf-8"))[raw["preview_date"]]
-    raw["weather"] = {"forecast_date": raw["preview_date"], **weather}
-    raw["credits"] = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-    for match in raw["matches"]:
-        key = f"{match['home']['short_name']} vs {match['away']['short_name']}"
-        match["preview_paragraphs"] = [
-            line.strip()
-            for line in previews[key]["article"].splitlines()
-            if line.strip()
-        ]
-        match["writers"] = previews[key]["authors"]
-    return raw
+    return json.loads(_DATA_PATH.read_text(encoding="utf-8"))
+
+
+def _parse_source(raw: dict[str, object]):
+    return _parse_bundle(
+        raw,
+        json.loads(_WEATHER_PATH.read_text(encoding="utf-8")),
+        json.loads(_CONFIG_PATH.read_text(encoding="utf-8")),
+    )
+
+
+def _parse_bundle(source: object, weather: object, config: object):
+    return parse_preview_bundle(
+        source,
+        weather,
+        config,
+        source_directory=_DATA_PATH.parent,
+    )
+
+
+def _keep_first_match(raw: dict[str, object]) -> None:
+    matches = raw["matches"]
+    assert isinstance(matches, list)
+    raw["matches"] = matches[:1]
+    previews = raw["previews"]
+    assert isinstance(previews, dict)
+    first_key = next(iter(previews))
+    raw["previews"] = {first_key: previews[first_key]}
 
 
 def _render(template: PreviewTemplate, source) -> Article:
@@ -140,18 +153,19 @@ class PreviewSourceTests(unittest.TestCase):
         raw = _raw_source()
         raw["legacy_html"] = "<p>旧字段</p>"
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_source(raw)
+            parse_preview_document(raw, source_directory=_DATA_PATH.parent)
         self.assertIn("$", str(caught.exception))
         self.assertIn("legacy_html", str(caught.exception))
 
     def test_writer_credit_is_trimmed_stable_and_deduplicated(self) -> None:
         raw = _raw_source()
-        matches = raw["matches"]
-        self.assertIsInstance(matches, list)
-        matches[0]["writers"] = [" 唐伟 ", "唐伟", "王镜尧"]
-        matches[1]["writers"] = ["王镜尧", "赵六"]
+        previews = raw["previews"]
+        self.assertIsInstance(previews, dict)
+        entries = list(previews.values())
+        entries[0]["authors"] = [" 唐伟 ", "唐伟", "王镜尧"]
+        entries[1]["authors"] = ["王镜尧", "赵六"]
 
-        source = parse_preview_source(raw)
+        source = _parse_source(raw)
 
         self.assertEqual(source.ordered_writers, ("唐伟", "王镜尧", "赵六"))
         rendered = _render(load_preview_template(_TEMPLATE_PATH), source)
@@ -159,22 +173,22 @@ class PreviewSourceTests(unittest.TestCase):
 
     def test_blank_writer_reports_exact_path(self) -> None:
         raw = _raw_source()
-        raw["matches"][0]["writers"] = [" "]
+        next(iter(raw["previews"].values()))["authors"] = [" "]
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_source(raw)
-        self.assertIn("$.matches[0].writers[0]", str(caught.exception))
+            _parse_source(raw)
+        self.assertIn(".authors[0]", str(caught.exception))
 
     def test_match_date_and_score_pairs_are_validated(self) -> None:
         raw = _raw_source()
         raw["matches"][1]["kickoff"] = "2026-04-13T19:00:00+08:00"
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_source(raw)
+            _parse_source(raw)
         self.assertIn("$.matches[1].kickoff", str(caught.exception))
 
         raw = _raw_source()
         del raw["matches"][0]["home"]["current_results"][0]["away_score"]
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_source(raw)
+            _parse_source(raw)
         self.assertIn("$.matches[0].home.current_results[0]", str(caught.exception))
 
     def test_unknown_game_id_uses_only_minus_one(self) -> None:
@@ -189,13 +203,13 @@ class PreviewSourceTests(unittest.TestCase):
         raw = _raw_source()
         raw["matches"][0]["game_id"] = 0
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_source(raw)
+            _parse_source(raw)
         self.assertIn("$.matches[0].game_id", str(caught.exception))
 
         raw = _raw_source()
         raw["matches"][0]["home"]["current_results"][0]["game_id"] = -2
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_source(raw)
+            _parse_source(raw)
         self.assertIn(
             "$.matches[0].home.current_results[0].game_id",
             str(caught.exception),
@@ -211,14 +225,13 @@ class PreviewSourceTests(unittest.TestCase):
             with self.subTest(day=day):
                 raw = _raw_source()
                 raw["preview_date"] = day
-                raw["weather"]["forecast_date"] = day
                 raw["column"] = {
                     "competition_full_name": full_name,
                     "competition_short_name": short_name,
                 }
                 for match in raw["matches"]:
                     match["kickoff"] = day + match["kickoff"][10:]
-                source = parse_preview_source(raw)
+                source = _parse_source(raw)
                 rendered = _render(template, source)
                 self.assertTrue(
                     rendered.title.startswith(f"【{short_name}{weekday}前瞻】")
@@ -232,7 +245,7 @@ class PreviewSourceTests(unittest.TestCase):
             "competition_short_name": "测试",
             "weekday_label_override": "周末",
         }
-        rendered = _render(template, parse_preview_source(raw))
+        rendered = _render(template, _parse_source(raw))
         self.assertTrue(rendered.title.startswith("【测试周末前瞻】"))
         self.assertIn("周末比赛预告及天气情况", rendered.body_html)
 
@@ -253,7 +266,7 @@ class TemplateTests(unittest.TestCase):
         meeting = raw["matches"][0]["head_to_head"][0]
         meeting["season"] = "22-23"
         meeting["competition_label"] = "女足"
-        female = parse_preview_source(raw).matches[0].head_to_head[0]
+        female = _parse_source(raw).matches[0].head_to_head[0]
 
         female_line = _head_to_head_line(female)
         self.assertTrue(female_line.startswith("（22-23）"))
@@ -262,7 +275,7 @@ class TemplateTests(unittest.TestCase):
         self.assertTrue(female_line.endswith(f" {female.away.short_name}"))
 
         meeting["competition_label"] = "甲"
-        male = parse_preview_source(raw).matches[0].head_to_head[0]
+        male = _parse_source(raw).matches[0].head_to_head[0]
         self.assertTrue(_head_to_head_line(male).startswith("（22-23-甲）"))
 
     def test_venue_short_names_cover_configured_fields_and_fallback(self) -> None:
@@ -286,12 +299,12 @@ class TemplateTests(unittest.TestCase):
         self,
     ) -> None:
         raw = _raw_source()
-        raw["matches"] = [raw["matches"][0]]
+        _keep_first_match(raw)
         raw["matches"][0]["venue"] = "紫荆足球场北侧场地"
 
         rendered = _render(
             load_preview_template(_TEMPLATE_PATH),
-            parse_preview_source(raw),
+            _parse_source(raw),
         )
 
         self.assertIn(">紫北</td>", rendered.body_html)
@@ -299,14 +312,14 @@ class TemplateTests(unittest.TestCase):
 
     def test_missing_outcome_and_head_to_head_have_explicit_fallbacks(self) -> None:
         raw = _raw_source()
-        raw["matches"] = [raw["matches"][0]]
+        _keep_first_match(raw)
         match = raw["matches"][0]
         match["home"]["previous_outcomes"] = [{"season": "22-23", "outcome": "未参赛"}]
         match["head_to_head"] = []
 
         rendered = _render(
             load_preview_template(_TEMPLATE_PATH),
-            parse_preview_source(raw),
+            _parse_source(raw),
         )
 
         self.assertIn("（22-23）", rendered.body_html)
@@ -325,8 +338,12 @@ class TemplateTests(unittest.TestCase):
         for match in raw["matches"]:
             match["head_to_head"] = []
         raw["matches"][0]["home"]["name"] = "<社科 & 心理>"
-        raw["matches"][0]["preview_paragraphs"] = ["<strong>纯文本</strong>"]
-        source = parse_preview_source(raw)
+        source = _parse_source(raw)
+        first = replace(
+            source.matches[0],
+            preview_paragraphs=("<strong>纯文本</strong>",),
+        )
+        source = replace(source, matches=(first, *source.matches[1:]))
         template = PreviewTemplate.compile(
             """
             <section>
@@ -363,7 +380,7 @@ class TemplateTests(unittest.TestCase):
         del second["home_score"]
         del second["away_score"]
         second["result_text"] = "对手退赛"
-        source = parse_preview_source(raw)
+        source = _parse_source(raw)
         template = PreviewTemplate.compile(
             "<!-- wx:each source.matches as match -->"
             "<!-- wx:each match.home.current_results as result -->"
@@ -390,12 +407,11 @@ class TemplateTests(unittest.TestCase):
 
     def test_weather_fallback_and_content_fingerprint(self) -> None:
         raw = _raw_source()
-        raw.pop("weather")
-        source = parse_preview_source(raw)
+        source = replace(_parse_source(raw), weather=None)
         template = load_preview_template(_TEMPLATE_PATH)
         first = _render(template, source)
         raw["headline"] = "新的标题"
-        second = _render(template, parse_preview_source(raw))
+        second = _render(template, _parse_source(raw))
         self.assertIn("待更新", first.body_html)
         self.assertNotEqual(first.content_fingerprint, second.content_fingerprint)
 
@@ -670,7 +686,7 @@ class PreviewBundleTests(unittest.TestCase):
             json.loads(_CONFIG_PATH.read_text(encoding="utf-8")),
         )
 
-    def test_article_lines_are_trimmed_and_authors_are_deduplicated(self) -> None:
+    def test_inline_article_is_rejected(self) -> None:
         source, weather, config = self._payloads()
         key = next(iter(source["previews"]))
         source["previews"][key] = {
@@ -678,13 +694,9 @@ class PreviewBundleTests(unittest.TestCase):
             "authors": [" 张三 ", "张三", "李四"],
         }
 
-        parsed = parse_preview_bundle(source, weather, config)
-
-        self.assertEqual(
-            parsed.matches[0].preview_paragraphs,
-            ("第一段正文", "第二段正文"),
-        )
-        self.assertEqual(parsed.matches[0].writers, ("张三", "李四"))
+        with self.assertRaises(PreviewValidationError) as caught:
+            _parse_bundle(source, weather, config)
+        self.assertIn("article", str(caught.exception))
 
     def test_markdown_article_supports_direct_multiline_paste(self) -> None:
         source, weather, config = self._payloads()
@@ -695,8 +707,9 @@ class PreviewBundleTests(unittest.TestCase):
         )
         source["previews"][key] = {
             "article_file": article_file,
-            "authors": ["张三"],
+            "authors": [" 张三 ", "张三", "李四"],
         }
+        _keep_first_match(source)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             markdown = root / article_file
@@ -721,6 +734,7 @@ class PreviewBundleTests(unittest.TestCase):
                     "第三段正文。",
                 ),
             )
+            self.assertEqual(parsed.matches[0].writers, ("张三", "李四"))
 
             source["previews"][key]["article_file"] = "previews/随意改名.md"
             with self.assertRaises(PreviewValidationError) as renamed:
@@ -744,7 +758,7 @@ class PreviewBundleTests(unittest.TestCase):
 
         source, _, _ = self._payloads()
         source["previews"]["不存在 vs 球队"] = {
-            "article": "正文",
+            "article_file": "previews/不存在vs球队.md",
             "authors": ["作者"],
         }
         with self.assertRaises(PreviewValidationError) as extra:
@@ -784,12 +798,12 @@ class PreviewBundleTests(unittest.TestCase):
                 "wind_level": None,
             }
         }
-        self.assertIsNone(parse_preview_bundle(source, empty_weather, config).weather)
+        self.assertIsNone(_parse_bundle(source, empty_weather, config).weather)
 
         partial_weather = copy.deepcopy(empty_weather)
         partial_weather[day]["low_c"] = 8
         with self.assertRaises(PreviewValidationError) as caught:
-            parse_preview_bundle(source, partial_weather, config)
+            _parse_bundle(source, partial_weather, config)
         message = str(caught.exception)
         self.assertIn(f"$weather['{day}']", message)
         self.assertIn("high_c", message)
@@ -804,25 +818,18 @@ class PreviewBundleTests(unittest.TestCase):
                 "wind_level": "2级",
             }
         }
-        parsed = parse_preview_bundle(source, complete_weather, config)
+        parsed = _parse_bundle(source, complete_weather, config)
         self.assertIsNotNone(parsed.weather)
         self.assertEqual(parsed.weather.forecast_date.isoformat(), day)
         self.assertEqual(parsed.weather.low_c, 8)
 
-    def test_config_and_source_are_strict(self) -> None:
+    def test_config_is_strict(self) -> None:
         source, weather, config = self._payloads()
         config["unknown"] = []
         with self.assertRaises(PreviewValidationError) as config_error:
-            parse_preview_bundle(source, weather, config)
+            _parse_bundle(source, weather, config)
         self.assertIn("$config", str(config_error.exception))
         self.assertIn("unknown", str(config_error.exception))
-
-        source, _, _ = self._payloads()
-        source["schema_version"] = 1
-        with self.assertRaises(PreviewValidationError) as source_error:
-            parse_preview_document(source)
-        self.assertIn("$.schema_version", str(source_error.exception))
-        self.assertIn("仅支持版本 2", str(source_error.exception))
 
 
 class PreviewCliTests(unittest.TestCase):

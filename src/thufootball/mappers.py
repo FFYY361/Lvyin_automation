@@ -52,16 +52,10 @@ def _non_negative_int(value: object, path: str) -> int:
     return value
 
 
-def _legacy_counter(value: object, path: str) -> int:
-    if value == -1:
-        return 0
-    return _non_negative_int(value, path)
-
-
-def _optional_non_negative_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+def _optional_non_negative_int(value: object, path: str) -> int | None:
+    if value is None:
         return None
-    return value
+    return _non_negative_int(value, path)
 
 
 def _optional_int(value: object, path: str) -> int | None:
@@ -86,14 +80,10 @@ def _binary_flag(value: object, path: str) -> bool:
     raise _schema(path)
 
 
-def _optional_binary_flag(value: object) -> bool | None:
+def _optional_binary_flag(value: object, path: str) -> bool | None:
     if value is None:
         return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in {0, 1}:
-        return bool(value)
-    return None
+    return _binary_flag(value, path)
 
 
 def _text(value: object, path: str) -> str:
@@ -218,8 +208,7 @@ def map_game_summary(
     kickoff_utc = _kickoff(item.get("time"), f"{path}.time")
     kickoff_local = kickoff_utc.astimezone(SHANGHAI)
     record_active = _bool(item.get("status"), f"{path}.status")
-    raw_valid = item.get("valid")
-    valid = False if raw_valid is None else _binary_flag(raw_valid, f"{path}.valid")
+    valid = _binary_flag(item.get("valid"), f"{path}.valid")
     started = _bool(item.get("start"), f"{path}.start")
     ended = _bool(item.get("end"), f"{path}.end")
     home_team = _mapping(
@@ -239,13 +228,10 @@ def map_game_summary(
     if resolved_now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
 
-    raw_penalty_shootout = item.get("penalty_shootout")
-    penalty_shootout = (
-        False
-        if raw_penalty_shootout is None
-        else _binary_flag(raw_penalty_shootout, f"{path}.penalty_shootout")
+    penalty_shootout = _binary_flag(
+        item.get("penalty_shootout"), f"{path}.penalty_shootout"
     )
-    return GameSummary(
+    game = GameSummary(
         game_id=game_id,
         tournament_id=tournament_id,
         tournament_name=resolved_tournament_name,
@@ -278,18 +264,53 @@ def map_game_summary(
             away_team.get("team_id"), f"{path}.away_tourn_team_info.team_id"
         ),
         away_team_name=_display_name(away_team, f"{path}.away_tourn_team_info.name"),
-        home_score=_optional_non_negative_int(item.get("home_goal")),
-        away_score=_optional_non_negative_int(item.get("away_goal")),
+        home_score=_optional_non_negative_int(
+            item.get("home_goal"), f"{path}.home_goal"
+        ),
+        away_score=_optional_non_negative_int(
+            item.get("away_goal"), f"{path}.away_goal"
+        ),
         result_text=_optional_text(item.get("result")),
         penalty_shootout=penalty_shootout,
-        home_penalty=_optional_non_negative_int(item.get("home_penalty")),
-        away_penalty=_optional_non_negative_int(item.get("away_penalty")),
-        home_abandon=_optional_binary_flag(item.get("home_abandon")),
-        away_abandon=_optional_binary_flag(item.get("away_abandon")),
+        home_penalty=_optional_non_negative_int(
+            item.get("home_penalty"), f"{path}.home_penalty"
+        ),
+        away_penalty=_optional_non_negative_int(
+            item.get("away_penalty"), f"{path}.away_penalty"
+        ),
+        home_abandon=_optional_binary_flag(
+            item.get("home_abandon"), f"{path}.home_abandon"
+        ),
+        away_abandon=_optional_binary_flag(
+            item.get("away_abandon"), f"{path}.away_abandon"
+        ),
         field_name=field_name,
         home_team_brief_name=_optional_text(home_team.get("brief_name")),
         away_team_brief_name=_optional_text(away_team.get("brief_name")),
     )
+    _validate_finished_game(game, path)
+    return game
+
+
+def _validate_finished_game(game: GameSummary, path: str) -> None:
+    if game.status is not GameStatus.FINISHED:
+        return
+    if game.home_abandon is True and game.away_abandon is True:
+        raise _schema(f"{path}.home_abandon")
+    if game.home_abandon is True or game.away_abandon is True:
+        return
+    if game.home_score is None:
+        raise _schema(f"{path}.home_goal")
+    if game.away_score is None:
+        raise _schema(f"{path}.away_goal")
+    if not game.penalty_shootout:
+        return
+    if game.home_score != game.away_score:
+        raise _schema(f"{path}.penalty_shootout")
+    if game.home_penalty is None:
+        raise _schema(f"{path}.home_penalty")
+    if game.away_penalty is None or game.home_penalty == game.away_penalty:
+        raise _schema(f"{path}.away_penalty")
 
 
 def map_current_games(payload: Mapping[str, Any]) -> list[GameSummary]:
@@ -318,12 +339,12 @@ def map_tournament_team(
         name=_display_name(item, f"{path}.name"),
         brief_name=_brief_name(item, f"{path}.brief_name"),
         group_place=_optional_text(item.get("group_place")),
-        wins=_legacy_counter(item.get("win"), f"{path}.win"),
-        draws=_legacy_counter(item.get("draw"), f"{path}.draw"),
-        losses=_legacy_counter(item.get("lose"), f"{path}.lose"),
-        goals_for=_legacy_counter(item.get("goal"), f"{path}.goal"),
-        goals_against=_legacy_counter(item.get("concede"), f"{path}.concede"),
-        points=_legacy_counter(item.get("point"), f"{path}.point"),
+        wins=_non_negative_int(item.get("win"), f"{path}.win"),
+        draws=_non_negative_int(item.get("draw"), f"{path}.draw"),
+        losses=_non_negative_int(item.get("lose"), f"{path}.lose"),
+        goals_for=_non_negative_int(item.get("goal"), f"{path}.goal"),
+        goals_against=_non_negative_int(item.get("concede"), f"{path}.concede"),
+        points=_non_negative_int(item.get("point"), f"{path}.point"),
         reported_rank=rank if rank > 0 else None,
     )
 
@@ -336,60 +357,26 @@ def _map_season_ids(raw: object) -> dict[str, int]:
             raise _schema("season_ids.<key>")
         normalised = season.strip()
         if not normalised:
-            continue
+            raise _schema("season_ids.<key>")
         result[normalised] = _positive_int(value, f"season_ids.{normalised}")
     return result
 
 
 def _map_snapshot_games(
     raw_games: Sequence[object],
-    teams: tuple[TournamentTeam, ...],
     *,
     tournament_name: str,
-) -> tuple[tuple[GameSummary, ...], tuple[int, ...]]:
+) -> tuple[GameSummary, ...]:
     now = datetime.now(UTC)
-    teams_by_tournament_id = {team.tournament_team_id: team for team in teams}
-    mapped_games: list[GameSummary] = []
-    invalid_game_ids: list[int] = []
-    for index, raw in enumerate(raw_games):
-        path = f"games[{index}]"
-        item = _mapping(raw, path)
-        game_item: Mapping[str, Any] = item
-        unresolved_team_identity = False
-        for side in ("home", "away"):
-            info_key = f"{side}_tourn_team_info"
-            if isinstance(item.get(info_key), Mapping):
-                continue
-            tournament_team_id = item.get(f"{side}_tourn_team_id")
-            fallback = (
-                teams_by_tournament_id.get(tournament_team_id)
-                if isinstance(tournament_team_id, int)
-                and not isinstance(tournament_team_id, bool)
-                else None
-            )
-            if fallback is None:
-                unresolved_team_identity = True
-                break
-            if game_item is item:
-                game_item = dict(item)
-            assert isinstance(game_item, dict)
-            game_item[info_key] = {
-                "team_id": fallback.team_id,
-                "name": fallback.name,
-                "brief_name": fallback.brief_name,
-            }
-        if unresolved_team_identity:
-            invalid_game_ids.append(_positive_int(item.get("id"), f"{path}.id"))
-            continue
-        mapped_games.append(
-            map_game_summary(
-                game_item,
-                path,
-                now=now,
-                tournament_name=tournament_name,
-            )
+    return tuple(
+        map_game_summary(
+            raw,
+            f"games[{index}]",
+            now=now,
+            tournament_name=tournament_name,
         )
-    return tuple(mapped_games), tuple(invalid_game_ids)
+        for index, raw in enumerate(raw_games)
+    )
 
 
 def map_tournament_snapshot(
@@ -415,9 +402,8 @@ def map_tournament_snapshot(
         for index, raw in enumerate(raw_teams)
     )
     raw_games = _sequence(payload.get("games"), "games")
-    games, invalid_game_ids = _map_snapshot_games(
+    games = _map_snapshot_games(
         raw_games,
-        teams,
         tournament_name=tournament_name,
     )
     if any(game.tournament_id != tournament_id for game in games):
@@ -435,7 +421,6 @@ def map_tournament_snapshot(
         season_ids=MappingProxyType(season_ids),
         teams=teams,
         games=games,
-        invalid_game_ids=invalid_game_ids,
     )
 
 

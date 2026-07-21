@@ -54,7 +54,6 @@ from .state import (
     write_text,
 )
 
-Prompt = Callable[[str], bool]
 ServiceFactory = Callable[[], Any]
 AUTO_PREVIEW_DIGEST = "马杯前瞻"
 
@@ -83,7 +82,6 @@ class AutoPreviewPipeline:
         project_root: str | Path | None = None,
         query_service_factory: ServiceFactory | None = None,
         wechat_service_factory: ServiceFactory | None = None,
-        prompt: Prompt | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._project_root = (
@@ -97,7 +95,6 @@ class AutoPreviewPipeline:
         self._wechat_service_factory = (
             wechat_service_factory or WechatOfficialService.from_environment
         )
-        # 保留 prompt 参数以兼容既有调用方；pipeline 已改为仅 warning、不再询问。
         self._logger = logger
 
     def run_directory(self, request: PipelineRequest) -> Path:

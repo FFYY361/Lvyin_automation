@@ -486,22 +486,6 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(team.short_name, "计算机-GIX")
         self.assertFalse(any("team_id=33" in item for item in handler.messages))
 
-    async def test_current_results_home_normalisation_can_be_disabled(self) -> None:
-        queries = _FakeQueries()
-        logger, _ = _logger()
-        builder = PreviewSourceBuilder(
-            queries,  # type: ignore[arg-type]
-            competition_config(Competition.FEMALE),
-            logger=logger,
-        )
-
-        with patch("auto_preview.source.CURRENT_RESULTS_TEAM_ALWAYS_HOME", False):
-            source = await builder.build(datetime(2026, 4, 11).date())
-
-        away_results = source.matches[0].away.current_results
-        self.assertTrue(away_results)
-        self.assertTrue(all(result.away.team_id == 2 for result in away_results))
-
 
 class CliTests(unittest.TestCase):
     def test_help_works_outside_repository_and_only_documents_supported_spelling(
@@ -727,7 +711,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
         *,
         queries: _FakeQueries | None = None,
         wechat: _FakeWechat | None = None,
-        prompt=None,
     ) -> tuple[AutoPreviewPipeline, _FakeQueries, _ListHandler]:
         queries = queries or _FakeQueries()
         logger, handler = _logger()
@@ -737,7 +720,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             wechat_service_factory=(
                 None if wechat is None else lambda: _Context(wechat)
             ),
-            prompt=prompt or (lambda _: True),
             logger=logger,
         )
         return runner, queries, handler
@@ -820,17 +802,12 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_placeholders_warn_and_continue_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            prompts: list[str] = []
-            runner, queries, handler = self._pipeline(
-                root,
-                prompt=lambda message: prompts.append(message) or False,
-            )
+            runner, queries, handler = self._pipeline(root)
             request = self._request(Stage.ARTICLE)
 
             initial = await runner.run(request)
             self.assertEqual(initial.status, "ok")
             self.assertTrue(initial.article_directory.is_dir())
-            self.assertEqual(prompts, [])
             self.assertTrue(
                 any("标题尚未填写" in message for message in handler.messages)
             )
@@ -912,11 +889,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            prompts: list[str] = []
-            runner, queries, handler = self._pipeline(
-                root,
-                prompt=lambda message: prompts.append(message) or True,
-            )
+            runner, queries, handler = self._pipeline(root)
             request = self._request(Stage.ARTICLE, override=True)
             complete = await runner.run(request)
             before = Article.load(complete.article_directory)
@@ -944,7 +917,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 before.content_fingerprint,
             )
             self.assertEqual(len(queries.game_queries), 1)
-            self.assertEqual(prompts, [])
             self.assertTrue(
                 any(
                     "source、正文 Markdown、天气或人员配置已变化" in message
@@ -958,7 +930,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                     Stage.ARTICLE,
                 )
             )
-            self.assertEqual(prompts, [])
 
     async def test_missing_markdown_is_not_recreated_without_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1029,7 +1000,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 any("模板指纹已变化" in message for message in handler.messages)
             )
 
-    async def test_data_writes_schema_v2_manual_document(self) -> None:
+    async def test_data_writes_template_source_document(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
             runner, queries, handler = self._pipeline(root)
@@ -1040,7 +1011,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 list(raw),
                 [
-                    "schema_version",
                     "column",
                     "preview_date",
                     "headline",
@@ -1048,7 +1018,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                     "matches",
                 ],
             )
-            self.assertEqual(raw["schema_version"], 2)
             self.assertNotIn("weather", raw)
             self.assertNotIn("credits", raw)
             match = raw["matches"][0]
@@ -1443,31 +1412,13 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rebuilt.status, "ok")
             self.assertEqual(len(queries.game_queries), 2)
 
-    async def test_old_source_and_run_contracts_require_override(self) -> None:
+    async def test_run_state_version_is_strict(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
             runner, queries, _ = self._pipeline(root)
             request = self._request(Stage.DATA)
             created = await runner.run(request)
-            source = json.loads(created.source_path.read_text(encoding="utf-8"))
-            source["schema_version"] = 1
-            created.source_path.write_text(
-                json.dumps(source, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            with self.assertRaises(ArtifactValidationError) as source_error:
-                await runner.run(request)
-            self.assertIn("仅支持版本 2", str(source_error.exception))
-
-            restored = await runner.run(
-                PipelineRequest(
-                    request.preview_date,
-                    request.competition,
-                    Stage.DATA,
-                    override=True,
-                )
-            )
-            state_path = restored.run_directory / "run.json"
+            state_path = created.run_directory / "run.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
             state["schema_version"] = 1
             state_path.write_text(

@@ -16,11 +16,10 @@ from .models import (
     PreviewSourceData,
     PreviewWeather,
     _load_json,
-    parse_preview_source,
+    _parse_preview_fields,
     validate_preview_source,
 )
 
-SOURCE_DOCUMENT_SCHEMA_VERSION = 2
 WEATHER_FIELDS = ("low_c", "high_c", "wind_direction", "wind_level")
 _MATCH_FIELDS = (
     "game_id",
@@ -32,11 +31,11 @@ _MATCH_FIELDS = (
     "away",
     "head_to_head",
 )
-_DUMMY_CREDITS = {
-    "editors": ["__bundle_validation__"],
-    "reviewers": ["__bundle_validation__"],
-    "approvers": ["__bundle_validation__"],
-}
+_DUMMY_CREDITS = PreviewCredits(
+    editors=("__bundle_validation__",),
+    reviewers=("__bundle_validation__",),
+    approvers=("__bundle_validation__",),
+)
 
 
 def _error(path: str, message: str) -> PreviewValidationError:
@@ -91,7 +90,6 @@ def _date_value(value: object, path: str) -> date:
 class PreviewSourceDocument:
     """The manual source document before weather and global credits are injected."""
 
-    schema_version: int
     column: PreviewColumnConfig
     preview_date: date
     headline: str
@@ -104,7 +102,6 @@ class PreviewSourceDocument:
         credits: PreviewCredits,
     ) -> PreviewSourceData:
         source = PreviewSourceData(
-            schema_version=1,
             column=self.column,
             preview_date=self.preview_date,
             headline=self.headline,
@@ -150,8 +147,7 @@ def preview_article_file(home_short_name: str, away_short_name: str) -> str:
 class _PreviewEntry:
     path: str
     authors: tuple[str, ...]
-    article: str | None
-    article_file: str | None
+    article_file: str
 
 
 def _markdown_paragraphs(content: str, path: str) -> tuple[str, ...]:
@@ -213,36 +209,21 @@ def _parse_preview_entries(value: object) -> dict[str, _PreviewEntry]:
         entry = _object(
             raw_entry,
             entry_path,
-            required=("authors",),
-            optional=("article", "article_file"),
+            required=("article_file", "authors"),
         )
-        has_article = "article" in entry
-        has_article_file = "article_file" in entry
-        if has_article == has_article_file:
+        raw_article_file = entry["article_file"]
+        article_file = _nonempty_string(
+            raw_article_file,
+            f"{entry_path}.article_file",
+        )
+        if raw_article_file != article_file:
             raise _error(
-                entry_path,
-                "article 与 article_file 必须且只能填写一个",
-            )
-        article_file: str | None = None
-        if has_article_file:
-            raw_article_file = entry["article_file"]
-            article_file = _nonempty_string(
-                raw_article_file,
                 f"{entry_path}.article_file",
+                "不能包含首尾空白",
             )
-            if raw_article_file != article_file:
-                raise _error(
-                    f"{entry_path}.article_file",
-                    "不能包含首尾空白",
-                )
         entries[key] = _PreviewEntry(
             path=entry_path,
             authors=_names(entry["authors"], f"{entry_path}.authors"),
-            article=(
-                _nonempty_string(entry["article"], f"{entry_path}.article")
-                if has_article
-                else None
-            ),
             article_file=article_file,
         )
     return entries
@@ -316,24 +297,16 @@ def _augment_matches(
     augmented: list[dict[str, object]] = []
     for match, label, expected_article_file in rows:
         entry = entries[label]
-        if entry.article_file is not None:
-            if entry.article_file != expected_article_file:
-                raise _error(
-                    f"{entry.path}.article_file",
-                    f"必须与比赛名称一致，预期为 {expected_article_file!r}",
-                )
-            paragraphs = _read_article_file(
-                source_directory,
-                entry.article_file,
+        if entry.article_file != expected_article_file:
+            raise _error(
                 f"{entry.path}.article_file",
+                f"必须与比赛名称一致，预期为 {expected_article_file!r}",
             )
-        else:
-            assert entry.article is not None
-            paragraphs = tuple(
-                line.strip() for line in entry.article.splitlines() if line.strip()
-            )
-            if not paragraphs:
-                raise _error(f"{entry.path}.article", "至少需要一个非空段落")
+        paragraphs = _read_article_file(
+            source_directory,
+            entry.article_file,
+            f"{entry.path}.article_file",
+        )
         match["preview_paragraphs"] = list(paragraphs)
         match["writers"] = list(entry.authors)
         augmented.append(match)
@@ -345,13 +318,12 @@ def parse_preview_document(
     *,
     source_directory: str | Path | None = None,
 ) -> PreviewSourceDocument:
-    """Parse the strict schema-v2 manual source document."""
+    """Parse the strict manual source document for the preview template."""
 
     root = _object(
         value,
         "$",
         required=(
-            "schema_version",
             "column",
             "preview_date",
             "headline",
@@ -359,17 +331,6 @@ def parse_preview_document(
             "matches",
         ),
     )
-    version = root["schema_version"]
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != SOURCE_DOCUMENT_SCHEMA_VERSION
-    ):
-        raise _error(
-            "$.schema_version",
-            f"仅支持版本 {SOURCE_DOCUMENT_SCHEMA_VERSION}，实际为 {version}",
-        )
-
     preview_entries = _parse_preview_entries(root["previews"])
     match_rows = _parse_match_rows(root["matches"])
     _validate_preview_mapping(match_rows, preview_entries)
@@ -379,23 +340,23 @@ def parse_preview_document(
         source_directory,
     )
 
-    assembled_payload = {
-        "schema_version": 1,
-        "column": root["column"],
-        "preview_date": root["preview_date"],
-        "headline": root["headline"],
-        "weather": None,
-        "matches": augmented_matches,
-        "credits": _DUMMY_CREDITS,
-    }
-    parsed = parse_preview_source(assembled_payload)
-    return PreviewSourceDocument(
-        schema_version=SOURCE_DOCUMENT_SCHEMA_VERSION,
-        column=parsed.column,
-        preview_date=parsed.preview_date,
-        headline=parsed.headline,
-        matches=parsed.matches,
+    column, preview_date, headline, matches = _parse_preview_fields(
+        column=root["column"],
+        preview_date=root["preview_date"],
+        headline=root["headline"],
+        matches=augmented_matches,
     )
+    document = PreviewSourceDocument(
+        column=column,
+        preview_date=preview_date,
+        headline=headline,
+        matches=matches,
+    )
+    document.assemble(
+        weather=None,
+        credits=_DUMMY_CREDITS,
+    )
+    return document
 
 
 def _parse_weather_map(value: object, preview_date: date) -> PreviewWeather | None:

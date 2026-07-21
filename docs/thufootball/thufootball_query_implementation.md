@@ -151,7 +151,6 @@ class TournamentSnapshot:
     season_ids: Mapping[str, int]
     teams: tuple[TournamentTeam, ...]
     games: tuple[GameSummary, ...]
-    invalid_game_ids: tuple[int, ...] = ()
 ```
 
 API 返回的 `rank <= 0` 映射为 `reported_rank=None`。非零排名也只作为人工核对证据；运行时最终成绩以已提交的逐赛事静态排名文件为准。
@@ -321,20 +320,20 @@ kickoff_local = kickoff_utc.astimezone(ZoneInfo("Asia/Shanghai"))
 判断是否完赛不得依赖 `game_time_metadata`、`minute` 或 `stoppage_minute`。只有 `FINISHED` 且能够按下列顺序归一化的比赛才进入球队赛果和交锋汇总：
 
 1. 单方弃赛：五人制将未弃赛方判为 `5:0`，其他人数判为 `3:0`；返回的 `GameSummary` 副本覆盖比分和 `result_text`，保留弃赛标记，并清除点球字段。
-2. 双方弃赛、无效记录、比分缺失或非法：排除该比赛，并加入本次调用的聚合 warning。
+2. 双方弃赛、完赛比分缺失或点球数据矛盾：映射时直接返回带字段路径的 `SchemaError`。
 3. 常规比分不同：按常规比分判断胜负，使用普通 `主队比分:客队比分` 文本，并清除无实际意义的点球字段。
 4. 常规比分相同且 `penalty_shootout` 为假：判为平局。
 5. 常规比分相同、`penalty_shootout` 为真且点球比分合法并不相等：按点球判断胜负，主客视角文本规范为 `2(3):2(4)`；`TeamGameResult` 再将比分和点球字段转换为目标球队视角。
-6. 常规比分相同但点球比分缺失、相等或损坏：排除该比赛，并加入聚合 warning，不猜测胜负。
+6. 常规比分相同但点球比分缺失、相等或损坏：直接返回 `SchemaError`，不猜测胜负。
 
-`include_unfinished=True` 时，有效未完赛比赛可进入返回列表，但不进入交锋汇总。旧赛事中 `penalty_shootout=null` 按未进入点球处理，`valid=null` 按无效比赛处理；缺失嵌套球队对象时只允许按同赛事的 `tournament_team_id` 确定性回填。两级球队 ID 都缺失的比赛进入 `TournamentSnapshot.invalid_game_ids` 并被排除，不猜测球队身份。每个基于赛事快照的公共查询每次最多发出一次 `InvalidGameDataWarning`，其 `game_ids` 包含本次被跳过的全部比赛 ID。
+`include_unfinished=True` 时，有效未完赛比赛可进入返回列表，但不进入交锋汇总。`valid=false` 或 `status=false` 的记录继续按无效领域状态过滤；`valid=null`、`penalty_shootout=null`、缺失嵌套球队对象、负数计数和其他不符合当前响应契约的数据直接返回 `SchemaError`，不修复、不回填也不跳过。
 
 ### 4.3 球队身份与赛事范围
 
 - 跨赛事球队身份只使用嵌套球队对象的 `team_id`。
 - `tourn_team_id` 只在单项赛事内关联比赛、报名球员和事件。
 - `GetMyTournaments` 只用于发现可访问赛事，不代表“我的赛事”。
-- 本地黑名单 `BLACKLISTED_TOURNAMENT_IDS={6, 28}` 优先于 API 目录：自动全赛事查询静默排除这些赛事；显式查询其中任一 ID 时在发送赛事请求前抛出 `QueryValidationError`，不产生 `InvalidGameDataWarning`。`GetCurrentGames` 的结果也会过滤这些赛事，按比赛 ID 读取到黑名单赛事详情时不向调用方返回领域对象。
+- 本地黑名单 `BLACKLISTED_TOURNAMENT_IDS={6, 28}` 优先于 API 目录：自动全赛事查询静默排除这些赛事；显式查询其中任一 ID 时在发送赛事请求前抛出 `QueryValidationError`。`GetCurrentGames` 的结果也会过滤这些赛事，按比赛 ID 读取到黑名单赛事详情时不向调用方返回领域对象。
 - `GetCurrentGames(type="all")` 是否扩大数据范围未得到当前账号验证，调用方不得把 `all` 理解为所有私有比赛。
 - `season_ids` 可以帮助发现同系列其他赛季，但跨赛事查询仍必须显式形成赛事 ID 列表。
 - 最终成绩身份表以官方院系为顶层、以男足/女足/五人制为项目；运行时展开为“院系+项目”的规范名称，同院系不同项目允许共享 API `team_id`。
@@ -378,7 +377,7 @@ DataConflict
 BatchQueryError
 ```
 
-损坏比赛使用标准 `warnings.warn` 发出可捕获的 `InvalidGameDataWarning`；它不是请求异常，也不会携带原始响应。
+损坏比赛直接返回带字段路径的 `SchemaError`，错误不携带原始响应。
 
 最终成绩静态文件损坏或审计不一致时返回 `ConfigurationError`，不回退到运行时猜测。
 

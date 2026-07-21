@@ -108,7 +108,6 @@ class TournamentSnapshot:
     season_ids: Mapping[str, int]
     teams: tuple[TournamentTeam, ...]
     games: tuple[GameSummary, ...]
-    invalid_game_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
