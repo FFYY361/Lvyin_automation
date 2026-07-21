@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -29,7 +30,35 @@ class _ConsoleFormatter(logging.Formatter):
         return f"{color}{message}\x1b[0m" if color else message
 
 
-def configure_logging(run_directory: Path) -> logging.Logger:
+class _ProjectRootFilter(logging.Filter):
+    """Render paths inside the repository relative to its root."""
+
+    def __init__(self, project_root: Path) -> None:
+        super().__init__()
+        resolved = project_root.resolve()
+        self._prefixes = tuple(
+            dict.fromkeys(
+                (
+                    str(resolved) + os.sep,
+                    resolved.as_posix() + "/",
+                )
+            )
+        )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        for prefix in self._prefixes:
+            message = message.replace(prefix, "")
+        record.msg = message
+        record.args = ()
+        return True
+
+
+def configure_logging(
+    run_directory: Path,
+    *,
+    project_root: Path | None = None,
+) -> logging.Logger:
     run_directory.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("auto_preview")
     logger.setLevel(logging.INFO)
@@ -37,6 +66,9 @@ def configure_logging(run_directory: Path) -> logging.Logger:
     for handler in tuple(logger.handlers):
         logger.removeHandler(handler)
         handler.close()
+    logger.filters.clear()
+    if project_root is not None:
+        logger.addFilter(_ProjectRootFilter(project_root))
 
     console = logging.StreamHandler(sys.stderr)
     console.setFormatter(

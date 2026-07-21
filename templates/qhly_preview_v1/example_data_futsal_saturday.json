@@ -1,17 +1,18 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "column": {
     "competition_full_name": "马约翰杯五人制足球赛",
     "competition_short_name": "马杯五人制"
   },
   "preview_date": "2026-04-11",
   "headline": "五人制周六测试前瞻",
-  "weather": {
-    "forecast_date": "2026-04-11",
-    "low_c": 12,
-    "high_c": 23,
-    "wind_direction": "南风",
-    "wind_level": "1级"
+  "previews": {
+    "材料五人制 vs 车辆五人制": {
+      "article_file": "previews/材料五人制vs车辆五人制.md",
+      "authors": [
+        "测试作者"
+      ]
+    }
   },
   "matches": [
     {
@@ -34,24 +35,7 @@
         "previous_outcomes": [],
         "current_results": []
       },
-      "head_to_head": [],
-      "preview_paragraphs": [
-        "前瞻文章"
-      ],
-      "writers": [
-        "测试作者"
-      ]
+      "head_to_head": []
     }
-  ],
-  "credits": {
-    "editors": [
-      "测试编辑"
-    ],
-    "reviewers": [
-      "测试责编"
-    ],
-    "approvers": [
-      "测试审核"
-    ]
-  }
+  ]
 }

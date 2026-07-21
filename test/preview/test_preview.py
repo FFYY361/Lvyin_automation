@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import sys
 import tempfile
 import unittest
@@ -21,8 +22,10 @@ from preview import (
     PreviewService,
     TemplateContractError,
     SeasonOutcome,
-    load_preview_source,
+    load_preview_bundle,
     load_preview_template,
+    parse_preview_bundle,
+    parse_preview_document,
     parse_preview_source,
 )
 from preview.cli import main as cli_main
@@ -55,10 +58,32 @@ _WOMEN_DATA_PATH = (
 _FUTSAL_DATA_PATH = (
     _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_data_futsal_saturday.json"
 )
+_WEATHER_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_weather.json"
+_CONFIG_PATH = _PROJECT_ROOT / "templates" / "qhly_preview_v1" / "example_config.json"
+
+
+def _load_example(path: Path = _DATA_PATH):
+    return load_preview_bundle(path, _WEATHER_PATH, _CONFIG_PATH)
 
 
 def _raw_source() -> dict[str, object]:
-    return json.loads(_DATA_PATH.read_text(encoding="utf-8"))
+    raw = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
+    previews = raw.pop("previews")
+    raw["schema_version"] = 1
+    weather = json.loads(_WEATHER_PATH.read_text(encoding="utf-8"))[
+        raw["preview_date"]
+    ]
+    raw["weather"] = {"forecast_date": raw["preview_date"], **weather}
+    raw["credits"] = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    for match in raw["matches"]:
+        key = f'{match["home"]["short_name"]} vs {match["away"]["short_name"]}'
+        match["preview_paragraphs"] = [
+            line.strip()
+            for line in previews[key]["article"].splitlines()
+            if line.strip()
+        ]
+        match["writers"] = previews[key]["authors"]
+    return raw
 
 
 def _render(template: PreviewTemplate, source) -> Article:
@@ -78,7 +103,7 @@ class PreviewSourceTests(unittest.TestCase):
         template = load_preview_template(_TEMPLATE_PATH)
         for path, title_prefix, full_name in cases:
             with self.subTest(path=path.name):
-                source = load_preview_source(path)
+                source = _load_example(path)
                 rendered = _render(template, source)
                 self.assertEqual(source.preview_date.weekday(), 5)
                 self.assertEqual(source.matches[0].game_id, -1)
@@ -137,7 +162,7 @@ class PreviewSourceTests(unittest.TestCase):
 
     def test_match_date_and_score_pairs_are_validated(self) -> None:
         raw = _raw_source()
-        raw["matches"][1]["kickoff"] = "2026-04-12T19:00:00+08:00"
+        raw["matches"][1]["kickoff"] = "2026-04-13T19:00:00+08:00"
         with self.assertRaises(PreviewValidationError) as caught:
             parse_preview_source(raw)
         self.assertIn("$.matches[1].kickoff", str(caught.exception))
@@ -149,7 +174,7 @@ class PreviewSourceTests(unittest.TestCase):
         self.assertIn("$.matches[0].home.current_results[0]", str(caught.exception))
 
     def test_unknown_game_id_uses_only_minus_one(self) -> None:
-        source = load_preview_source(_DATA_PATH)
+        source = _load_example(_DATA_PATH)
         game_ids = [match.game_id for match in source.matches]
         for match in source.matches:
             game_ids.extend(result.game_id for result in match.home.current_results)
@@ -357,7 +382,7 @@ class TemplateTests(unittest.TestCase):
 
         template = PreviewTemplate.compile("<p>{{source.not_a_field}}</p>")
         with self.assertRaises(TemplateContractError):
-            _render(template, load_preview_source(_DATA_PATH))
+            _render(template, _load_example(_DATA_PATH))
 
     def test_weather_fallback_and_content_fingerprint(self) -> None:
         raw = _raw_source()
@@ -382,7 +407,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
 
         for source_path, expected_url in cases:
             with self.subTest(source_path=source_path.name):
-                rendered = _render(template, load_preview_source(source_path))
+                rendered = _render(template, _load_example(source_path))
                 images = lxml_html.fromstring(rendered.body_html).xpath(
                     ".//img"
                 )
@@ -396,7 +421,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
     ) -> None:
         rendered = _render(
             load_preview_template(_TEMPLATE_PATH),
-            load_preview_source(_DATA_PATH),
+            _load_example(_DATA_PATH),
         )
         document = lxml_html.fromstring(rendered.body_html)
         schedule_table = document.xpath(".//table")[0]
@@ -445,7 +470,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
     def test_history_table_text_is_explicitly_black(self) -> None:
         rendered = _render(
             load_preview_template(_TEMPLATE_PATH),
-            load_preview_source(_DATA_PATH),
+            _load_example(_DATA_PATH),
         )
         history_tables = [
             table
@@ -488,7 +513,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
                 self.assertIn("margin:0", results[-1].get("style", ""))
 
     def test_each_match_card_starts_with_a_dark_purple_accent(self) -> None:
-        source = load_preview_source(_DATA_PATH)
+        source = _load_example(_DATA_PATH)
         rendered = _render(
             load_preview_template(_TEMPLATE_PATH),
             source,
@@ -519,9 +544,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertNotIn("schedule_rows", source_text)
         self.assertNotIn("_html", source_text)
         template = PreviewTemplate.compile(template_source, version="qhly-preview-v1")
-        rendered = _render(template, load_preview_source(_DATA_PATH))
+        rendered = _render(template, _load_example(_DATA_PATH))
 
-        self.assertEqual(rendered.title, "【马杯男足周六前瞻】|| 落日熔金，危崖试翼")
+        self.assertEqual(rendered.title, "【马杯男足周日前瞻】|| 测试")
 
         with tempfile.TemporaryDirectory() as directory:
             output = rendered.save(Path(directory) / "article")
@@ -564,13 +589,14 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         )
         self.assertEqual(
             rendered.body_html.count(
-                "border:1px solid #d6d6d6;border-collapse:collapse;font-size:14px"
+                "border:1px solid #d6d6d6;border-collapse:collapse;color:#000;"
+                "font-size:14px"
             ),
             2,
         )
         self.assertEqual(rendered.body_html.count("padding:5px;width:40%"), 4)
         self.assertEqual(rendered.body_html.count("padding:5px;width:20%"), 2)
-        self.assertEqual(rendered.body_html.count("table-layout:fixed"), 2)
+        self.assertEqual(rendered.body_html.count("table-layout:fixed"), 3)
         self.assertNotIn("<colgroup>", rendered.body_html)
         self.assertEqual(rendered.body_html.count('style="height:36px"'), 1)
         self.assertEqual(rendered.body_html.count('style="height:20px"'), 1)
@@ -645,6 +671,173 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
             self.assertIn("margin:0", paragraphs[1].get("style", ""))
 
 
+class PreviewBundleTests(unittest.TestCase):
+    def _payloads(self) -> tuple[dict, dict, dict]:
+        return (
+            json.loads(_DATA_PATH.read_text(encoding="utf-8")),
+            json.loads(_WEATHER_PATH.read_text(encoding="utf-8")),
+            json.loads(_CONFIG_PATH.read_text(encoding="utf-8")),
+        )
+
+    def test_article_lines_are_trimmed_and_authors_are_deduplicated(self) -> None:
+        source, weather, config = self._payloads()
+        key = next(iter(source["previews"]))
+        source["previews"][key] = {
+            "article": "  第一段正文  \n\n  第二段正文\n   \n",
+            "authors": [" 张三 ", "张三", "李四"],
+        }
+
+        parsed = parse_preview_bundle(source, weather, config)
+
+        self.assertEqual(
+            parsed.matches[0].preview_paragraphs,
+            ("第一段正文", "第二段正文"),
+        )
+        self.assertEqual(parsed.matches[0].writers, ("张三", "李四"))
+
+    def test_markdown_article_supports_direct_multiline_paste(self) -> None:
+        source, weather, config = self._payloads()
+        key = next(iter(source["previews"]))
+        match = source["matches"][0]
+        article_file = (
+            f'previews/{match["home"]["short_name"]}'
+            f'vs{match["away"]["short_name"]}.md'
+        )
+        source["previews"][key] = {
+            "article_file": article_file,
+            "authors": ["张三"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            markdown = root / article_file
+            markdown.parent.mkdir(parents=True)
+            markdown.write_text(
+                "第一段第一行。\n第一段第二行。\n\n"
+                "第二段正文。\n\n\n第三段正文。\n",
+                encoding="utf-8",
+            )
+
+            parsed = parse_preview_bundle(
+                source,
+                weather,
+                config,
+                source_directory=root,
+            )
+
+            self.assertEqual(
+                parsed.matches[0].preview_paragraphs,
+                (
+                    "第一段第一行。\n第一段第二行。",
+                    "第二段正文。",
+                    "第三段正文。",
+                ),
+            )
+
+            source["previews"][key]["article_file"] = "previews/随意改名.md"
+            with self.assertRaises(PreviewValidationError) as renamed:
+                parse_preview_document(source, source_directory=root)
+            self.assertIn("必须与比赛名称一致", str(renamed.exception))
+
+            source["previews"][key]["article_file"] = article_file
+            markdown.unlink()
+            with self.assertRaises(PreviewValidationError) as missing:
+                parse_preview_document(source, source_directory=root)
+            self.assertIn("无法读取 Markdown 文件", str(missing.exception))
+
+    def test_preview_mapping_must_match_matches_exactly(self) -> None:
+        source, _, _ = self._payloads()
+        missing_key = next(iter(source["previews"]))
+        del source["previews"][missing_key]
+        with self.assertRaises(PreviewValidationError) as missing:
+            parse_preview_document(source)
+        self.assertIn(missing_key, str(missing.exception))
+        self.assertIn("缺少", str(missing.exception))
+
+        source, _, _ = self._payloads()
+        source["previews"]["不存在 vs 球队"] = {
+            "article": "正文",
+            "authors": ["作者"],
+        }
+        with self.assertRaises(PreviewValidationError) as extra:
+            parse_preview_document(source)
+        self.assertIn("不存在 vs 球队", str(extra.exception))
+        self.assertIn("多余", str(extra.exception))
+
+        source, _, _ = self._payloads()
+        key = next(iter(source["previews"]))
+        source["previews"][f" {key}"] = source["previews"].pop(key)
+        with self.assertRaises(PreviewValidationError) as spaced:
+            parse_preview_document(source)
+        self.assertIn("不能包含首尾空白", str(spaced.exception))
+
+    def test_duplicate_matchup_reports_both_game_ids(self) -> None:
+        source, _, _ = self._payloads()
+        duplicate = copy.deepcopy(source["matches"][0])
+        duplicate["game_id"] = 987654
+        source["matches"].append(duplicate)
+
+        with self.assertRaises(PreviewValidationError) as caught:
+            parse_preview_document(source)
+
+        message = str(caught.exception)
+        self.assertIn("对阵简称重复", message)
+        self.assertIn(str(source["matches"][0]["game_id"]), message)
+        self.assertIn("987654", message)
+
+    def test_weather_null_partial_and_complete_states(self) -> None:
+        source, _, config = self._payloads()
+        day = source["preview_date"]
+        empty_weather = {
+            day: {
+                "low_c": None,
+                "high_c": None,
+                "wind_direction": None,
+                "wind_level": None,
+            }
+        }
+        self.assertIsNone(
+            parse_preview_bundle(source, empty_weather, config).weather
+        )
+
+        partial_weather = copy.deepcopy(empty_weather)
+        partial_weather[day]["low_c"] = 8
+        with self.assertRaises(PreviewValidationError) as caught:
+            parse_preview_bundle(source, partial_weather, config)
+        message = str(caught.exception)
+        self.assertIn(f"$weather['{day}']", message)
+        self.assertIn("high_c", message)
+        self.assertIn("wind_direction", message)
+        self.assertIn("wind_level", message)
+
+        complete_weather = {
+            day: {
+                "low_c": 8,
+                "high_c": 18,
+                "wind_direction": "东南风",
+                "wind_level": "2级",
+            }
+        }
+        parsed = parse_preview_bundle(source, complete_weather, config)
+        self.assertIsNotNone(parsed.weather)
+        self.assertEqual(parsed.weather.forecast_date.isoformat(), day)
+        self.assertEqual(parsed.weather.low_c, 8)
+
+    def test_config_and_source_are_strict(self) -> None:
+        source, weather, config = self._payloads()
+        config["unknown"] = []
+        with self.assertRaises(PreviewValidationError) as config_error:
+            parse_preview_bundle(source, weather, config)
+        self.assertIn("$config", str(config_error.exception))
+        self.assertIn("unknown", str(config_error.exception))
+
+        source, _, _ = self._payloads()
+        source["schema_version"] = 1
+        with self.assertRaises(PreviewValidationError) as source_error:
+            parse_preview_document(source)
+        self.assertIn("$.schema_version", str(source_error.exception))
+        self.assertIn("仅支持版本 2", str(source_error.exception))
+
+
 class PreviewCliTests(unittest.TestCase):
     def test_render_writes_loadable_article_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -657,6 +850,10 @@ class PreviewCliTests(unittest.TestCase):
                         str(_TEMPLATE_PATH),
                         "--source",
                         str(_DATA_PATH),
+                        "--weather",
+                        str(_WEATHER_PATH),
+                        "--config",
+                        str(_CONFIG_PATH),
                         "--cover-media-id",
                         "dry-run-cover",
                         "--output",

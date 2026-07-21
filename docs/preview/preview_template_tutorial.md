@@ -1,12 +1,12 @@
 # 前瞻模板与渲染教程
 
-`preview` 负责纯本地的前瞻 data 校验和 HTML 渲染。它不会读取 `.env`、访问 THUFootball 或连接微信公众号。
+`preview` 负责纯本地的前瞻三文件校验、数据合成和 HTML 渲染。它不会读取 `.env`、访问 THUFootball 或连接微信公众号。
 
 ## 输入
 
-正式模板位于 `templates/qhly_preview_v1/template.html`，示例 data 和 JSON Schema 位于同一目录。
+正式模板位于 `templates/qhly_preview_v1/template.html`，示例 source、weather、config 和 JSON Schema 位于同一目录。
 
-data 使用严格解码：缺失必填字段、未知字段、非法日期、非 `+08:00` 开球时间、不完整比分和非法比赛 ID 都会在渲染前报错。正文文案只能是纯文本，模板负责生成 HTML 标签和转义内容。
+三份 JSON 使用严格解码：缺失必填字段、未知字段、非法日期、非 `+08:00` 开球时间、不完整比分和非法比赛 ID 都会在渲染前报错。source v2 的 `previews` 以 `主队简称 vs 客队简称` 为键；新生成的 source 使用 `article_file` 引用同目录下的正文 Markdown，例如 `previews/集电vs美院.md`。正文可以直接粘贴，以空白行分段，模板负责生成 HTML 标签和转义内容。内联 `article` 仍可用于兼容旧 source。
 
 模板支持：
 
@@ -15,7 +15,7 @@ data 使用严格解码：缺失必填字段、未知字段、非法日期、非
 - `<!-- wx:each ... -->`：遍历数组；
 - `<!-- wx:empty -->`：空数组回退内容。
 
-不支持三花括号、任意表达式、动态函数调用或 data 中的 HTML。
+不支持三花括号、任意表达式、动态函数调用或 source 中的 HTML。
 
 ## CLI 渲染
 
@@ -24,6 +24,8 @@ data 使用严格解码：缺失必填字段、未知字段、非法日期、非
 ```powershell
 preview render templates/qhly_preview_v1/template.html `
   --source templates/qhly_preview_v1/example_data.json `
+  --weather templates/qhly_preview_v1/example_weather.json `
+  --config templates/qhly_preview_v1/example_config.json `
   --cover path/to/cover.png `
   --author "清华绿茵" `
   --digest "本期比赛前瞻" `
@@ -44,10 +46,14 @@ preview render templates/qhly_preview_v1/template.html `
 ```python
 from pathlib import Path
 
-from preview import PreviewService, load_preview_source
+from preview import PreviewService, load_preview_bundle
 from wechat_official import Article, CoverFile
 
-source = load_preview_source("templates/qhly_preview_v1/example_data.json")
+source = load_preview_bundle(
+    "templates/qhly_preview_v1/example_data.json",
+    "templates/qhly_preview_v1/example_weather.json",
+    "templates/qhly_preview_v1/example_config.json",
+)
 service = PreviewService.from_template(
     "templates/qhly_preview_v1/template.html",
     version="qhly-preview-v1",

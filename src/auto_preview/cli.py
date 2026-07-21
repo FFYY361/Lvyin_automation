@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -57,6 +58,10 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _relative_path(path: Path, project_root: Path) -> Path:
+    return Path(os.path.relpath(path.resolve(), project_root.resolve()))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     project_root = Path(__file__).resolve().parents[2]
@@ -67,11 +72,12 @@ def main(argv: list[str] | None = None) -> int:
         / f"{args.preview_date.isoformat()}_{args.competition.value}"
     )
     log_path = run_directory / "auto_preview.log"
+    display_log_path = _relative_path(log_path, project_root)
     try:
-        logger = configure_logging(run_directory)
+        logger = configure_logging(run_directory, project_root=project_root)
     except Exception as exc:
         print(
-            *failure_lines(exc, stage="logging", log_path=log_path),
+            *failure_lines(exc, stage="logging", log_path=display_log_path),
             sep="\n",
             file=sys.stderr,
         )
@@ -84,10 +90,12 @@ def main(argv: list[str] | None = None) -> int:
                 log_failure(
                     logger,
                     FileNotFoundError(
-                        2, "封面文件不存在", str(cover_path)
+                        2,
+                        "封面文件不存在",
+                        str(_relative_path(cover_path, project_root)),
                     ),
                     stage="arguments",
-                    log_path=log_path,
+                    log_path=display_log_path,
                 )
                 return 2
             cover = CoverFile(cover_path)
@@ -108,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("✗ auto_preview 已由用户中断")
         return 130
     except Exception as exc:
-        log_failure(logger, exc, log_path=log_path)
+        log_failure(logger, exc, log_path=display_log_path)
         return 2
 
     print(
@@ -116,10 +124,12 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "status": result.status,
                 "completed_stage": result.completed_stage.value,
-                "run_directory": str(result.run_directory),
-                "source": str(result.source_path),
+                "run_directory": str(
+                    _relative_path(result.run_directory, project_root)
+                ),
+                "source": str(_relative_path(result.source_path, project_root)),
                 "article": (
-                    str(result.article_directory)
+                    str(_relative_path(result.article_directory, project_root))
                     if result.article_directory is not None
                     else None
                 ),

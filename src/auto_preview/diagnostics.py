@@ -144,8 +144,8 @@ def _diagnose(error: BaseException) -> _Diagnosis:
         return _Diagnosis(
             "本地产物校验错误",
             (
-                "检查 source.json 和 run.json 的结构、日期、赛事及赛事 ID 是否仍然合法。",
-                "article/ 属于可重建产物，会在 source、模板或封面变化时自动覆盖；--override 仅用于重新查询并覆盖 source.json。",
+                "根据失败阶段检查 source.json、previews/*.md、weather.json、config.json 和 run.json 的结构与字段路径。",
+                "article/ 属于可重建产物，会在 source、正文 Markdown、当前天气、人员配置、模板或封面变化时自动覆盖；--override 仅用于重新查询并覆盖 source 和正文 Markdown。",
             ),
         )
     if isinstance(error, NoGamesForDate):
@@ -162,7 +162,9 @@ def _diagnose(error: BaseException) -> _Diagnosis:
     if isinstance(error, PreviewValidationError):
         return _Diagnosis(
             "文章源数据校验错误",
-            ("检查 source.json 的字段类型、日期、比赛 ID、比分和必填内容。",),
+            (
+                "按错误路径检查 source.json、正文 Markdown、weather.json 或 config.json；已有文件不会被自动修复或覆盖。",
+            ),
         )
     if isinstance(error, (TemplateContractError, UnsafeHtml)):
         return _Diagnosis(
