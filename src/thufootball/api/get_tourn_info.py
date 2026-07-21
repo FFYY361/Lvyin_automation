@@ -13,6 +13,8 @@ if __package__:
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _authenticated_parameters,
+        _positive_integer,
         load_credentials,
         request_json,
     )
@@ -21,6 +23,8 @@ else:  # Support ``python src/thufootball/api/get_tourn_info.py``.
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _authenticated_parameters,
+        _positive_integer,
         load_credentials,
         request_json,
     )
@@ -36,19 +40,11 @@ def get_tourn_info(
 ) -> dict[str, Any]:
     """Return tournament details, teams and games for ``tourn_id``."""
 
-    if not isinstance(openid, str) or not openid.strip():
-        raise ValueError("openid must be a non-empty string")
-    if not isinstance(session_key, str) or not session_key.strip():
-        raise ValueError("session_key must be a non-empty string")
-    if isinstance(tourn_id, bool) or not isinstance(tourn_id, int) or tourn_id <= 0:
-        raise ValueError("tourn_id must be a positive integer")
+    parameters = _authenticated_parameters(openid, session_key)
+    parameters["tourn_id"] = _positive_integer(tourn_id, "tourn_id")
     return request_json(
         "GetTournInfo",
-        {
-            "openid": openid,
-            "session_key": session_key,
-            "tourn_id": tourn_id,
-        },
+        parameters,
         base_url=base_url,
         timeout=timeout,
     )

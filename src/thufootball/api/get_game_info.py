@@ -13,6 +13,8 @@ if __package__:
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _authenticated_parameters,
+        _positive_integer,
         load_credentials,
         request_json,
     )
@@ -21,6 +23,8 @@ else:  # Support ``python src/thufootball/api/get_game_info.py``.
         DEFAULT_BASE_URL,
         DEFAULT_TIMEOUT,
         THUFootballRequestError,
+        _authenticated_parameters,
+        _positive_integer,
         load_credentials,
         request_json,
     )
@@ -36,19 +40,11 @@ def get_game_info(
 ) -> dict[str, Any]:
     """Return the complete THUFootball response for ``game_id``."""
 
-    if not isinstance(openid, str) or not openid.strip():
-        raise ValueError("openid must be a non-empty string")
-    if not isinstance(session_key, str) or not session_key.strip():
-        raise ValueError("session_key must be a non-empty string")
-    if isinstance(game_id, bool) or not isinstance(game_id, int) or game_id <= 0:
-        raise ValueError("game_id must be a positive integer")
+    parameters = _authenticated_parameters(openid, session_key)
+    parameters["game_id"] = _positive_integer(game_id, "game_id")
     return request_json(
         "GetGameInfo",
-        {
-            "openid": openid,
-            "session_key": session_key,
-            "game_id": game_id,
-        },
+        parameters,
         base_url=base_url,
         timeout=timeout,
     )
@@ -71,9 +67,7 @@ def _validation_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
         "game_id": game.get("id") if isinstance(game, Mapping) else None,
         "time": game.get("time") if isinstance(game, Mapping) else None,
         "result": game.get("result") if isinstance(game, Mapping) else None,
-        "tourn_id": (
-            tournament.get("id") if isinstance(tournament, Mapping) else None
-        ),
+        "tourn_id": (tournament.get("id") if isinstance(tournament, Mapping) else None),
         "tourn_name": (
             tournament.get("name") if isinstance(tournament, Mapping) else None
         ),

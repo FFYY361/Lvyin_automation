@@ -45,9 +45,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    games = commands.add_parser(
-        "games", help="query games by tournament, date or team"
-    )
+    games = commands.add_parser("games", help="query games by tournament, date or team")
     games.add_argument(
         "--tournament-id",
         type=_positive_id,
@@ -131,9 +129,7 @@ def _jsonable(value: object) -> Any:
         return value.isoformat()
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
-    ):
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_jsonable(item) for item in value]
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -192,18 +188,22 @@ def _error_payload(error: THUFootballError) -> dict[str, object]:
     }
 
 
+def _write_json(value: object, *, stream, indent: int | None = None) -> None:
+    print(
+        json.dumps(value, ensure_ascii=False, indent=indent),
+        file=stream,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         result = asyncio.run(_run(args))
     except THUFootballError as exc:
-        print(
-            json.dumps(_error_payload(exc), ensure_ascii=False),
-            file=sys.stderr,
-        )
+        _write_json(_error_payload(exc), stream=sys.stderr)
         return 2
 
-    print(json.dumps(_jsonable(result), ensure_ascii=False, indent=2))
+    _write_json(_jsonable(result), stream=sys.stdout, indent=2)
     return 0
 
 

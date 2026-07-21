@@ -7,7 +7,8 @@ import sys
 import tempfile
 import unittest
 import warnings
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -22,8 +23,8 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from thufootball import (
-    AuthenticationError,
     BLACKLISTED_TOURNAMENT_IDS,
+    AuthenticationError,
     BatchQueryError,
     ConfigurationError,
     DataConflict,
@@ -63,8 +64,7 @@ _LIVE_SMOKE_CONFIG: _LiveSmokeConfig | None = None
 def _jsonable(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
         return {
-            field.name: _jsonable(getattr(value, field.name))
-            for field in fields(value)
+            field.name: _jsonable(getattr(value, field.name)) for field in fields(value)
         }
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
@@ -261,9 +261,7 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_smoke(self) -> None:
         config = _LIVE_SMOKE_CONFIG
         if config is None:
-            self.skipTest(
-                "真实冒烟仅在直接运行本文件时启用，离线发现测试不会访问 API"
-            )
+            self.skipTest("真实冒烟仅在直接运行本文件时启用，离线发现测试不会访问 API")
 
         if config.outcomes:
             assert config.team_id is not None
@@ -288,9 +286,7 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                     "query_tournament_ids": config.tournament_ids,
                     "team_id": config.team_id,
                     "outcome_team_names": list(
-                        dict.fromkeys(
-                            outcome.team_name for outcome in team_outcomes
-                        )
+                        dict.fromkeys(outcome.team_name for outcome in team_outcomes)
                     ),
                     "outcome_count": len(team_outcomes),
                     "team_outcomes": team_outcomes,
@@ -325,21 +321,15 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                 elif config.opponent_id is None:
                     team_matches = await service.query_team_matches(
                         config.team_id,
-                        (
-                            config.tournament_ids[0]
-                            if config.tournament_ids
-                            else None
-                        ),
+                        (config.tournament_ids[0] if config.tournament_ids else None),
                         include_unfinished=config.include_unfinished,
                     )
                 else:
-                    team_to_team_matches = (
-                        await service.query_team_to_team_matches(
-                            config.team_id,
-                            config.opponent_id,
-                            config.tournament_ids or None,
-                            include_unfinished=config.include_unfinished,
-                        )
+                    team_to_team_matches = await service.query_team_to_team_matches(
+                        config.team_id,
+                        config.opponent_id,
+                        config.tournament_ids or None,
+                        include_unfinished=config.include_unfinished,
                     )
             detail = (
                 await client.get_game_info(config.game_id)
@@ -373,16 +363,13 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                     "team_id": config.team_id,
                     "opponent_id": config.opponent_id,
                     "include_unfinished": (
-                        True
-                        if config.team_id is None
-                        else config.include_unfinished
+                        True if config.team_id is None else config.include_unfinished
                     ),
                 },
                 "user_probe": probe,
                 "accessible_tournament_count": len(tournaments),
                 "queryable_tournament_count": sum(
-                    tournament.tournament_id
-                    not in BLACKLISTED_TOURNAMENT_IDS
+                    tournament.tournament_id not in BLACKLISTED_TOURNAMENT_IDS
                     for tournament in tournaments
                 ),
                 "games": games,
@@ -397,8 +384,7 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "user_registered": probe.user_registered,
                 "accessible_tournament_count": len(tournaments),
                 "queryable_tournament_count": sum(
-                    tournament.tournament_id
-                    not in BLACKLISTED_TOURNAMENT_IDS
+                    tournament.tournament_id not in BLACKLISTED_TOURNAMENT_IDS
                     for tournament in tournaments
                 ),
                 "query_scope": query_scope,
@@ -433,12 +419,8 @@ class MapperTests(unittest.TestCase):
         scheduled = map_game_summary(
             _game(kickoff="2026-07-15 00:00:00"), "game", now=now
         )
-        started = map_game_summary(
-            _game(started=True), "game", now=now
-        )
-        finished = map_game_summary(
-            _game(started=True, ended=True), "game", now=now
-        )
+        started = map_game_summary(_game(started=True), "game", now=now)
+        finished = map_game_summary(_game(started=True, ended=True), "game", now=now)
         unknown = map_game_summary(
             _game(active=False, started=True, ended=True), "game", now=now
         )
@@ -542,9 +524,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-            client = THUFootballClient(
-                load_environment=False, http_client=http
-            )
+            client = THUFootballClient(load_environment=False, http_client=http)
             games = await client.get_current_games(
                 history_bound=date(2026, 7, 13),
                 future_bound=date(2026, 7, 15),
@@ -713,9 +693,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         async def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("blacklisted tournament must not be requested")
 
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as http:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
             client = THUFootballClient(
                 openid="openid", session_key="session", http_client=http
             )
@@ -738,9 +716,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             payload["tourn_info"]["id"] = 6
             return httpx.Response(200, json=payload, request=request)
 
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as http:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
             client = THUFootballClient(
                 openid="openid", session_key="session", http_client=http
             )
@@ -750,18 +726,18 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([game.game_id for game in games], [2])
 
-    async def test_injected_http_client_is_not_closed(self) -> None:
+    async def test_closes_only_owned_http_client(self) -> None:
         http = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: None))
-        client = THUFootballClient(load_environment=False, http_client=http)
-        await client.aclose()
-        self.assertFalse(http.is_closed)
-        await http.aclose()
+        injected_client = THUFootballClient(load_environment=False, http_client=http)
+        owned_client = THUFootballClient(load_environment=False)
+        owned_http = owned_client._http_client
 
-    async def test_owned_http_client_is_closed(self) -> None:
-        client = THUFootballClient(load_environment=False)
-        owned_http = client._http_client
-        await client.aclose()
+        await injected_client.aclose()
+        await owned_client.aclose()
+
+        self.assertFalse(http.is_closed)
         self.assertTrue(owned_http.is_closed)
+        await http.aclose()
 
 
 class StaticRankingDataTests(unittest.TestCase):
@@ -782,9 +758,7 @@ class StaticRankingDataTests(unittest.TestCase):
 
     def test_static_outcome_files_are_complete_and_audited(self) -> None:
         notes_root = _SRC_ROOT / "thufootball" / "notes"
-        teams = json.loads(
-            (notes_root / "teams.json").read_text(encoding="utf-8")
-        )
+        teams = json.loads((notes_root / "teams.json").read_text(encoding="utf-8"))
         tournaments = json.loads(
             (notes_root / "tourns.json").read_text(encoding="utf-8")
         )
@@ -832,9 +806,7 @@ class StaticRankingDataTests(unittest.TestCase):
                     self.assertIsInstance(team_id, int)
                     self.assertNotIsInstance(team_id, bool)
                     self.assertGreater(team_id, 0)
-                    owner = institution_by_id.setdefault(
-                        team_id, institution_name
-                    )
+                    owner = institution_by_id.setdefault(team_id, institution_name)
                     self.assertEqual(owner, institution_name)
                     reverse_ids.setdefault(team_id, []).append(team_name)
 
@@ -850,8 +822,7 @@ class StaticRankingDataTests(unittest.TestCase):
             if len(team_names) > 1
         }
         audited_shared = {
-            item["team_id"]: item["team_names"]
-            for item in audit["shared_team_ids"]
+            item["team_id"]: item["team_names"] for item in audit["shared_team_ids"]
         }
         self.assertEqual(audited_shared, actual_shared)
         self.assertEqual(len(audited_shared), 59)
@@ -859,8 +830,7 @@ class StaticRankingDataTests(unittest.TestCase):
             self.assertTrue(item["institution"])
             self.assertTrue(
                 all(
-                    item["institution"] in team_name
-                    for team_name in item["team_names"]
+                    item["institution"] in team_name for team_name in item["team_names"]
                 )
             )
 
@@ -962,19 +932,18 @@ class StaticRankingDataTests(unittest.TestCase):
 
 
 class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
+    @asynccontextmanager
     async def _service(
         self,
         handler,
         *,
         max_concurrency: int = 4,
-    ) -> tuple[httpx.AsyncClient, THUFootballQueryService]:
-        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        client = THUFootballClient(
-            openid="openid", session_key="session", http_client=http
-        )
-        return http, THUFootballQueryService(
-            client, max_concurrency=max_concurrency
-        )
+    ) -> AsyncIterator[THUFootballQueryService]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = THUFootballClient(
+                openid="openid", session_key="session", http_client=http
+            )
+            yield THUFootballQueryService(client, max_concurrency=max_concurrency)
 
     async def test_from_environment_owns_and_closes_transport(self) -> None:
         with patch("thufootball.client.load_credentials", return_value=("", "")):
@@ -1003,11 +972,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             result = await service.query_games(GameQuery(match_date=date(2026, 7, 14)))
-        finally:
-            await http.aclose()
 
         self.assertEqual([game.game_id for game in result], [2, 3])
         self.assertTrue(all(game.tournament_name == "赛事10" for game in result))
@@ -1081,22 +1047,15 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             games = await service.query_games(GameQuery())
             team_matches = await service.query_team_matches(101)
             history = await service.query_team_to_team_matches(101, 202)
-        finally:
-            await http.aclose()
 
         self.assertEqual(discovery_calls, 3)
-        self.assertEqual(
-            sorted(tournament_reads), [10, 10, 10, 20, 20, 20]
-        )
+        self.assertEqual(sorted(tournament_reads), [10, 10, 10, 20, 20, 20])
         self.assertEqual([game.game_id for game in games], [1, 2])
-        self.assertEqual(
-            [match.game.game_id for match in team_matches], [2, 1]
-        )
+        self.assertEqual([match.game.game_id for match in team_matches], [2, 1])
         self.assertEqual(history.tournament_ids, (10, 20))
         self.assertEqual([game.game_id for game in history.matches], [2, 1])
         self.assertEqual(history.summary.team_a_wins, 1)
@@ -1108,8 +1067,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         async def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("blacklisted tournament must not be requested")
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             calls = (
                 service.query_games(GameQuery(tournament_ids=(6,))),
                 service.query_team_matches(101, 28),
@@ -1120,8 +1078,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 for call in calls:
                     with self.assertRaises(QueryValidationError):
                         await call
-        finally:
-            await http.aclose()
 
         self.assertEqual(caught, [])
 
@@ -1139,18 +1095,13 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             with warnings.catch_warnings(record=True) as team_warnings:
                 warnings.simplefilter("always", InvalidGameDataWarning)
                 team_matches = await service.query_team_matches(101, 10)
             with warnings.catch_warnings(record=True) as game_warnings:
                 warnings.simplefilter("always", InvalidGameDataWarning)
-                games = await service.query_games(
-                    GameQuery(tournament_ids=(10,))
-                )
-        finally:
-            await http.aclose()
+                games = await service.query_games(GameQuery(tournament_ids=(10,)))
 
         self.assertEqual(team_matches, [])
         self.assertEqual(games, [])
@@ -1188,13 +1139,10 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             result = await service.query_games(
                 GameQuery(tournament_ids=(10,), match_date=date(2026, 7, 14))
             )
-        finally:
-            await http.aclose()
 
         self.assertEqual([game.game_id for game in result], [1])
         self.assertEqual(len(paths), 1)
@@ -1234,8 +1182,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 200, json=_tournament_payload(10, games), request=request
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             any_result = await service.query_games(
                 GameQuery(tournament_ids=(10,), team_ids=(101,))
             )
@@ -1247,8 +1194,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     include_unfinished=False,
                 )
             )
-        finally:
-            await http.aclose()
 
         self.assertEqual([game.game_id for game in any_result], [1, 2])
         self.assertEqual([game.game_id for game in all_result], [1, 2])
@@ -1259,17 +1204,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         async def handler(request: httpx.Request) -> httpx.Response:
             nonlocal calls
             calls += 1
-            return httpx.Response(
-                200, json=_tournament_payload(10), request=request
-            )
+            return httpx.Response(200, json=_tournament_payload(10), request=request)
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             self.assertEqual(
                 await service.query_games(GameQuery(tournament_ids=(10, 10))), []
             )
-        finally:
-            await http.aclose()
         self.assertEqual(calls, 1)
 
     async def test_multi_tournament_concurrency_is_bounded(self) -> None:
@@ -1287,13 +1227,10 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 200, json=_tournament_payload(tournament_id), request=request
             )
 
-        http, service = await self._service(handler, max_concurrency=4)
-        try:
+        async with self._service(handler, max_concurrency=4) as service:
             result = await service.query_games(
                 GameQuery(tournament_ids=(1, 2, 3, 4, 5, 7))
             )
-        finally:
-            await http.aclose()
 
         self.assertEqual(result, [])
         self.assertEqual(peak, 4)
@@ -1311,14 +1248,11 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 200, json=_tournament_payload(tournament_id), request=request
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             with self.assertRaises(BatchQueryError) as caught:
                 await service.query_games(GameQuery(tournament_ids=(1, 2, 3)))
             with self.assertRaises(BatchQueryError) as h2h_caught:
                 await service.query_team_to_team_matches(101, 202, [1, 2, 3])
-        finally:
-            await http.aclose()
 
         self.assertEqual(caught.exception.failed_tournament_ids, (2,))
         self.assertIsInstance(caught.exception.failures[2], InvalidResponse)
@@ -1333,14 +1267,11 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             with self.assertRaises(InvalidResponse):
                 await service.query_games(GameQuery(tournament_ids=(1,)))
             with self.assertRaises(InvalidResponse):
                 await service.query_team_matches(101, 1)
-        finally:
-            await http.aclose()
 
     async def test_conflicting_duplicate_game_ids_raise(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -1361,12 +1292,9 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             with self.assertRaises(DataConflict):
                 await service.query_games(GameQuery(tournament_ids=(1, 2)))
-        finally:
-            await http.aclose()
 
     async def test_query_team_matches_normalises_results_and_warns(self) -> None:
         games = [
@@ -1489,8 +1417,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", InvalidGameDataWarning)
                 results = await service.query_team_matches(101, 10)
@@ -1500,16 +1427,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     101, 10, include_unfinished=True
                 )
             no_matches = await service.query_team_matches(999, 10)
-        finally:
-            await http.aclose()
 
         self.assertEqual(len(caught), 1)
         self.assertEqual(len(unfinished_caught), 1)
         self.assertIsInstance(caught[0].message, InvalidGameDataWarning)
         self.assertEqual(caught[0].message.game_ids, (5, 6, 7, 8))
-        self.assertEqual(
-            [item.game.game_id for item in results], [3, 2, 1, 9, 10]
-        )
+        self.assertEqual([item.game.game_id for item in results], [3, 2, 1, 9, 10])
         by_game_id = {item.game.game_id: item for item in results}
         self.assertEqual(by_game_id[9].score_text, "1:2")
         self.assertEqual(by_game_id[9].result, MatchResult.LOSS)
@@ -1548,11 +1471,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             result = await service.query_team_matches(101, 10)
-        finally:
-            await http.aclose()
 
         self.assertEqual(result[0].goals_for, 5)
         self.assertEqual(result[0].goals_against, 0)
@@ -1639,8 +1559,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", InvalidGameDataWarning)
                 history = await service.query_team_to_team_matches(
@@ -1650,8 +1569,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     include_unfinished=True,
                 )
             empty = await service.query_team_to_team_matches(101, 202, [30])
-        finally:
-            await http.aclose()
 
         self.assertEqual(len(caught), 1)
         self.assertIsInstance(caught[0].message, InvalidGameDataWarning)
@@ -1717,11 +1634,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 request=request,
             )
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             history = await service.query_team_to_team_matches(254, 48, [10])
-        finally:
-            await http.aclose()
 
         self.assertEqual(history.team_a_id, 254)
         self.assertEqual(history.team_b_id, 48)
@@ -1730,35 +1644,13 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history.summary.draws, 0)
         self.assertEqual(history.summary.team_b_wins, 0)
 
-    async def test_new_query_validation(self) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            raise AssertionError("invalid queries must not make requests")
-
-        http, service = await self._service(handler)
-        try:
-            calls = (
-                service.query_team_matches(True, 1),
-                service.query_team_matches(1, 0),
-                service.query_team_matches(1, 1, include_unfinished=1),
-                service.query_team_to_team_matches(1, 1, [10]),
-                service.query_team_to_team_matches(254, 80, [10]),
-                service.query_team_to_team_matches(1, 2, []),
-                service.query_team_to_team_matches(1, 2, [True]),
-            )
-            for call in calls:
-                with self.assertRaises(QueryValidationError):
-                    await call
-        finally:
-            await http.aclose()
-
     async def test_query_team_outcomes_uses_static_alias_and_shared_id_data(
         self,
     ) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("static outcome queries must not make requests")
 
-        http, service = await self._service(handler)
-        try:
+        async with self._service(handler) as service:
             vehicle = await service.query_team_outcomes(48)
             explicit = await service.query_team_outcomes(48, [128, 122, 128])
             current_alias = await service.query_team_outcomes(132)
@@ -1766,11 +1658,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             shared_three_ways = await service.query_team_outcomes(253)
             merged_news = await service.query_team_outcomes(2041, [101])
             non_participant = await service.query_team_outcomes(2051, [122])
-        finally:
-            await http.aclose()
 
         self.assertEqual(
-            [(outcome.tournament_id, outcome.team_name, outcome.rank) for outcome in vehicle],
+            [
+                (outcome.tournament_id, outcome.team_name, outcome.rank)
+                for outcome in vehicle
+            ],
             [
                 (122, "车辆与运载学院男足", "冠军"),
                 (128, "车辆与运载学院五人制", "32强"),
@@ -1799,43 +1692,78 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(non_participant, [])
 
-    async def test_query_team_outcomes_validation(self) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            raise AssertionError("invalid outcome queries must not make requests")
-
-        http, service = await self._service(handler)
-        try:
-            calls = (
-                service.query_team_outcomes(True),
-                service.query_team_outcomes(999999),
-                service.query_team_outcomes(48, []),
-                service.query_team_outcomes(48, [True]),
-                service.query_team_outcomes(48, [6]),
-            )
-            for call in calls:
-                with self.assertRaises(QueryValidationError):
-                    await call
-        finally:
-            await http.aclose()
-
     async def test_query_validation(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("invalid queries must not make requests")
 
-        http, service = await self._service(handler)
-        try:
-            invalid_queries = (
-                GameQuery(tournament_ids=(True,)),
-                GameQuery(match_date=datetime(2026, 7, 14)),
-                GameQuery(tournament_ids=(1,), team_ids=(1, 2, 3)),
-                replace(GameQuery(tournament_ids=(1,)), team_match="none"),
+        async with self._service(handler) as service:
+            invalid_calls = (
+                ("team id", lambda: service.query_team_matches(True, 1)),
+                ("tournament id", lambda: service.query_team_matches(1, 0)),
+                (
+                    "unfinished flag",
+                    lambda: service.query_team_matches(1, 1, include_unfinished=1),
+                ),
+                (
+                    "same teams",
+                    lambda: service.query_team_to_team_matches(1, 1, [10]),
+                ),
+                (
+                    "overlapping aliases",
+                    lambda: service.query_team_to_team_matches(254, 80, [10]),
+                ),
+                (
+                    "empty tournament ids",
+                    lambda: service.query_team_to_team_matches(1, 2, []),
+                ),
+                (
+                    "boolean tournament id",
+                    lambda: service.query_team_to_team_matches(1, 2, [True]),
+                ),
+                ("outcome team id", lambda: service.query_team_outcomes(True)),
+                (
+                    "unknown outcome team",
+                    lambda: service.query_team_outcomes(999999),
+                ),
+                (
+                    "empty outcome tournaments",
+                    lambda: service.query_team_outcomes(48, []),
+                ),
+                (
+                    "boolean outcome tournament",
+                    lambda: service.query_team_outcomes(48, [True]),
+                ),
+                (
+                    "blacklisted outcome tournament",
+                    lambda: service.query_team_outcomes(48, [6]),
+                ),
+                (
+                    "boolean game tournament",
+                    lambda: service.query_games(GameQuery(tournament_ids=(True,))),
+                ),
+                (
+                    "datetime match date",
+                    lambda: service.query_games(
+                        GameQuery(match_date=datetime(2026, 7, 14))
+                    ),
+                ),
+                (
+                    "too many game teams",
+                    lambda: service.query_games(
+                        GameQuery(tournament_ids=(1,), team_ids=(1, 2, 3))
+                    ),
+                ),
+                (
+                    "invalid game team match",
+                    lambda: service.query_games(
+                        replace(GameQuery(tournament_ids=(1,)), team_match="none")
+                    ),
+                ),
             )
-            for query in invalid_queries:
-                with self.subTest(query=query):
+            for scenario, call in invalid_calls:
+                with self.subTest(scenario=scenario):
                     with self.assertRaises(QueryValidationError):
-                        await service.query_games(query)
-        finally:
-            await http.aclose()
+                        await call()
 
 
 def _argument_parser() -> argparse.ArgumentParser:

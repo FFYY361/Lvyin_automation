@@ -20,7 +20,6 @@ from .models import (
     validate_preview_source,
 )
 
-
 SOURCE_DOCUMENT_SCHEMA_VERSION = 2
 WEATHER_FIELDS = ("low_c", "high_c", "wind_direction", "wind_level")
 _MATCH_FIELDS = (
@@ -75,8 +74,7 @@ def _names(value: object, path: str) -> tuple[str, ...]:
     if not value:
         raise _error(path, "至少需要 1 项")
     names = tuple(
-        _nonempty_string(item, f"{path}[{index}]")
-        for index, item in enumerate(value)
+        _nonempty_string(item, f"{path}[{index}]") for index, item in enumerate(value)
     )
     return tuple(dict.fromkeys(names))
 
@@ -158,14 +156,10 @@ class _PreviewEntry:
 
 def _markdown_paragraphs(content: str, path: str) -> tuple[str, ...]:
     normalised = (
-        content.removeprefix("\ufeff")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
+        content.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     )
     paragraphs = tuple(
-        block.strip()
-        for block in re.split(r"\n[ \t]*\n+", normalised)
-        if block.strip()
+        block.strip() for block in re.split(r"\n[ \t]*\n+", normalised) if block.strip()
     )
     if not paragraphs:
         raise _error(path, "Markdown 文件至少需要一个非空段落")
@@ -202,43 +196,13 @@ def _read_article_file(
     return _markdown_paragraphs(content, path)
 
 
-def parse_preview_document(
-    value: object,
-    *,
-    source_directory: str | Path | None = None,
-) -> PreviewSourceDocument:
-    """Parse the strict schema-v2 manual source document."""
-
-    root = _object(
-        value,
-        "$",
-        required=(
-            "schema_version",
-            "column",
-            "preview_date",
-            "headline",
-            "previews",
-            "matches",
-        ),
-    )
-    version = root["schema_version"]
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != SOURCE_DOCUMENT_SCHEMA_VERSION
-    ):
-        raise _error(
-            "$.schema_version",
-            f"仅支持版本 {SOURCE_DOCUMENT_SCHEMA_VERSION}，实际为 {version}",
-        )
-
-    raw_previews = root["previews"]
-    if not isinstance(raw_previews, Mapping):
+def _parse_preview_entries(value: object) -> dict[str, _PreviewEntry]:
+    if not isinstance(value, Mapping):
         raise _error("$.previews", "必须是 JSON 对象")
-    if not raw_previews:
+    if not value:
         raise _error("$.previews", "至少需要 1 项")
-    preview_entries: dict[str, _PreviewEntry] = {}
-    for raw_key, raw_entry in raw_previews.items():
+    entries: dict[str, _PreviewEntry] = {}
+    for raw_key, raw_entry in value.items():
         key = _nonempty_string(raw_key, "$.previews.<key>")
         if raw_key != key:
             raise _error(
@@ -271,7 +235,7 @@ def parse_preview_document(
                     f"{entry_path}.article_file",
                     "不能包含首尾空白",
                 )
-        preview_entries[key] = _PreviewEntry(
+        entries[key] = _PreviewEntry(
             path=entry_path,
             authors=_names(entry["authors"], f"{entry_path}.authors"),
             article=(
@@ -281,17 +245,21 @@ def parse_preview_document(
             ),
             article_file=article_file,
         )
+    return entries
 
-    raw_matches = root["matches"]
-    if isinstance(raw_matches, (str, bytes)) or not isinstance(raw_matches, Sequence):
+
+_MatchRow = tuple[dict[str, object], str, str]
+
+
+def _parse_match_rows(value: object) -> list[_MatchRow]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
         raise _error("$.matches", "必须是数组")
-    if not raw_matches:
+    if not value:
         raise _error("$.matches", "至少需要 1 项")
 
-    match_rows: list[tuple[dict[str, object], str, str]] = []
-    labels: list[str] = []
+    rows: list[_MatchRow] = []
     label_game_ids: dict[str, list[object]] = {}
-    for index, raw_match in enumerate(raw_matches):
+    for index, raw_match in enumerate(value):
         path = f"$.matches[{index}]"
         match = _object(raw_match, path, required=_MATCH_FIELDS)
         home = match["home"]
@@ -307,9 +275,8 @@ def parse_preview_document(
             expected_article_file = preview_article_file(home_short, away_short)
         except ValueError as exc:
             raise _error(path, str(exc)) from exc
-        labels.append(label)
         label_game_ids.setdefault(label, []).append(match.get("game_id"))
-        match_rows.append((dict(match), label, expected_article_file))
+        rows.append((dict(match), label, expected_article_file))
 
     duplicates = {
         label: game_ids
@@ -321,9 +288,15 @@ def parse_preview_document(
             f"{label} game_ids={game_ids}" for label, game_ids in duplicates.items()
         )
         raise _error("$.matches", "对阵简称重复：" + detail)
+    return rows
 
-    expected = set(labels)
-    actual = set(preview_entries)
+
+def _validate_preview_mapping(
+    rows: Sequence[_MatchRow],
+    entries: Mapping[str, _PreviewEntry],
+) -> None:
+    expected = {label for _, label, _ in rows}
+    actual = set(entries)
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
     if missing or extra:
@@ -334,9 +307,15 @@ def parse_preview_document(
             detail.append("多余：" + ", ".join(extra))
         raise _error("$.previews", "与 matches 不一致（" + "；".join(detail) + "）")
 
-    augmented_matches: list[dict[str, object]] = []
-    for match, label, expected_article_file in match_rows:
-        entry = preview_entries[label]
+
+def _augment_matches(
+    rows: Sequence[_MatchRow],
+    entries: Mapping[str, _PreviewEntry],
+    source_directory: str | Path | None,
+) -> list[dict[str, object]]:
+    augmented: list[dict[str, object]] = []
+    for match, label, expected_article_file in rows:
+        entry = entries[label]
         if entry.article_file is not None:
             if entry.article_file != expected_article_file:
                 raise _error(
@@ -357,7 +336,48 @@ def parse_preview_document(
                 raise _error(f"{entry.path}.article", "至少需要一个非空段落")
         match["preview_paragraphs"] = list(paragraphs)
         match["writers"] = list(entry.authors)
-        augmented_matches.append(match)
+        augmented.append(match)
+    return augmented
+
+
+def parse_preview_document(
+    value: object,
+    *,
+    source_directory: str | Path | None = None,
+) -> PreviewSourceDocument:
+    """Parse the strict schema-v2 manual source document."""
+
+    root = _object(
+        value,
+        "$",
+        required=(
+            "schema_version",
+            "column",
+            "preview_date",
+            "headline",
+            "previews",
+            "matches",
+        ),
+    )
+    version = root["schema_version"]
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != SOURCE_DOCUMENT_SCHEMA_VERSION
+    ):
+        raise _error(
+            "$.schema_version",
+            f"仅支持版本 {SOURCE_DOCUMENT_SCHEMA_VERSION}，实际为 {version}",
+        )
+
+    preview_entries = _parse_preview_entries(root["previews"])
+    match_rows = _parse_match_rows(root["matches"])
+    _validate_preview_mapping(match_rows, preview_entries)
+    augmented_matches = _augment_matches(
+        match_rows,
+        preview_entries,
+        source_directory,
+    )
 
     assembled_payload = {
         "schema_version": 1,

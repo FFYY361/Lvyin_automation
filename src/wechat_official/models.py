@@ -14,7 +14,6 @@ from typing import Literal
 
 from .errors import DraftValidationError
 
-
 ARTICLE_SCHEMA_VERSION = 1
 _MANIFEST_NAME = "article.json"
 _BODY_NAME = "body.html"
@@ -32,7 +31,9 @@ _MANIFEST_FIELDS = frozenset(
 )
 
 
-def _validation_error(message: str, *, stage: str = "article-validation") -> DraftValidationError:
+def _validation_error(
+    message: str, *, stage: str = "article-validation"
+) -> DraftValidationError:
     return DraftValidationError(message, stage=stage)
 
 
@@ -50,10 +51,14 @@ def _optional_text(value: object, name: str) -> str:
 
 def _safe_bundle_file(root: Path, value: object, name: str) -> Path:
     if not isinstance(value, str) or not value.strip():
-        raise _validation_error(f"{name} must be a non-empty relative path", stage="article-load")
+        raise _validation_error(
+            f"{name} must be a non-empty relative path", stage="article-load"
+        )
     relative = Path(value)
     if relative.is_absolute() or ".." in relative.parts:
-        raise _validation_error(f"{name} must stay inside the article directory", stage="article-load")
+        raise _validation_error(
+            f"{name} must stay inside the article directory", stage="article-load"
+        )
     resolved = (root / relative).resolve()
     try:
         resolved.relative_to(root)
@@ -93,6 +98,110 @@ class CoverMediaId:
 
 
 Cover = CoverFile | CoverMediaId
+
+
+def _write_article_body(root: Path, body_html: str) -> None:
+    try:
+        (root / _BODY_NAME).write_text(body_html, encoding="utf-8")
+    except OSError as exc:
+        raise _validation_error(
+            "article body could not be written",
+            stage="article-save",
+        ) from exc
+
+
+def _persist_cover(root: Path, cover: Cover) -> dict[str, str]:
+    if isinstance(cover, CoverFile):
+        source = cover.path
+        if not source.is_file():
+            raise _validation_error(
+                f"cover file does not exist: {source}",
+                stage="article-save",
+            )
+        cover_name = "cover" + source.suffix.lower()
+        cover_path = root / cover_name
+        try:
+            if source.resolve() != cover_path.resolve():
+                shutil.copyfile(source, cover_path)
+        except OSError as exc:
+            raise _validation_error(
+                "cover file could not be copied",
+                stage="article-save",
+            ) from exc
+        return {"kind": "file", "path": cover_name}
+    return {"kind": "media_id", "media_id": cover.media_id}
+
+
+def _read_manifest(root: Path) -> Mapping[str, object]:
+    try:
+        payload = json.loads((root / _MANIFEST_NAME).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise _validation_error(
+            "article manifest could not be read",
+            stage="article-load",
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise _validation_error(
+            "article manifest is not valid JSON",
+            stage="article-load",
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise _validation_error(
+            "article manifest must be a JSON object",
+            stage="article-load",
+        )
+    unknown = sorted(str(key) for key in payload if key not in _MANIFEST_FIELDS)
+    if unknown:
+        raise _validation_error(
+            "article manifest contains unknown field(s): " + ", ".join(unknown),
+            stage="article-load",
+        )
+    missing = sorted(field for field in _MANIFEST_FIELDS if field not in payload)
+    if missing:
+        raise _validation_error(
+            "article manifest is missing field(s): " + ", ".join(missing),
+            stage="article-load",
+        )
+    version = payload.get("schema_version")
+    if isinstance(version, bool) or version != ARTICLE_SCHEMA_VERSION:
+        raise _validation_error(
+            f"unsupported article schema version: {version}",
+            stage="article-load",
+        )
+    return payload
+
+
+def _read_article_body(root: Path, value: object) -> str:
+    body_path = _safe_bundle_file(root, value, "body_file")
+    if body_path.name != _BODY_NAME:
+        raise _validation_error("body_file must be body.html", stage="article-load")
+    try:
+        return body_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise _validation_error(
+            "article body could not be read",
+            stage="article-load",
+        ) from exc
+
+
+def _load_cover(root: Path, value: object) -> Cover:
+    if not isinstance(value, Mapping):
+        raise _validation_error(
+            "article cover must be a JSON object",
+            stage="article-load",
+        )
+    kind = value.get("kind")
+    if kind == "file" and set(value) == {"kind", "path"}:
+        cover_path = _safe_bundle_file(root, value.get("path"), "cover.path")
+        if not cover_path.is_file():
+            raise _validation_error(
+                "article cover file does not exist",
+                stage="article-load",
+            )
+        return CoverFile(cover_path)
+    if kind == "media_id" and set(value) == {"kind", "media_id"}:
+        return CoverMediaId(value.get("media_id"))  # type: ignore[arg-type]
+    raise _validation_error("article cover has an invalid shape", stage="article-load")
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,30 +255,8 @@ class Article:
                 f"article output is not a directory: {root}", stage="article-save"
             )
 
-        body_path = root / _BODY_NAME
-        try:
-            body_path.write_text(self.body_html, encoding="utf-8")
-        except OSError as exc:
-            raise _validation_error("article body could not be written", stage="article-save") from exc
-
-        cover_payload: dict[str, str]
-        if isinstance(self.cover, CoverFile):
-            source = self.cover.path
-            if not source.is_file():
-                raise _validation_error(
-                    f"cover file does not exist: {source}", stage="article-save"
-                )
-            suffix = source.suffix.lower()
-            cover_name = "cover" + suffix
-            cover_path = root / cover_name
-            try:
-                if source.resolve() != cover_path.resolve():
-                    shutil.copyfile(source, cover_path)
-            except OSError as exc:
-                raise _validation_error("cover file could not be copied", stage="article-save") from exc
-            cover_payload = {"kind": "file", "path": cover_name}
-        else:
-            cover_payload = {"kind": "media_id", "media_id": self.cover.media_id}
+        _write_article_body(root, self.body_html)
+        cover_payload = _persist_cover(root, self.cover)
 
         payload = {
             "schema_version": ARTICLE_SCHEMA_VERSION,
@@ -187,7 +274,9 @@ class Article:
                 encoding="utf-8",
             )
         except OSError as exc:
-            raise _validation_error("article manifest could not be written", stage="article-save") from exc
+            raise _validation_error(
+                "article manifest could not be written", stage="article-save"
+            ) from exc
         return root
 
     @classmethod
@@ -199,54 +288,9 @@ class Article:
             raise _validation_error(
                 f"article directory does not exist: {root}", stage="article-load"
             )
-        manifest_path = root / _MANIFEST_NAME
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            raise _validation_error("article manifest could not be read", stage="article-load") from exc
-        except json.JSONDecodeError as exc:
-            raise _validation_error("article manifest is not valid JSON", stage="article-load") from exc
-        if not isinstance(payload, Mapping):
-            raise _validation_error("article manifest must be a JSON object", stage="article-load")
-        unknown = sorted(str(key) for key in payload if key not in _MANIFEST_FIELDS)
-        if unknown:
-            raise _validation_error(
-                "article manifest contains unknown field(s): " + ", ".join(unknown),
-                stage="article-load",
-            )
-        missing = sorted(field for field in _MANIFEST_FIELDS if field not in payload)
-        if missing:
-            raise _validation_error(
-                "article manifest is missing field(s): " + ", ".join(missing),
-                stage="article-load",
-            )
-        version = payload.get("schema_version")
-        if isinstance(version, bool) or version != ARTICLE_SCHEMA_VERSION:
-            raise _validation_error(
-                f"unsupported article schema version: {version}", stage="article-load"
-            )
-
-        body_path = _safe_bundle_file(root, payload.get("body_file"), "body_file")
-        if body_path.name != _BODY_NAME:
-            raise _validation_error("body_file must be body.html", stage="article-load")
-        try:
-            body_html = body_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise _validation_error("article body could not be read", stage="article-load") from exc
-
-        raw_cover = payload.get("cover")
-        if not isinstance(raw_cover, Mapping):
-            raise _validation_error("article cover must be a JSON object", stage="article-load")
-        kind = raw_cover.get("kind")
-        if kind == "file" and set(raw_cover) == {"kind", "path"}:
-            cover_path = _safe_bundle_file(root, raw_cover.get("path"), "cover.path")
-            if not cover_path.is_file():
-                raise _validation_error("article cover file does not exist", stage="article-load")
-            cover: Cover = CoverFile(cover_path)
-        elif kind == "media_id" and set(raw_cover) == {"kind", "media_id"}:
-            cover = CoverMediaId(raw_cover.get("media_id"))  # type: ignore[arg-type]
-        else:
-            raise _validation_error("article cover has an invalid shape", stage="article-load")
+        payload = _read_manifest(root)
+        body_html = _read_article_body(root, payload.get("body_file"))
+        cover = _load_cover(root, payload.get("cover"))
 
         article = cls(
             title=_required_text(payload.get("title"), "article title"),
@@ -257,8 +301,13 @@ class Article:
             source_url=_optional_text(payload.get("source_url"), "article source_url"),
         )
         fingerprint = payload.get("content_fingerprint")
-        if not isinstance(fingerprint, str) or fingerprint != article.content_fingerprint:
-            raise _validation_error("article content fingerprint does not match", stage="article-load")
+        if (
+            not isinstance(fingerprint, str)
+            or fingerprint != article.content_fingerprint
+        ):
+            raise _validation_error(
+                "article content fingerprint does not match", stage="article-load"
+            )
         return article
 
 
@@ -282,4 +331,6 @@ class MediaPublishResult:
     replacements: Mapping[str, str]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "replacements", MappingProxyType(dict(self.replacements)))
+        object.__setattr__(
+            self, "replacements", MappingProxyType(dict(self.replacements))
+        )

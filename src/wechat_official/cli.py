@@ -9,7 +9,7 @@ import sys
 
 from .client import WechatOfficialClient
 from .errors import DraftValidationError, WechatArticleError
-from .models import Article, CoverFile, CoverMediaId
+from .models import Article, CoverFile
 from .network import public_ip_cross_check
 from .service import WechatOfficialService
 
@@ -18,7 +18,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="微信公众号只读探针与草稿创建工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    probe = subparsers.add_parser("auth-probe", help="只读验证凭据、IP 白名单和草稿权限")
+    probe = subparsers.add_parser(
+        "auth-probe", help="只读验证凭据、IP 白名单和草稿权限"
+    )
     probe.add_argument("--api-base-url", default="https://api.weixin.qq.com")
 
     network = subparsers.add_parser(
@@ -53,7 +55,9 @@ def _parser() -> argparse.ArgumentParser:
 
 async def _run(args: argparse.Namespace) -> dict[str, object]:
     if args.command == "auth-probe":
-        async with WechatOfficialClient.from_environment(base_url=args.api_base_url) as client:
+        async with WechatOfficialClient.from_environment(
+            base_url=args.api_base_url
+        ) as client:
             await client.get_access_token()
             draft_count = await client.count_drafts()
         return {
@@ -84,7 +88,9 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
                 },
                 "cross_check": cross_check,
                 "whitelist_candidate": exc.observed_ip,
-                "confidence": "wechat-reported" if exc.observed_ip else "not-determined",
+                "confidence": "wechat-reported"
+                if exc.observed_ip
+                else "not-determined",
                 "external_writes": False,
             }
         return {

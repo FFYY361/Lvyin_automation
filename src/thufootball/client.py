@@ -34,7 +34,6 @@ from .models import (
 )
 from .policy import BLACKLISTED_TOURNAMENT_IDS
 
-
 DEFAULT_BASE_URL = "https://api.thufootball.tech"
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=15.0, pool=5.0)
 _RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
@@ -118,9 +117,7 @@ class THUFootballClient:
     def _validate_credentials(
         openid: str | None, session_key: str | None
     ) -> tuple[str | None, str | None]:
-        if openid is not None and (
-            not isinstance(openid, str) or not openid.strip()
-        ):
+        if openid is not None and (not isinstance(openid, str) or not openid.strip()):
             raise ConfigurationError(
                 "openid must be a non-empty string when supplied",
                 stage="configuration",
@@ -141,9 +138,7 @@ class THUFootballClient:
 
     async def __aenter__(self) -> THUFootballClient:
         if self._closed:
-            raise ConfigurationError(
-                "client is already closed", stage="configuration"
-            )
+            raise ConfigurationError("client is already closed", stage="configuration")
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -314,22 +309,16 @@ class THUFootballClient:
             if game.tournament_id not in BLACKLISTED_TOURNAMENT_IDS
         ]
 
-    async def get_tournament_info(
-        self, tournament_id: int
-    ) -> TournamentSnapshot:
+    async def get_tournament_info(self, tournament_id: int) -> TournamentSnapshot:
         tournament_id = _positive_id(tournament_id, "tournament_id")
         if tournament_id in BLACKLISTED_TOURNAMENT_IDS:
-            raise _query_error(
-                f"tournament_id {tournament_id} is blacklisted"
-            )
+            raise _query_error(f"tournament_id {tournament_id} is blacklisted")
         payload = await self._request_json(
             "GetTournInfo",
             {"tourn_id": tournament_id},
             authentication_required=True,
         )
-        return map_tournament_snapshot(
-            payload, expected_tournament_id=tournament_id
-        )
+        return map_tournament_snapshot(payload, expected_tournament_id=tournament_id)
 
     async def get_game_info(self, game_id: int) -> GameDetail:
         game_id = _positive_id(game_id, "game_id")
@@ -340,7 +329,5 @@ class THUFootballClient:
         )
         detail = map_game_detail(payload, expected_game_id=game_id)
         if detail.game.tournament_id in BLACKLISTED_TOURNAMENT_IDS:
-            raise _query_error(
-                f"game_id {game_id} belongs to a blacklisted tournament"
-            )
+            raise _query_error(f"game_id {game_id} belongs to a blacklisted tournament")
         return detail

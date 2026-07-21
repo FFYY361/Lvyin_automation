@@ -12,6 +12,12 @@ dependencies = [
   "lxml>=5,<7",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=9,<10",
+  "ruff>=0.15,<1",
+]
+
 [project.scripts]
 thufootball = "thufootball.cli:main"
 preview = "preview.cli:main"
@@ -22,3 +28,19 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 auto_preview = ["assets/*.png"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"test/**/test_*.py" = ["E402"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = "-ra"
+testpaths = ["test"]

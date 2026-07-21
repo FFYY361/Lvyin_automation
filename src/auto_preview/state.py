@@ -14,7 +14,6 @@ from wechat_official import Article, CoverFile, CoverMediaId
 from .errors import ArtifactValidationError
 from .models import PipelineRequest
 
-
 RUN_SCHEMA_VERSION = 2
 DRAFT_SCHEMA_VERSION = 1
 
@@ -78,18 +77,14 @@ def _read_object(path: Path, *, stage: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise ArtifactValidationError(
-            f"无法读取已有产物：{path}", stage=stage
-        ) from exc
+        raise ArtifactValidationError(f"无法读取已有产物：{path}", stage=stage) from exc
     except json.JSONDecodeError as exc:
         raise ArtifactValidationError(
             f"已有产物不是合法 JSON：{path}（第 {exc.lineno} 行）",
             stage=stage,
         ) from exc
     if not isinstance(value, dict):
-        raise ArtifactValidationError(
-            f"已有产物必须是 JSON 对象：{path}", stage=stage
-        )
+        raise ArtifactValidationError(f"已有产物必须是 JSON 对象：{path}", stage=stage)
     return value
 
 
@@ -130,9 +125,7 @@ def load_run_state(
             "run.json 字段不符合当前契约", stage="state-validation"
         )
     if payload.get("schema_version") != RUN_SCHEMA_VERSION:
-        raise ArtifactValidationError(
-            "run.json 版本不受支持", stage="state-validation"
-        )
+        raise ArtifactValidationError("run.json 版本不受支持", stage="state-validation")
     expected_request = {
         "preview_date": request.preview_date.isoformat(),
         "competition": request.competition.value,

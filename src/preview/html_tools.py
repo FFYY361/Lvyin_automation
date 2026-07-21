@@ -9,7 +9,6 @@ from lxml import etree, html
 
 from .errors import UnsafeHtml
 
-
 _DROP_TREE_TAGS = frozenset(
     {
         "script",
@@ -201,8 +200,7 @@ def sanitise_style(style: str, *, base_url: str = "") -> str:
         name, value = declaration.split(":", 1)
         normalised_name = name.strip().lower()
         if not normalised_name or not any(
-            normalised_name == prefix.rstrip("-")
-            or normalised_name.startswith(prefix)
+            normalised_name == prefix.rstrip("-") or normalised_name.startswith(prefix)
             for prefix in _ALLOWED_STYLE_PREFIXES
         ):
             continue

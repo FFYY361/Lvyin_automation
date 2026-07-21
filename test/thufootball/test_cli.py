@@ -17,7 +17,8 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from thufootball import ConfigurationError, GameQuery, GameStatus
-from thufootball.cli import _jsonable, main as cli_main
+from thufootball.cli import _jsonable
+from thufootball.cli import main as cli_main
 
 
 @dataclass(frozen=True)
@@ -105,9 +106,7 @@ class ThufootballCliTests(unittest.TestCase):
     def _run(self, argv: list[str]) -> tuple[int, object]:
         stdout = StringIO()
         with patch("thufootball.cli.THUFootballClient", _FakeClient):
-            with patch(
-                "thufootball.cli.THUFootballQueryService", _FakeQueryService
-            ):
+            with patch("thufootball.cli.THUFootballQueryService", _FakeQueryService):
                 with redirect_stdout(stdout):
                     status = cli_main(argv)
         return status, json.loads(stdout.getvalue())

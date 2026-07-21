@@ -11,7 +11,12 @@ from .bundle import (
     parse_weather_for_date,
     preview_article_file,
 )
-from .errors import PreviewError, PreviewValidationError, TemplateContractError, UnsafeHtml
+from .errors import (
+    PreviewError,
+    PreviewValidationError,
+    TemplateContractError,
+    UnsafeHtml,
+)
 from .models import (
     PlayedMatch,
     PreviewColumnConfig,

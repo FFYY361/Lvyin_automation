@@ -15,7 +15,6 @@ from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import patch
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SRC_ROOT = _PROJECT_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
@@ -28,8 +27,9 @@ from auto_preview import (
     PipelineRequest,
     Stage,
 )
+from auto_preview.cli import _parser
+from auto_preview.cli import main as cli_main
 from auto_preview.config import competition_config
-from auto_preview.cli import _parser, main as cli_main
 from auto_preview.diagnostics import failure_lines
 from auto_preview.logging_utils import configure_logging
 from auto_preview.source import PreviewSourceBuilder
@@ -44,14 +44,15 @@ from thufootball import (
     HeadToHeadHistory,
     HeadToHeadSummary,
     MatchResult,
-    PermissionError as THUFootballPermissionError,
     QueryValidationError,
     TeamGameResult,
     TeamTournamentOutcome,
     Timeout,
 )
+from thufootball import (
+    PermissionError as THUFootballPermissionError,
+)
 from wechat_official import Article, CoverFile, DraftReceipt
-
 
 SHANGHAI = timezone(timedelta(hours=8))
 
@@ -166,8 +167,7 @@ class _FakeQueries:
         self.h2h_calls: list[tuple[int, int, tuple[int, ...]]] = []
 
         before_times = [
-            datetime(2026, 4, day, 12, 0, tzinfo=SHANGHAI)
-            for day in range(10, 4, -1)
+            datetime(2026, 4, day, 12, 0, tzinfo=SHANGHAI) for day in range(10, 4, -1)
         ]
         self.results: dict[int, list[TeamGameResult]] = {1: [], 2: []}
         for team_id in (1, 2):
@@ -244,8 +244,12 @@ class _FakeQueries:
             )
         team_name = "社会科学学院女足" if team_id == 1 else "经济管理学院女足"
         return [
-            TeamTournamentOutcome(team_name, 102, "马杯女足2024~2025", "2024~2025", "八强"),
-            TeamTournamentOutcome(team_name, 90, "马杯女足2023~2024", "2023~2024", "四强"),
+            TeamTournamentOutcome(
+                team_name, 102, "马杯女足2024~2025", "2024~2025", "八强"
+            ),
+            TeamTournamentOutcome(
+                team_name, 90, "马杯女足2023~2024", "2023~2024", "四强"
+            ),
         ]
 
     async def query_team_to_team_matches(
@@ -261,7 +265,9 @@ class _FakeQueries:
 
 
 class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
-    async def test_queries_only_configured_ids_and_keeps_all_pre_match_results(self) -> None:
+    async def test_queries_only_configured_ids_and_keeps_all_pre_match_results(
+        self,
+    ) -> None:
         queries = _FakeQueries()
         logger, handler = _logger()
         builder = PreviewSourceBuilder(
@@ -376,12 +382,12 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(played.season, expected_season)
                 self.assertEqual(played.competition_label, "甲")
                 self.assertTrue(
-                    _head_to_head_line(played).startswith(
-                        f"（{expected_season}-甲）"
-                    )
+                    _head_to_head_line(played).startswith(f"（{expected_season}-甲）")
                 )
 
-    async def test_team_missing_from_outcome_catalog_is_shown_as_not_entered(self) -> None:
+    async def test_team_missing_from_outcome_catalog_is_shown_as_not_entered(
+        self,
+    ) -> None:
         queries = _FakeQueries()
         queries.outcome_query_error_team_ids.add(1)
         logger, _ = _logger()
@@ -420,7 +426,9 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([match.game_id for match in source.matches], [500])
 
-    async def test_uses_trusted_database_short_name_and_rejects_long_value(self) -> None:
+    async def test_uses_trusted_database_short_name_and_rejects_long_value(
+        self,
+    ) -> None:
         queries = _FakeQueries()
         queries.target = _game(
             500,
@@ -442,9 +450,17 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(source.matches[0].home.short_name, "社科女足")
         self.assertEqual(source.matches[0].away.short_name, "经济")
-        self.assertFalse(any("team_id=1" in item and "简称不可信" in item for item in handler.messages))
+        self.assertFalse(
+            any(
+                "team_id=1" in item and "简称不可信" in item
+                for item in handler.messages
+            )
+        )
         self.assertEqual(
-            sum("team_id=2" in item and "简称不可信" in item for item in handler.messages),
+            sum(
+                "team_id=2" in item and "简称不可信" in item
+                for item in handler.messages
+            ),
             1,
         )
 
@@ -488,7 +504,9 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CliTests(unittest.TestCase):
-    def test_help_works_outside_repository_and_only_documents_supported_spelling(self) -> None:
+    def test_help_works_outside_repository_and_only_documents_supported_spelling(
+        self,
+    ) -> None:
         script = _PROJECT_ROOT / "scripts" / "auto_preview.py"
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(
@@ -507,9 +525,7 @@ class CliTests(unittest.TestCase):
     def test_parser_supports_all_stages_and_rejects_conflicting_covers(self) -> None:
         parser = _parser()
         for stage in Stage:
-            args = parser.parse_args(
-                ["2026-04-11", "male", "--stage", stage.value]
-            )
+            args = parser.parse_args(["2026-04-11", "male", "--stage", stage.value])
             self.assertEqual(args.stage, stage)
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit):
@@ -555,9 +571,7 @@ class LoggingTests(unittest.TestCase):
     def test_file_log_is_utf8_plain_text_without_ansi(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            run_directory = (
-                root / "runs" / "auto_preview" / "2026-04-11_female"
-            )
+            run_directory = root / "runs" / "auto_preview" / "2026-04-11_female"
             with redirect_stderr(StringIO()):
                 logger = configure_logging(
                     run_directory,
@@ -566,9 +580,7 @@ class LoggingTests(unittest.TestCase):
                 logger.warning("⚠ [1/3] 测试日志：%s", run_directory)
             for handler in logger.handlers:
                 handler.flush()
-            content = (run_directory / "auto_preview.log").read_text(
-                encoding="utf-8"
-            )
+            content = (run_directory / "auto_preview.log").read_text(encoding="utf-8")
             for handler in tuple(logger.handlers):
                 logger.removeHandler(handler)
                 handler.close()
@@ -591,9 +603,7 @@ class LoggingTests(unittest.TestCase):
             }
         )
 
-        rendered = "\n".join(
-            failure_lines(error, log_path=Path("pipeline.log"))
-        )
+        rendered = "\n".join(failure_lines(error, log_path=Path("pipeline.log")))
 
         self.assertIn("批量赛事查询错误（权限错误）", rendered)
         self.assertIn("赛事 IDs=(122, 124, 126)", rendered)
@@ -711,22 +721,45 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
         )
         return root
 
+    def _pipeline(
+        self,
+        root: Path,
+        *,
+        queries: _FakeQueries | None = None,
+        wechat: _FakeWechat | None = None,
+        prompt=None,
+    ) -> tuple[AutoPreviewPipeline, _FakeQueries, _ListHandler]:
+        queries = queries or _FakeQueries()
+        logger, handler = _logger()
+        runner = AutoPreviewPipeline(
+            project_root=root,
+            query_service_factory=lambda: _Context(queries),
+            wechat_service_factory=(
+                None if wechat is None else lambda: _Context(wechat)
+            ),
+            prompt=prompt or (lambda _: True),
+            logger=logger,
+        )
+        return runner, queries, handler
+
+    @staticmethod
+    def _request(
+        stage: Stage,
+        *,
+        override: bool = False,
+    ) -> PipelineRequest:
+        return PipelineRequest(
+            datetime(2026, 4, 11).date(),
+            Competition.FEMALE,
+            stage,
+            override=override,
+        )
+
     async def test_existing_invalid_source_errors_without_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.DATA,
-            )
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
             result = await runner.run(request)
             result.source_path.write_text("{broken", encoding="utf-8")
             before = result.source_path.read_bytes()
@@ -740,22 +773,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_cover_publish_reuse_and_override_history(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
             wechat = _FakeWechat()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                wechat_service_factory=lambda: _Context(wechat),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.PUBLISH,
-                override=True,
-            )
+            runner, queries, _ = self._pipeline(root, wechat=wechat)
+            request = self._request(Stage.PUBLISH, override=True)
 
             first = await runner.run(request)
             self.assertEqual(first.draft_media_id, "draft-1")
@@ -800,20 +820,12 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_placeholders_warn_and_continue_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, handler = _logger()
             prompts: list[str] = []
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
+            runner, queries, handler = self._pipeline(
+                root,
                 prompt=lambda message: prompts.append(message) or False,
-                logger=logger,
             )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-            )
+            request = self._request(Stage.ARTICLE)
 
             initial = await runner.run(request)
             self.assertEqual(initial.status, "ok")
@@ -823,10 +835,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 any("标题尚未填写" in message for message in handler.messages)
             )
             self.assertTrue(
-                any(
-                    "需要补充前瞻内容、作者" in message
-                    for message in handler.messages
-                )
+                any("需要补充前瞻内容、作者" in message for message in handler.messages)
             )
 
             raw = json.loads(initial.source_path.read_text(encoding="utf-8"))
@@ -858,20 +867,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_edited_source_rebuilds_article_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, handler = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            override_request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-                override=True,
-            )
+            runner, queries, handler = self._pipeline(root)
+            override_request = self._request(Stage.ARTICLE, override=True)
             complete = await runner.run(override_request)
             raw = json.loads(complete.source_path.read_text(encoding="utf-8"))
             raw["headline"] = "人工修改后的标题"
@@ -909,24 +906,18 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                     for message in handler.messages
                 )
             )
-    async def test_edited_markdown_rebuilds_article_without_querying_again(self) -> None:
+
+    async def test_edited_markdown_rebuilds_article_without_querying_again(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, handler = _logger()
             prompts: list[str] = []
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
+            runner, queries, handler = self._pipeline(
+                root,
                 prompt=lambda message: prompts.append(message) or True,
-                logger=logger,
             )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-                override=True,
-            )
+            request = self._request(Stage.ARTICLE, override=True)
             complete = await runner.run(request)
             before = Article.load(complete.article_directory)
             raw = json.loads(complete.source_path.read_text(encoding="utf-8"))
@@ -972,19 +963,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_markdown_is_not_recreated_without_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, handler = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.DATA,
-            )
+            runner, queries, handler = self._pipeline(root)
+            request = self._request(Stage.DATA)
             complete = await runner.run(request)
             raw = json.loads(complete.source_path.read_text(encoding="utf-8"))
             preview = next(iter(raw["previews"].values()))
@@ -1001,20 +981,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_article_is_rebuilt_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-                override=True,
-            )
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.ARTICLE, override=True)
             complete = await runner.run(request)
             (complete.article_directory / "article.json").write_text(
                 "{broken", encoding="utf-8"
@@ -1034,20 +1002,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_changed_template_rebuilds_article_without_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, handler = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-                override=True,
-            )
+            runner, queries, handler = self._pipeline(root)
+            request = self._request(Stage.ARTICLE, override=True)
             complete = await runner.run(request)
             before = Article.load(complete.article_directory)
             template_path = root / "templates" / "qhly_preview_v1" / "template.html"
@@ -1067,9 +1023,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
 
             article = Article.load(rebuilt.article_directory)
             self.assertIn("模板变化测试标记", article.body_html)
-            self.assertNotEqual(
-                article.content_fingerprint, before.content_fingerprint
-            )
+            self.assertNotEqual(article.content_fingerprint, before.content_fingerprint)
             self.assertEqual(len(queries.game_queries), 1)
             self.assertTrue(
                 any("模板指纹已变化" in message for message in handler.messages)
@@ -1078,22 +1032,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_data_writes_schema_v2_manual_document(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, handler = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
+            runner, queries, handler = self._pipeline(root)
 
-            result = await runner.run(
-                PipelineRequest(
-                    datetime(2026, 4, 11).date(),
-                    Competition.FEMALE,
-                    Stage.DATA,
-                )
-            )
+            result = await runner.run(self._request(Stage.DATA))
             raw = json.loads(result.source_path.read_text(encoding="utf-8"))
 
             self.assertEqual(
@@ -1111,15 +1052,13 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("weather", raw)
             self.assertNotIn("credits", raw)
             match = raw["matches"][0]
-            key = f'{match["home"]["short_name"]} vs {match["away"]["short_name"]}'
+            key = f"{match['home']['short_name']} vs {match['away']['short_name']}"
             self.assertEqual(list(raw["previews"]), [key])
-            self.assertEqual(
-                set(raw["previews"][key]), {"article_file", "authors"}
-            )
+            self.assertEqual(set(raw["previews"][key]), {"article_file", "authors"})
             article_reference = raw["previews"][key]["article_file"]
             self.assertEqual(
                 article_reference,
-                f'previews/{match["home"]["short_name"]}vs{match["away"]["short_name"]}.md',
+                f"previews/{match['home']['short_name']}vs{match['away']['short_name']}.md",
             )
             article_path = result.run_directory / article_reference
             self.assertTrue(article_path.is_file())
@@ -1136,10 +1075,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 any("标题尚未填写" in message for message in handler.messages)
             )
             self.assertTrue(
-                any(
-                    "需要补充前瞻内容、作者" in message
-                    for message in handler.messages
-                )
+                any("需要补充前瞻内容、作者" in message for message in handler.messages)
             )
             self.assertFalse(
                 any(str(root.resolve()) in message for message in handler.messages)
@@ -1154,19 +1090,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_global_files_warn_and_continue(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory, with_global_inputs=False)
-            queries = _FakeQueries()
-            logger, handler = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-            )
+            runner, queries, handler = self._pipeline(root)
+            request = self._request(Stage.ARTICLE)
 
             result = await runner.run(request)
 
@@ -1207,10 +1132,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 any("标题尚未填写" in message for message in handler.messages)
             )
             self.assertTrue(
-                any(
-                    "需要补充前瞻内容、作者" in message
-                    for message in handler.messages
-                )
+                any("需要补充前瞻内容、作者" in message for message in handler.messages)
             )
             self.assertFalse(
                 any(str(root.resolve()) in message for message in handler.messages)
@@ -1260,33 +1182,21 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            queries = _FakeQueries()
-            logger, handler = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
+            runner, queries, handler = self._pipeline(root)
 
-            result = await runner.run(
-                PipelineRequest(
-                    datetime(2026, 4, 11).date(),
-                    Competition.FEMALE,
-                    Stage.ARTICLE,
-                )
-            )
+            result = await runner.run(self._request(Stage.ARTICLE))
 
             self.assertEqual(result.status, "ok")
-            weather = json.loads(
-                (inputs / "weather.json").read_text(encoding="utf-8")
+            weather = json.loads((inputs / "weather.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                weather["2026-04-11"],
+                {
+                    "low_c": None,
+                    "high_c": None,
+                    "wind_direction": None,
+                    "wind_level": None,
+                },
             )
-            self.assertEqual(weather["2026-04-11"], {
-                "low_c": None,
-                "high_c": None,
-                "wind_direction": None,
-                "wind_level": None,
-            })
             article = Article.load(result.article_directory)
             self.assertIn("待更新", article.body_html)
             self.assertTrue(
@@ -1306,14 +1216,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
+            runner, queries, _ = self._pipeline(root)
             day = datetime(2026, 4, 11).date()
 
             data = await runner.run(
@@ -1351,19 +1254,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8",
             )
             weather_before = weather_path.read_bytes()
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-            )
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.ARTICLE)
 
             with self.assertRaises(ArtifactValidationError) as weather_error:
                 await runner.run(request)
@@ -1421,24 +1313,14 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("$config.reviewers", str(config_error.exception))
             self.assertEqual(config_path.read_bytes(), config_before)
 
-    async def test_only_current_weather_and_config_affect_article_fingerprint(self) -> None:
+    async def test_only_current_weather_and_config_affect_article_fingerprint(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
             inputs = root / "runs" / "auto_preview"
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.ARTICLE,
-                override=True,
-            )
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.ARTICLE, override=True)
             first = await runner.run(request)
             first_article = Article.load(first.article_directory)
             first_state = json.loads(
@@ -1527,23 +1409,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             inputs = root / "runs" / "auto_preview"
             weather_before = (inputs / "weather.json").read_bytes()
             config_before = (inputs / "config.json").read_bytes()
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
+            runner, queries, _ = self._pipeline(root)
 
-            await runner.run(
-                PipelineRequest(
-                    datetime(2026, 4, 11).date(),
-                    Competition.FEMALE,
-                    Stage.ARTICLE,
-                    override=True,
-                )
-            )
+            await runner.run(self._request(Stage.ARTICLE, override=True))
 
             self.assertEqual((inputs / "weather.json").read_bytes(), weather_before)
             self.assertEqual((inputs / "config.json").read_bytes(), config_before)
@@ -1551,19 +1419,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_override_rebuilds_markdown_and_removes_stale_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.DATA,
-            )
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
             first = await runner.run(request)
             raw = json.loads(first.source_path.read_text(encoding="utf-8"))
             preview = next(iter(raw["previews"].values()))
@@ -1589,19 +1446,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_source_and_run_contracts_require_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
-            queries = _FakeQueries()
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
-            request = PipelineRequest(
-                datetime(2026, 4, 11).date(),
-                Competition.FEMALE,
-                Stage.DATA,
-            )
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
             created = await runner.run(request)
             source = json.loads(created.source_path.read_text(encoding="utf-8"))
             source["schema_version"] = 1
@@ -1644,22 +1490,10 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                     status=GameStatus.SCHEDULED,
                 )
             )
-            logger, _ = _logger()
-            runner = AutoPreviewPipeline(
-                project_root=root,
-                query_service_factory=lambda: _Context(queries),
-                prompt=lambda _: True,
-                logger=logger,
-            )
+            runner, _, _ = self._pipeline(root, queries=queries)
 
             with self.assertRaises(PreviewValidationError) as caught:
-                await runner.run(
-                    PipelineRequest(
-                        datetime(2026, 4, 11).date(),
-                        Competition.FEMALE,
-                        Stage.DATA,
-                    )
-                )
+                await runner.run(self._request(Stage.DATA))
 
             self.assertIn("对阵简称重复", str(caught.exception))
             self.assertIn("500", str(caught.exception))

@@ -41,7 +41,9 @@ class ArticleBundleTests(unittest.TestCase):
             manifest = json.loads((output / "article.json").read_text(encoding="utf-8"))
             loaded = Article.load(output)
 
-        self.assertEqual(manifest["cover"], {"kind": "media_id", "media_id": "existing-cover"})
+        self.assertEqual(
+            manifest["cover"], {"kind": "media_id", "media_id": "existing-cover"}
+        )
         self.assertEqual(loaded, article)
         self.assertEqual(loaded.content_fingerprint, article.content_fingerprint)
 
@@ -105,7 +107,9 @@ class _FakeMedia:
 
     async def publish_body_images(self, body_html: str) -> MediaPublishResult:
         self.calls += 1
-        return MediaPublishResult(body_html=body_html.replace("old", "new"), replacements={})
+        return MediaPublishResult(
+            body_html=body_html.replace("old", "new"), replacements={}
+        )
 
 
 class _FakeClient:
@@ -136,7 +140,9 @@ class _FakeClient:
 
 
 class WechatOfficialServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_submits_complete_article_and_preserves_source_fingerprint(self) -> None:
+    async def test_submits_complete_article_and_preserves_source_fingerprint(
+        self,
+    ) -> None:
         client = _FakeClient()
         media = _FakeMedia()
         article = Article(
@@ -213,14 +219,14 @@ class WechatOfficialCliTests(unittest.TestCase):
                 cover=CoverMediaId("cover"),
             ).save(Path(directory) / "article")
             with redirect_stderr(StringIO()):
-                status = cli_main(
-                    ["create-draft", str(output), "--fans-only-comments"]
-                )
+                status = cli_main(["create-draft", str(output), "--fans-only-comments"])
         self.assertEqual(status, 2)
 
     def test_official_package_does_not_import_preview(self) -> None:
         package = _SRC_ROOT / "wechat_official"
-        sources = "\n".join(path.read_text(encoding="utf-8") for path in package.glob("*.py"))
+        sources = "\n".join(
+            path.read_text(encoding="utf-8") for path in package.glob("*.py")
+        )
         self.assertNotIn("from preview", sources)
         self.assertNotIn("import preview", sources)
 

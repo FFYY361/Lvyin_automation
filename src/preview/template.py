@@ -22,7 +22,6 @@ from .models import (
     validate_preview_source,
 )
 
-
 _PATH = r"[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*"
 _TOKEN = re.compile(
     rf"<!--\s*wx:(?:(?P<each>each)\s+(?P<each_path>{_PATH})\s+as\s+"
@@ -282,10 +281,7 @@ def _score_text(value: PlayedMatch) -> str:
 def _result_line(value: PlayedMatch) -> str:
     if not isinstance(value, PlayedMatch):
         raise TypeError("result_line 需要 PlayedMatch")
-    return (
-        f"{value.home.short_name} {_score_text(value)} "
-        f"{value.away.short_name}"
-    )
+    return f"{value.home.short_name} {_score_text(value)} {value.away.short_name}"
 
 
 def _head_to_head_line(value: PlayedMatch) -> str:
@@ -392,8 +388,10 @@ def _render_nodes(
                     f"模板字段 {node.path!r} 不能是 None",
                     stage="template-render",
                 )
-            if is_dataclass(value) or isinstance(value, Mapping) or (
-                isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+            if (
+                is_dataclass(value)
+                or isinstance(value, Mapping)
+                or (isinstance(value, Sequence) and not isinstance(value, (str, bytes)))
             ):
                 raise TemplateContractError(
                     f"模板字段 {node.path!r} 必须是标量或使用格式化器",
@@ -434,7 +432,9 @@ class PreviewTemplate:
         self.version = version
 
     @classmethod
-    def compile(cls, body_template: str, *, version: str | None = None) -> "PreviewTemplate":
+    def compile(
+        cls, body_template: str, *, version: str | None = None
+    ) -> "PreviewTemplate":
         if not isinstance(body_template, str) or not body_template.strip():
             raise TemplateContractError(
                 "body template must be a non-empty string",
@@ -442,7 +442,10 @@ class PreviewTemplate:
             )
         nodes = _Parser(body_template).parse()
         if version is None:
-            version = "sha256:" + hashlib.sha256(body_template.encode("utf-8")).hexdigest()[:16]
+            version = (
+                "sha256:"
+                + hashlib.sha256(body_template.encode("utf-8")).hexdigest()[:16]
+            )
         return cls(nodes=nodes, source=body_template, version=version)
 
     def render_body(

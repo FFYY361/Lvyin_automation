@@ -8,7 +8,6 @@ from lxml import etree, html
 
 from .models import MediaReference
 
-
 _CSS_URL = re.compile(r"url\(\s*(['\"]?)(.*?)\1\s*\)", re.I)
 
 
