@@ -148,7 +148,6 @@ def _resolve_finished_game(
             home_score=home_score,
             away_score=away_score,
             result_text=f"{home_score}:{away_score}",
-            penalty_shootout=False,
             home_penalty=None,
             away_penalty=None,
         )
@@ -167,7 +166,6 @@ def _resolve_finished_game(
         normalised = replace(
             game,
             result_text=f"{home_score}:{away_score}",
-            penalty_shootout=False,
             home_penalty=None,
             away_penalty=None,
         )
@@ -239,7 +237,7 @@ def _team_game_result(
     assert game.home_score is not None and game.away_score is not None
     goals_for = game.home_score if is_home else game.away_score
     goals_against = game.away_score if is_home else game.home_score
-    if game.penalty_shootout:
+    if game.decided_by_penalty_shootout:
         assert game.home_penalty is not None and game.away_penalty is not None
         penalty_for = game.home_penalty if is_home else game.away_penalty
         penalty_against = game.away_penalty if is_home else game.home_penalty

@@ -110,6 +110,8 @@ class GameSummary:
     field_name: str | None
 ```
 
+`penalty_shootout` 保留远端字段的真实语义：表示该场是否启用“打平后点球决胜”的规则，不表示比赛实际进入了点球大战。`GameSummary.decided_by_penalty_shootout` 由完赛状态、常规比分和有效点球比分共同推导。
+
 字段映射固定为：
 
 ```python
@@ -320,10 +322,10 @@ kickoff_local = kickoff_utc.astimezone(ZoneInfo("Asia/Shanghai"))
 判断是否完赛不得依赖 `game_time_metadata`、`minute` 或 `stoppage_minute`。只有 `FINISHED` 且能够按下列顺序归一化的比赛才进入球队赛果和交锋汇总：
 
 1. 单方弃赛：五人制将未弃赛方判为 `5:0`，其他人数判为 `3:0`；返回的 `GameSummary` 副本覆盖比分和 `result_text`，保留弃赛标记，并清除点球字段。
-2. 双方弃赛、完赛比分缺失或点球数据矛盾：映射时直接返回带字段路径的 `SchemaError`。
-3. 常规比分不同：按常规比分判断胜负，使用普通 `主队比分:客队比分` 文本，并清除无实际意义的点球字段。
+2. 双方弃赛、完赛比分缺失，或常规比分打平后点球数据矛盾：映射时直接返回带字段路径的 `SchemaError`。
+3. 常规比分不同：无论是否启用点球决胜规则，都按常规比分判断胜负，使用普通 `主队比分:客队比分` 文本，并清除无实际意义的点球比分；规则开关本身保持不变。
 4. 常规比分相同且 `penalty_shootout` 为假：判为平局。
-5. 常规比分相同、`penalty_shootout` 为真且点球比分合法并不相等：按点球判断胜负，主客视角文本规范为 `2(3):2(4)`；`TeamGameResult` 再将比分和点球字段转换为目标球队视角。
+5. 常规比分相同、`penalty_shootout` 为真且点球比分合法并不相等：`decided_by_penalty_shootout` 为真，按点球判断胜负，主客视角文本规范为 `2(3):2(4)`；`TeamGameResult` 再将比分和点球字段转换为目标球队视角。
 6. 常规比分相同但点球比分缺失、相等或损坏：直接返回 `SchemaError`，不猜测胜负。
 
 `include_unfinished=True` 时，有效未完赛比赛可进入返回列表，但不进入交锋汇总。`valid=false` 或 `status=false` 的记录继续按无效领域状态过滤；`valid=null`、`penalty_shootout=null`、缺失嵌套球队对象、负数计数和其他不符合当前响应契约的数据直接返回 `SchemaError`，不修复、不回填也不跳过。

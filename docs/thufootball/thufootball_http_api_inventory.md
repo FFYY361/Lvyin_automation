@@ -241,7 +241,7 @@ Python 函数使用参数名 `game_type`，发送 HTTP 请求时会映射为接�
 | `round` | `int \| null` | 轮次；不适用时为 `null` |
 | `home_goal` | `int` | 主队进球数 |
 | `away_goal` | `int` | 客队进球数 |
-| `penalty_shootout` | `int` | 是否进入点球大战的整数标记 |
+| `penalty_shootout` | `int` | 是否启用“常规比分打平后点球决胜”规则的整数标记；不能单独用于判断是否实际进入点球大战 |
 | `home_penalty` | `int \| null` | 主队点球大战进球数；不适用时可能为 `null` |
 | `away_penalty` | `int \| null` | 客队点球大战进球数；不适用时可能为 `null` |
 | `home_abandon` | `int \| null` | 主队是否弃赛的整数标记；无弃赛信息时为 `null` |
