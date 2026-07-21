@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 from datetime import date, datetime
@@ -134,44 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         log_failure(logger, exc, log_path=display_log_path)
         return 2
 
-    print(
-        json.dumps(
-            {
-                "status": result.status,
-                "completed_stage": result.completed_stage.value,
-                "draft_media_id": result.draft_media_id,
-                "runs": [
-                    {
-                        "preview_date": run.preview_date.isoformat(),
-                        "competition": run.competition.value,
-                        "status": run.status,
-                        "run_directory": str(
-                            _relative_path(run.run_directory, project_root)
-                        ),
-                        "source": (
-                            str(_relative_path(run.source_path, project_root))
-                            if run.source_path is not None
-                            else None
-                        ),
-                        "article": (
-                            str(
-                                _relative_path(
-                                    run.article_directory,
-                                    project_root,
-                                )
-                            )
-                            if run.article_directory is not None
-                            else None
-                        ),
-                        "draft_media_id": run.draft_media_id,
-                        "reason": run.reason,
-                    }
-                    for run in result.runs
-                ],
-                "next_command": result.next_command,
-            },
-            ensure_ascii=False,
-            indent=2,
+    if result.next_command is not None:
+        next_stage = (
+            Stage.ARTICLE if result.completed_stage is Stage.DATA else Stage.PUBLISH
         )
-    )
+        logger.info("下一步 %s 命令：%s", next_stage.value, result.next_command)
     return 0
