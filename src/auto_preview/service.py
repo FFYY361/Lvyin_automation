@@ -738,6 +738,7 @@ class AutoPreviewPipeline:
         contexts: list[_CombinationContext],
         *,
         override: bool,
+        logger: logging.Logger,
     ) -> str:
         if not 1 <= len(contexts) <= 8:
             raise PipelineError(
@@ -763,19 +764,19 @@ class AutoPreviewPipeline:
         if not override and matching is not None:
             for context, history in zip(contexts, histories, strict=True):
                 write_json(context.paths.draft, history)
-                context.logger.info(
-                    "↷ [3/3] publish 复用同一批次草稿（%.2fs）：%s",
-                    time.monotonic() - started,
-                    matching["media_id"],
-                )
+            logger.info(
+                "↷ [3/3] publish 复用同一批次草稿（%.2fs）：%s",
+                time.monotonic() - started,
+                matching["media_id"],
+            )
             return matching["media_id"]
 
-        for context in contexts:
-            context.logger.info(
-                "▶ [3/3] publish 加入 %s / %s",
-                context.request.preview_date.isoformat(),
-                context.request.competition.value,
-            )
+        joined_items = "、".join(
+            f"{context.request.preview_date.isoformat()} / "
+            f"{context.request.competition.value}"
+            for context in contexts
+        )
+        logger.info("▶ [3/3] publish 加入 %s", joined_items)
         articles = tuple(context.article for context in contexts)
         assert all(article is not None for article in articles)
         async with self._wechat_service_factory() as wechat:
@@ -789,11 +790,11 @@ class AutoPreviewPipeline:
         for context, history in zip(contexts, histories, strict=True):
             history["receipts"].append(receipt.copy())
             write_json(context.paths.draft, history)
-            context.logger.info(
-                "✓ [3/3] publish 完成（%.2fs）：%s",
-                time.monotonic() - started,
-                draft_receipt.media_id,
-            )
+        logger.info(
+            "✓ [3/3] publish 完成（%.2fs）：%s",
+            time.monotonic() - started,
+            draft_receipt.media_id,
+        )
         return draft_receipt.media_id
 
     @staticmethod
@@ -1065,6 +1066,7 @@ class AutoPreviewPipeline:
             draft_media_id = await self._publish_articles(
                 ordered_contexts,
                 override=request.override,
+                logger=batch_logger,
             )
         except Exception as exc:
             batch_logger.error("✗ [3/3] publish 失败：%s", exc)
