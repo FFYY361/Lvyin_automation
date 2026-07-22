@@ -2,7 +2,7 @@
 
 ## 当前边界
 
-仓库当前提供三个中层模块，但不提供自动编排管线：
+仓库当前提供三个中层模块：
 
 ```text
 thufootball             preview                         wechat_official
