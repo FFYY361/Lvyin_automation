@@ -1004,7 +1004,11 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             root = self._root(directory)
             queries = _BatchQueries()
             wechat = _FakeWechat()
-            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
+            runner, _, handler = self._pipeline(
+                root,
+                queries=queries,
+                wechat=wechat,
+            )
             events: list[str] = []
             query_data_group = runner._query_data_group
             prepare_article = runner._prepare_article
@@ -1064,6 +1068,25 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 {run.draft_media_id for run in result.runs},
                 {result.draft_media_id},
             )
+            started = [
+                message
+                for message in handler.messages
+                if message.startswith("▶ [3/3] publish")
+            ]
+            completed = [
+                message
+                for message in handler.messages
+                if message.startswith("✓ [3/3] publish")
+            ]
+            self.assertEqual(
+                started,
+                [
+                    "▶ [3/3] publish 加入 "
+                    "2026-04-11 / male、2026-04-11 / female"
+                ],
+            )
+            self.assertEqual(len(completed), 1)
+            self.assertTrue(completed[0].endswith("：draft-1"))
 
     async def test_batch_data_queries_once_per_competition_and_logs_stages_once(
         self,
