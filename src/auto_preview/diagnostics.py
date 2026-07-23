@@ -279,7 +279,7 @@ _DIAGNOSIS_RULES: tuple[
 
 _UNCLASSIFIED_DIAGNOSIS = _Diagnosis(
     "内部未分类错误",
-    ("保留完整 auto_preview.log，并根据异常类型定位代码或提交问题。",),
+    ("保留终端中的完整错误输出，并根据异常类型定位代码或提交问题。",),
 )
 
 
