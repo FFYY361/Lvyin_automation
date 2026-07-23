@@ -540,7 +540,7 @@ def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
             None
             if source.weather is None
             else {
-                "forecast_date": source.weather.forecast_date.isoformat(),
+                "condition": source.weather.condition,
                 "low_c": source.weather.low_c,
                 "high_c": source.weather.high_c,
                 "wind_direction": source.weather.wind_direction,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import struct
 import subprocess
@@ -56,6 +57,7 @@ from thufootball import (
 from thufootball import (
     PermissionError as THUFootballPermissionError,
 )
+from weather import DailyWeather, WeatherNetworkError
 from wechat_official import Article, CoverFile, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -843,6 +845,29 @@ class _FakeWechat:
         )
 
 
+class _FakeWeather:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, date]] = []
+        self.failures: dict[date, WeatherNetworkError] = {}
+        self.conditions: dict[date, str] = {}
+
+    async def get_weather(self, adcode: str, target_date: date) -> DailyWeather:
+        self.calls.append((adcode, target_date))
+        if target_date in self.failures:
+            raise self.failures[target_date]
+        return DailyWeather(
+            adcode=adcode,
+            region_name="海淀区",
+            forecast_date=target_date,
+            condition=self.conditions.get(target_date, "多云"),
+            low_c=10,
+            high_c=20,
+            wind_direction="微风",
+            wind_level="≤3级",
+            report_time=datetime(2026, 4, 10, 18, tzinfo=SHANGHAI),
+        )
+
+
 class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
     def _root(self, directory: str, *, with_global_inputs: bool = True) -> Path:
         root = Path(directory)
@@ -860,6 +885,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             json.dumps(
                 {
                     "2026-04-11": {
+                        "condition": None,
                         "low_c": None,
                         "high_c": None,
                         "wind_direction": None,
@@ -892,6 +918,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
         root: Path,
         *,
         queries: _FakeQueries | None = None,
+        weather: _FakeWeather | None = None,
         wechat: _FakeWechat | None = None,
     ) -> tuple[AutoPreviewPipeline, _FakeQueries, _ListHandler]:
         queries = queries or _FakeQueries()
@@ -899,6 +926,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
         runner = AutoPreviewPipeline(
             project_root=root,
             query_service_factory=lambda: _Context(queries),
+            weather_service_factory=(
+                None if weather is None else lambda: _Context(weather)
+            ),
             wechat_service_factory=(
                 None if wechat is None else lambda: _Context(wechat)
             ),
@@ -912,6 +942,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(path.read_text(encoding="utf-8"))
         for day in days:
             payload[day.isoformat()] = {
+                "condition": None,
                 "low_c": None,
                 "high_c": None,
                 "wind_direction": None,
@@ -934,6 +965,157 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             stage=stage,
             override=override,
         )
+
+    async def test_weather_refresh_is_deduplicated_and_uses_fixed_haidian_adcode(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            queries = _BatchQueries()
+            weather_service = _FakeWeather()
+            runner, _, _ = self._pipeline(
+                root,
+                queries=queries,
+                weather=weather_service,
+            )
+            request = PipelineRequest(
+                (date(2026, 4, 11),),
+                (Competition.MALE, Competition.FEMALE),
+                stage=Stage.DATA,
+            )
+
+            with patch.dict(
+                os.environ,
+                {"AMAP_WEATHER_ADCODE": "999999"},
+                clear=False,
+            ):
+                result = await runner.run(request)
+
+            self.assertEqual(result.status, "ok")
+            self.assertEqual(
+                weather_service.calls,
+                [("110108", date(2026, 4, 11))],
+            )
+            payload = json.loads(
+                (
+                    root / "runs" / "auto_preview" / "weather.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                payload["2026-04-11"],
+                {
+                    "condition": "多云",
+                    "low_c": 10,
+                    "high_c": 20,
+                    "wind_direction": "微风",
+                    "wind_level": "≤3级",
+                },
+            )
+
+    async def test_complete_weather_skips_query_without_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            weather_path = root / "runs" / "auto_preview" / "weather.json"
+            weather_path.write_text(
+                json.dumps(
+                    {
+                        "2026-04-11": {
+                            "condition": "晴",
+                            "low_c": 8,
+                            "high_c": 18,
+                            "wind_direction": "东风",
+                            "wind_level": "4级",
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = weather_path.read_bytes()
+            weather_service = _FakeWeather()
+            runner, _, _ = self._pipeline(root, weather=weather_service)
+
+            await runner.run(self._request(Stage.DATA))
+
+            self.assertEqual(weather_service.calls, [])
+            self.assertEqual(weather_path.read_bytes(), before)
+
+    async def test_override_refreshes_complete_weather(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            weather_path = root / "runs" / "auto_preview" / "weather.json"
+            weather_path.write_text(
+                json.dumps(
+                    {
+                        "2026-04-11": {
+                            "condition": "旧天气",
+                            "low_c": 1,
+                            "high_c": 2,
+                            "wind_direction": "北风",
+                            "wind_level": "4级",
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            weather_service = _FakeWeather()
+            weather_service.conditions[date(2026, 4, 11)] = "晴"
+            runner, _, _ = self._pipeline(root, weather=weather_service)
+
+            await runner.run(self._request(Stage.DATA, override=True))
+
+            payload = json.loads(weather_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["2026-04-11"]["condition"], "晴")
+            self.assertEqual(payload["2026-04-11"]["low_c"], 10)
+            self.assertEqual(len(weather_service.calls), 1)
+
+    async def test_weather_failure_preserves_existing_or_null_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            weather_path = root / "runs" / "auto_preview" / "weather.json"
+            weather_service = _FakeWeather()
+            weather_service.failures[date(2026, 4, 11)] = WeatherNetworkError(
+                "weather request failed",
+                stage="http",
+                retryable=True,
+            )
+            runner, _, handler = self._pipeline(root, weather=weather_service)
+            placeholder_before = weather_path.read_bytes()
+
+            await runner.run(self._request(Stage.DATA))
+
+            self.assertEqual(weather_path.read_bytes(), placeholder_before)
+            self.assertTrue(
+                any("保留全 null 占位" in message for message in handler.messages)
+            )
+
+            weather_path.write_text(
+                json.dumps(
+                    {
+                        "2026-04-11": {
+                            "condition": "多云",
+                            "low_c": 8,
+                            "high_c": 18,
+                            "wind_direction": "东风",
+                            "wind_level": "4级",
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            existing_before = weather_path.read_bytes()
+            await runner.run(self._request(Stage.DATA, override=True))
+
+            self.assertEqual(weather_path.read_bytes(), existing_before)
+            self.assertTrue(any("保留已有天气" in message for message in handler.messages))
 
     async def test_existing_invalid_source_errors_without_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1139,11 +1321,17 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(source_log.count("source.json"), 4)
             self.assertEqual(markdown_log.count("previews"), 4)
             self.assertEqual(
-                sum("日期 2026-04-11 为全 null" in message for message in messages),
+                sum(
+                    "2026-04-11 自动查询海淀天气失败" in message
+                    for message in messages
+                ),
                 1,
             )
             self.assertEqual(
-                sum("日期 2026-04-12" in message for message in messages),
+                sum(
+                    "2026-04-12 自动查询海淀天气失败" in message
+                    for message in messages
+                ),
                 1,
             )
             data_completed = next(
@@ -1603,7 +1791,8 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("writers", match)
             self.assertTrue(
                 any(
-                    "为全 null；天气尚未填写，需要补充；本篇显示“待更新”" in message
+                    "自动查询海淀天气失败" in message
+                    and "保留全 null 占位" in message
                     for message in handler.messages
                 )
             )
@@ -1637,6 +1826,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 json.loads((inputs / "weather.json").read_text(encoding="utf-8")),
                 {
                     "2026-04-11": {
+                        "condition": None,
                         "low_c": None,
                         "high_c": None,
                         "wind_direction": None,
@@ -1662,7 +1852,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 1,
             )
             self.assertTrue(
-                any("为新生成天气配置" in message for message in handler.messages)
+                any("自动查询海淀天气失败" in message for message in handler.messages)
             )
             self.assertTrue(
                 any("标题尚未填写" in message for message in handler.messages)
@@ -1706,6 +1896,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "2026-04-10": {
+                            "condition": "晴",
                             "low_c": 6,
                             "high_c": 16,
                             "wind_direction": "东风",
@@ -1727,6 +1918,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 weather["2026-04-11"],
                 {
+                    "condition": None,
                     "low_c": None,
                     "high_c": None,
                     "wind_direction": None,
@@ -1736,7 +1928,10 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             article = Article.load(result.article_directory)
             self.assertIn("待更新", article.body_html)
             self.assertTrue(
-                any("缺少日期 2026-04-11" in message for message in handler.messages)
+                any(
+                    "2026-04-11 自动查询海淀天气失败" in message
+                    for message in handler.messages
+                )
             )
 
     async def test_existing_empty_config_only_blocks_article_or_publish(self) -> None:
@@ -1781,6 +1976,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "2026-04-11": {
+                            "condition": None,
                             "low_c": 9,
                             "high_c": None,
                             "wind_direction": None,
@@ -1808,6 +2004,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "2026-04-10": {
+                            "condition": None,
                             "low_c": 9,
                             "high_c": None,
                             "wind_direction": None,
@@ -1829,6 +2026,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "2026-04-11": {
+                            "condition": None,
                             "low_c": None,
                             "high_c": None,
                             "wind_direction": None,
@@ -1870,6 +2068,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             weather_path = inputs / "weather.json"
             weather = json.loads(weather_path.read_text(encoding="utf-8"))
             weather["2026-04-12"] = {
+                "condition": "晴",
                 "low_c": 11,
                 "high_c": 21,
                 "wind_direction": "南风",
@@ -1900,6 +2099,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             )
 
             weather["2026-04-11"] = {
+                "condition": "多云",
                 "low_c": 8,
                 "high_c": 18,
                 "wind_direction": "东南风",

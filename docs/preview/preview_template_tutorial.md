@@ -8,6 +8,22 @@
 
 三份 JSON 使用严格解码：缺失必填字段、未知字段、非法日期、非 `+08:00` 开球时间、不完整比分和非法比赛 ID 都会在渲染前报错。`qhly_preview_v1` 模板的 source 由同目录 `schema.json` 唯一定义；`previews` 以 `主队简称 vs 客队简称` 为键，并使用 `article_file` 引用同目录下的正文 Markdown，例如 `previews/集电vs美院.md`。正文可以直接粘贴，以空白行分段，模板负责生成 HTML 标签和转义内容。
 
+weather 文件顶层以 `YYYY-MM-DD` 为键，条目严格对应 `PreviewWeather`：
+
+```json
+{
+  "2026-04-11": {
+    "condition": "多云",
+    "low_c": 12,
+    "high_c": 23,
+    "wind_direction": "南风",
+    "wind_level": "≤3级"
+  }
+}
+```
+
+条目只能包含以上五个字段。五项全为 `null` 表示天气待更新；部分为空、缺少字段或包含额外字段都会报错。日期只保存在顶层键，不在 `PreviewWeather` 内重复保存。文章通常显示“多云，12~23℃，南风≤3级”；风向为“微风”时隐藏风力。
+
 模板支持：
 
 - `{{path.to.value}}`：输出并转义标量；

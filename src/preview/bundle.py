@@ -20,7 +20,13 @@ from .models import (
     validate_preview_source,
 )
 
-WEATHER_FIELDS = ("low_c", "high_c", "wind_direction", "wind_level")
+WEATHER_FIELDS = (
+    "condition",
+    "low_c",
+    "high_c",
+    "wind_direction",
+    "wind_level",
+)
 _MATCH_FIELDS = (
     "game_id",
     "competition_name",
@@ -382,7 +388,7 @@ def _parse_weather_map(value: object, preview_date: date) -> PreviewWeather | No
         if low_c > high_c:
             raise _error(path, "最低温不能高于最高温")
         parsed_entries[day.isoformat()] = PreviewWeather(
-            forecast_date=day,
+            condition=_nonempty_string(entry["condition"], f"{path}.condition"),
             low_c=low_c,
             high_c=high_c,
             wind_direction=_nonempty_string(

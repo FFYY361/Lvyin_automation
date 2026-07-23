@@ -247,7 +247,12 @@ def _weather_summary(value: PreviewWeather | None) -> str:
         return "待更新"
     if not isinstance(value, PreviewWeather):
         raise TypeError("weather_summary 需要 PreviewWeather 或 None")
-    return f"{value.low_c}~{value.high_c}℃，{value.wind_direction}{value.wind_level}"
+    wind = (
+        value.wind_direction
+        if value.wind_direction == "微风"
+        else f"{value.wind_direction}{value.wind_level}"
+    )
+    return f"{value.condition}，{value.low_c}~{value.high_c}℃，{wind}"
 
 
 def _venue_short_name(value: str) -> str:

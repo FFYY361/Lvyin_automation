@@ -5,6 +5,7 @@
 `thufootball_automation` 用于搭建所有与 THUFootball 相关的自动化任务。仓库以可组合的中层 Service 为核心，目前提供：
 
 - `thufootball`：只读查询比赛、球队赛果、赛事成绩和交锋记录。
+- `weather`：按行政区划代码和日期查询高德短期天气预报。
 - `preview`：把结构化前瞻 data 渲染为前瞻文章。
 - `wechat_official`：接收完整文章，处理图片和封面，并创建微信公众号草稿。
 
@@ -32,15 +33,16 @@ conda activate thufootball_automation
 python -m pip install -e .
 ```
 
-安装后检查三个入口：
+安装后检查四个入口：
 
 ```powershell
 thufootball --help
+weather --help
 preview --help
 wechat-official --help
 ```
 
-需要在`./.env` 中配置thufootball和公众号所需要的权限凭证，详见 格式详见`./.env.example`, 注意保密！thufootball凭证需要你自己在浏览器中获取，公众号凭证可以向我索要。
+需要在 `./.env` 中配置 THUFootball、天气和公众号所需凭证，格式见 `./.env.example`，注意保密。
 
 ## 自动化前瞻 auto_preview
 
@@ -78,11 +80,11 @@ result = await pipeline.run(request)
 批次严格执行“全部 data → 全部 article → 一次 publish”，不会在其他组合尚未完成 data 时提前渲染文章。每个组合仍有独立产物目录 `runs/auto_preview/YYYY-MM-DD_赛事/`。自动生成 data 后，需要填写以下人工内容：
 
 - `runs/auto_preview/config.json`：长期复用编辑、责编和审核，仅需填写一次;
-- `runs/auto_preview/weather.json`：按日期填写天气；
+- `runs/auto_preview/weather.json`：自动查询并按日期缓存海淀天气，也可人工填写；
 - 运行目录内的 `source.json`：填写标题和每场作者；
 - 运行目录内的 `previews/*.md`：直接粘贴每场前瞻正文。
 
-首次运行时，如果 `weather.json` 不存在或缺少当日天气，会创建当前日期的全 `null` 模板；如果 `config.json` 不存在，会创建带有编辑、责编和审核占位符的模板。Pipeline 会分别 warning 天气、标题、新建人员配置，以及每场尚未填写的前瞻内容和作者。天气必须全 `null` 或全非 `null`，若前者，文章中天气使用占位符。人工修改后的 `config.json` 中，`editors`、`reviewers`、`approvers` 均必须是非空数组。
+首次运行时，如果 `weather.json` 不存在或缺少当日天气，会先创建五字段全 `null` 模板，再用固定海淀区 adcode `110108` 自动查询。查询成功后写入天气；缺少 Key、网络失败、额度不足、历史日期或超出预报范围时保留原记录并 warning，文章显示“待更新”。天气条目必须严格包含 `condition`、`low_c`、`high_c`、`wind_direction`、`wind_level`，且五项全为 `null` 或全部有值。如果 `config.json` 不存在，会创建带有编辑、责编和审核占位符的模板。天气自动查询功能尚未验证过，因为目前没有时间较近的比赛。
 
 `source.json` 遵循 `templates/qhly_preview_v1/schema.json`。
 
@@ -111,13 +113,13 @@ python scripts/auto_preview.py --dates 2026-04-11 --competitions female --cover-
 
 封面参数应用于批次内所有文章。同一批次中，同一赛事只查询一次完整比赛列表，再按各日期筛选，因而增加日期不会重复调用该赛事的比赛列表 API。查询服务还会在本次运行内按赛事 ID 缓存快照，球队本届战绩和历史交手记录会复用已读取的数据；缓存不会跨命令保留。没有比赛的组合会记录为可复用的 `no_games` 并跳过；普通重跑不会再次查询，使用 `--override` 或赛事 ID 查询范围变化时才会重新查询。若全部组合均无比赛，命令以成功状态退出且不会进入 article 或调用微信。
 
-data 阶段完成后，可以人工填写或修改 `weather.json`、`config.json`、`source.json` 和 `previews/*.md`，data 内容受到保护，若不开启 `--override`，不会自动覆盖渲染。若 data 内容发生变化，则 article 阶段会自动重新渲染，无论是否开启 `--override`。
+data 阶段完成后，可以人工填写或修改 `weather.json`、`config.json`、`source.json` 和 `previews/*.md`。已有完整天气在普通运行中不会再次查询；天气、配置、source 或正文发生变化后，article 会自动重新渲染。
 
 ```powershell
 python scripts/auto_preview.py --dates 2026-04-11 --competitions female --stage article
 ```
 
-`--override` 会对每个组合从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json` 和正文 Markdown，仅在确实需要重新查询数据时使用；它不会覆盖全局 `weather.json` 或 `config.json`。`publish` 只接收 1–8 篇实际生成的文章，超过八篇会在调用微信前失败，不自动拆分。批次成员、顺序、正文或封面不变，且所有组合都保存了同一回执时，才会复用草稿。
+`--override` 会对每个组合从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json` 和正文 Markdown，并强制重新查询请求日期的海淀天气。天气仅在查询成功后覆盖，失败时原记录不变；全局 `config.json` 始终不会被覆盖。`publish` 只接收 1–8 篇实际生成的文章，超过八篇会在调用微信前失败，不自动拆分。
 
 `publish` 只创建公众号草稿，不正式发布或群发。多篇文章按规范顺序成为头条和次条，整个草稿只有一个 `media_id`，同一回执会写入所有参与组合的 `draft.json`。data 和 article 的批次起止、总耗时及“源数据 / 正文 Markdown”路径清单只输出一次；需要人工填充的 warning 在 data 完成后统一输出，天气 warning 按日期去重。批次级日志写入首个组合的 `auto_preview.log`，各组合内部产生的详细日志仍写入对应目录。
 
@@ -130,7 +132,7 @@ python scripts/auto_preview.py --dates 2026-04-11 --competitions female --stage 
 比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；交手记录以“赛季-等级”标识赛事，例如 `23-24-甲`、`22-23-甲`，近三年没有直接交手记录时显示“无”。已有 Article 会在 source 或模板变化后自动重新渲染。
 
 ---
-> **以下内容是 GPT 写的，关于三个中层 service 的说明，没有进行过人工检查。若你是一个使用者，那么你只读到这里就可以了。若你想要进行二次开发，请提示你的 AI 配合代码确认真实用法和行为。**
+> **以下内容是 GPT 写的，关于四个中层 service 的说明，没有进行过人工检查。若你是一个使用者，那么你只读到这里就可以了。若你想要进行二次开发，请提示你的 AI 配合代码确认真实用法和行为。**
 ---
 
 ## service/thufootball
@@ -196,6 +198,27 @@ asyncio.run(main())
 ```
 
 完整查询规则见 [THUFootball 查询能力实现设计](docs/thufootball/thufootball_query_implementation.md)，底层接口字段见 [THUFootball HTTP API 清单](docs/thufootball/thufootball_http_api_inventory.md)。
+
+## service/weather
+
+`WeatherQueryService` 使用高德 Web 服务按六位行政区划代码和日期查询短期预报。公开接口不暴露高德的 `extensions` 或原始 `casts` 结构：
+
+```python
+from datetime import date
+
+from weather import WeatherQueryService
+
+async with WeatherQueryService.from_environment() as service:
+    forecast = await service.get_weather("110108", date(2026, 7, 23))
+```
+
+CLI 用法：
+
+```powershell
+weather query --adcode 110108 --date 2026-07-23
+```
+
+高德仅提供当前及短期未来预报；历史日期会在访问网络前被拒绝，远期日期若不在响应中则返回 `ForecastUnavailable`。输出保留白天天气、白天风向和白天风力，最低/最高温由日温、夜温取 `min/max`。`无风向` 映射为“微风”，`旋转不定` 映射为“阵风”；高德实际可能返回 `≤3` 或 `1-3` 等风力格式，分别保存为 `≤3级`、`1-3级`。
 
 ## service/preview
 

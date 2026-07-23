@@ -10,7 +10,7 @@ import shutil
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -20,10 +20,17 @@ from preview import (
     PreviewService,
     PreviewSourceData,
     PreviewSourceDocument,
+    PreviewWeather,
     load_preview_bundle,
     parse_preview_document,
 )
 from thufootball import THUFootballQueryService
+from weather import (
+    DailyWeather,
+    WeatherError,
+    WeatherInvalidResponse,
+    WeatherQueryService,
+)
 from wechat_official import (
     Article,
     CoverFile,
@@ -34,7 +41,11 @@ from wechat_official import (
 
 from .config import CompetitionConfig, competition_config
 from .errors import ArtifactValidationError, NoGamesForDate, PipelineError
-from .inputs import GlobalInputStatus, ensure_global_inputs
+from .inputs import (
+    GlobalInputStatus,
+    ensure_global_inputs,
+    write_weather_for_date,
+)
 from .logging_utils import configure_logging
 from .models import (
     CombinationResult,
@@ -67,6 +78,7 @@ from .state import (
 
 ServiceFactory = Callable[[], Any]
 AUTO_PREVIEW_DIGEST = "马杯前瞻"
+AUTO_PREVIEW_WEATHER_ADCODE = "110108"
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +124,7 @@ class AutoPreviewPipeline:
         *,
         project_root: str | Path | None = None,
         query_service_factory: ServiceFactory | None = None,
+        weather_service_factory: ServiceFactory | None = None,
         wechat_service_factory: ServiceFactory | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -123,10 +136,102 @@ class AutoPreviewPipeline:
         self._query_service_factory = (
             query_service_factory or THUFootballQueryService.from_environment
         )
+        self._weather_service_factory = (
+            weather_service_factory or WeatherQueryService.from_environment
+        )
         self._wechat_service_factory = (
             wechat_service_factory or WechatOfficialService.from_environment
         )
         self._logger = logger
+
+    @staticmethod
+    def _preview_weather(value: DailyWeather) -> PreviewWeather:
+        return PreviewWeather(
+            condition=value.condition,
+            low_c=value.low_c,
+            high_c=value.high_c,
+            wind_direction=value.wind_direction,
+            wind_level=value.wind_level,
+        )
+
+    def _weather_failure_warning(
+        self,
+        preview_date: date,
+        inputs: GlobalInputStatus,
+        error: WeatherError,
+    ) -> str:
+        outcome = (
+            "保留已有天气"
+            if not inputs.weather_placeholder
+            else "保留全 null 占位，本篇显示“待更新”"
+        )
+        return (
+            f"{self._display_path(inputs.weather_path)}："
+            f"{preview_date.isoformat()} 自动查询海淀天气失败："
+            f"{type(error).__name__}（{error}）；{outcome}"
+        )
+
+    async def _refresh_weather(
+        self,
+        inputs_by_date: dict[date, GlobalInputStatus],
+        *,
+        override: bool,
+    ) -> tuple[set[date], set[date], list[str]]:
+        requested_dates = [
+            preview_date
+            for preview_date, inputs in sorted(inputs_by_date.items())
+            if override or inputs.weather_placeholder
+        ]
+        if not requested_dates:
+            return set(), set(), []
+
+        completed: set[date] = set()
+        warnings: list[str] = []
+        remaining = set(requested_dates)
+        try:
+            async with self._weather_service_factory() as weather_service:
+                for preview_date in requested_dates:
+                    inputs = inputs_by_date[preview_date]
+                    try:
+                        weather = await weather_service.get_weather(
+                            AUTO_PREVIEW_WEATHER_ADCODE,
+                            preview_date,
+                        )
+                    except WeatherError as exc:
+                        warnings.append(
+                            self._weather_failure_warning(preview_date, inputs, exc)
+                        )
+                    else:
+                        if weather.forecast_date != preview_date:
+                            error = WeatherInvalidResponse(
+                                "weather service returned a different forecast date",
+                                stage="service",
+                            )
+                            warnings.append(
+                                self._weather_failure_warning(
+                                    preview_date,
+                                    inputs,
+                                    error,
+                                )
+                            )
+                        else:
+                            write_weather_for_date(
+                                inputs.weather_path,
+                                preview_date,
+                                self._preview_weather(weather),
+                            )
+                            completed.add(preview_date)
+                    remaining.remove(preview_date)
+        except WeatherError as exc:
+            warnings.extend(
+                self._weather_failure_warning(
+                    preview_date,
+                    inputs_by_date[preview_date],
+                    exc,
+                )
+                for preview_date in sorted(remaining)
+            )
+        return set(requested_dates), completed, warnings
 
     def run_directory(self, request: _CombinationRequest) -> Path:
         return (
@@ -913,6 +1018,10 @@ class AutoPreviewPipeline:
                 for context in ordered_all_contexts
                 if context.document is not None
             ]
+            inputs_by_context: dict[
+                tuple[date, Competition], GlobalInputStatus
+            ] = {}
+            inputs_by_date: dict[date, GlobalInputStatus] = {}
             for context in ready_contexts:
                 assert context.document is not None
                 inputs = ensure_global_inputs(
@@ -920,6 +1029,43 @@ class AutoPreviewPipeline:
                     context.request.preview_date,
                     require_complete_config=False,
                 )
+                key = (
+                    context.request.preview_date,
+                    context.request.competition,
+                )
+                inputs_by_context[key] = inputs
+                inputs_by_date.setdefault(context.request.preview_date, inputs)
+
+            (
+                attempted_weather_dates,
+                refreshed_dates,
+                weather_query_warnings,
+            ) = await self._refresh_weather(
+                inputs_by_date,
+                override=request.override,
+            )
+            for preview_date in sorted(refreshed_dates):
+                batch_logger.info(
+                    "↳ weather 已更新海淀区 %s：%s",
+                    preview_date.isoformat(),
+                    self._display_path(inputs_by_date[preview_date].weather_path),
+                )
+            manual_warnings.extend(weather_query_warnings)
+
+            for context in ready_contexts:
+                assert context.document is not None
+                key = (
+                    context.request.preview_date,
+                    context.request.competition,
+                )
+                inputs = inputs_by_context[key]
+                if context.request.preview_date in attempted_weather_dates:
+                    inputs = replace(
+                        inputs,
+                        weather_created=False,
+                        weather_date_added=False,
+                        weather_placeholder=False,
+                    )
                 weather_warning, warnings = self._manual_warnings(
                     context.document,
                     inputs,

@@ -16,7 +16,7 @@ CHINA_UTC_OFFSET = timedelta(hours=8)
 
 @dataclass(frozen=True)
 class PreviewWeather:
-    forecast_date: date
+    condition: str
     low_c: int
     high_c: int
     wind_direction: str
@@ -564,10 +564,7 @@ def validate_preview_source(source: PreviewSourceData) -> None:
 
     if source.weather is not None:
         weather = source.weather
-        if weather.forecast_date != source.preview_date:
-            raise _error(
-                "$.weather.forecast_date", "必须与 preview_date 相同", stage=stage
-            )
+        _validate_nonempty(weather.condition, "$.weather.condition", stage=stage)
         if isinstance(weather.low_c, bool) or not isinstance(weather.low_c, int):
             raise _error("$.weather.low_c", "必须是整数", stage=stage)
         if isinstance(weather.high_c, bool) or not isinstance(weather.high_c, int):
