@@ -733,11 +733,12 @@ class LoggingTests(unittest.TestCase):
         self.assertIn("阶段：logging", rendered)
         self.assertNotIn("Traceback", rendered)
 
-    def test_file_log_is_utf8_plain_text_without_ansi(self) -> None:
+    def test_logging_only_writes_to_console(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_directory = root / "runs" / "auto_preview" / "2026-04-11_female"
-            with redirect_stderr(StringIO()):
+            stderr = StringIO()
+            with redirect_stderr(stderr):
                 logger = configure_logging(
                     run_directory,
                     project_root=root,
@@ -745,10 +746,11 @@ class LoggingTests(unittest.TestCase):
                 logger.warning("⚠ [1/3] 测试日志：%s", run_directory)
             for handler in logger.handlers:
                 handler.flush()
-            content = (run_directory / "auto_preview.log").read_text(encoding="utf-8")
+            content = stderr.getvalue()
             for handler in tuple(logger.handlers):
                 logger.removeHandler(handler)
                 handler.close()
+            self.assertFalse(run_directory.exists())
         self.assertIn("[1/3] 测试日志", content)
         self.assertIn(
             str(Path("runs") / "auto_preview" / "2026-04-11_female"),

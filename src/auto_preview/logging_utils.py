@@ -1,4 +1,4 @@
-"""Readable console and file logging for auto_preview runs."""
+"""Readable console logging for auto_preview runs."""
 
 from __future__ import annotations
 
@@ -59,7 +59,6 @@ def configure_logging(
     *,
     project_root: Path | None = None,
 ) -> logging.Logger:
-    run_directory.mkdir(parents=True, exist_ok=True)
     logger_key = hashlib.sha256(
         str(run_directory.resolve()).encode("utf-8")
     ).hexdigest()[:16]
@@ -78,12 +77,4 @@ def configure_logging(
         _ConsoleFormatter(color=bool(getattr(sys.stderr, "isatty", lambda: False)()))
     )
     logger.addHandler(console)
-
-    file_handler = logging.FileHandler(
-        run_directory / "auto_preview.log", encoding="utf-8"
-    )
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
-    )
-    logger.addHandler(file_handler)
     return logger

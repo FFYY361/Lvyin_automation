@@ -85,13 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         / "auto_preview"
         / f"{first_date.isoformat()}_{first_competition.value}"
     )
-    log_path = run_directory / "auto_preview.log"
-    display_log_path = _relative_path(log_path, project_root)
     try:
         logger = configure_logging(run_directory, project_root=project_root)
     except Exception as exc:
         print(
-            *failure_lines(exc, stage="logging", log_path=display_log_path),
+            *failure_lines(exc, stage="logging"),
             sep="\n",
             file=sys.stderr,
         )
@@ -109,7 +107,6 @@ def main(argv: list[str] | None = None) -> int:
                         str(_relative_path(cover_path, project_root)),
                     ),
                     stage="arguments",
-                    log_path=display_log_path,
                 )
                 return 2
             cover = CoverFile(cover_path)
@@ -130,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("✗ auto_preview 已由用户中断")
         return 130
     except Exception as exc:
-        log_failure(logger, exc, log_path=display_log_path)
+        log_failure(logger, exc)
         return 2
 
     if result.next_command is not None:
