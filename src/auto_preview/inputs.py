@@ -8,6 +8,7 @@ from pathlib import Path
 
 from preview import (
     PreviewValidationError,
+    PreviewWeather,
     parse_preview_config,
     parse_weather_for_date,
 )
@@ -18,6 +19,7 @@ from .state import read_json_object, write_json
 WEATHER_FILE_NAME = "weather.json"
 CONFIG_FILE_NAME = "config.json"
 EMPTY_WEATHER = {
+    "condition": None,
     "low_c": None,
     "high_c": None,
     "wind_direction": None,
@@ -67,6 +69,31 @@ def _ensure_weather(
             write_json(path, payload)
             date_added = True
     return path, created, date_added, weather is None
+
+
+def write_weather_for_date(
+    path: Path,
+    preview_date: date,
+    weather: PreviewWeather,
+) -> None:
+    """Replace one validated weather entry with the exact PreviewWeather schema."""
+
+    payload = read_json_object(path, stage="weather-validation")
+    try:
+        parse_weather_for_date(payload, preview_date)
+    except PreviewValidationError as exc:
+        raise ArtifactValidationError(
+            f"weather.json 校验失败：{exc}",
+            stage="weather-validation",
+        ) from exc
+    payload[preview_date.isoformat()] = {
+        "condition": weather.condition,
+        "low_c": weather.low_c,
+        "high_c": weather.high_c,
+        "wind_direction": weather.wind_direction,
+        "wind_level": weather.wind_level,
+    }
+    write_json(path, payload)
 
 
 def _load_or_create_config(root: Path) -> tuple[Path, dict[str, object], bool]:

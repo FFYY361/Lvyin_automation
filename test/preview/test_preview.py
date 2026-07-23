@@ -21,6 +21,7 @@ from preview import (
     PreviewService,
     PreviewTemplate,
     PreviewValidationError,
+    PreviewWeather,
     SeasonOutcome,
     TemplateContractError,
     load_preview_bundle,
@@ -37,6 +38,7 @@ from preview.template import (
     _head_to_head_line,
     _outcome_heading,
     _venue_short_name,
+    _weather_summary,
 )
 from wechat_official import Article, CoverMediaId
 
@@ -251,6 +253,17 @@ class PreviewSourceTests(unittest.TestCase):
 
 
 class TemplateTests(unittest.TestCase):
+    def test_weather_summary_includes_condition_and_hides_calm_wind_level(
+        self,
+    ) -> None:
+        calm = PreviewWeather("多云", 8, 18, "微风", "≤3级")
+        gust = PreviewWeather("阵雨", 10, 20, "阵风", "4级")
+        normal = PreviewWeather("晴", 9, 21, "南风", "≤3级")
+
+        self.assertEqual(_weather_summary(calm), "多云，8~18℃，微风")
+        self.assertEqual(_weather_summary(gust), "阵雨，10~20℃，阵风4级")
+        self.assertEqual(_weather_summary(normal), "晴，9~21℃，南风≤3级")
+
     def test_female_outcome_heading_uses_season_only(self) -> None:
         self.assertEqual(
             _outcome_heading(SeasonOutcome("24-25", "女足", "16强")),
@@ -792,6 +805,7 @@ class PreviewBundleTests(unittest.TestCase):
         day = source["preview_date"]
         empty_weather = {
             day: {
+                "condition": None,
                 "low_c": None,
                 "high_c": None,
                 "wind_direction": None,
@@ -812,6 +826,7 @@ class PreviewBundleTests(unittest.TestCase):
 
         complete_weather = {
             day: {
+                "condition": "多云",
                 "low_c": 8,
                 "high_c": 18,
                 "wind_direction": "东南风",
@@ -820,8 +835,19 @@ class PreviewBundleTests(unittest.TestCase):
         }
         parsed = _parse_bundle(source, complete_weather, config)
         self.assertIsNotNone(parsed.weather)
-        self.assertEqual(parsed.weather.forecast_date.isoformat(), day)
+        self.assertEqual(parsed.weather.condition, "多云")
         self.assertEqual(parsed.weather.low_c, 8)
+
+        legacy_weather = copy.deepcopy(complete_weather)
+        del legacy_weather[day]["condition"]
+        with self.assertRaises(PreviewValidationError) as legacy:
+            _parse_bundle(source, legacy_weather, config)
+        self.assertIn("condition", str(legacy.exception))
+
+        complete_weather[day]["forecast_date"] = day
+        with self.assertRaises(PreviewValidationError) as extra:
+            _parse_bundle(source, complete_weather, config)
+        self.assertIn("forecast_date", str(extra.exception))
 
     def test_config_is_strict(self) -> None:
         source, weather, config = self._payloads()
