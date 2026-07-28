@@ -11,9 +11,10 @@
 
 除非为 `thufootball report` 显式开启 `--refresh-stats`，本仓库的现有命令不会触发已知安全风险；`preview` 完全在本地运行；微信公众号侧只创建草稿，不自动发布或群发。模块边界见 [项目架构](docs/architecture.md)。
 
-当前提供一个联动管线:
+当前提供两条联动管线:
 
 - `auto_preview`: 自动查询、渲染、创建前瞻草稿。
+- `auto_report`: 自动下载战报、组装文章、创建战报草稿。
 
 ## 环境
 
@@ -130,6 +131,69 @@ python scripts/auto_preview.py --dates 2026-04-11 --competitions female --stage 
 球队名称和简称优先采用 `src/thufootball/notes/teams.json` 中由院系信息汇总表维护的官方值，官方简称不受长度限制。未登记球队才采用 `GameSummary` 中长度不超过 5 个字符的数据库 `brief_name`；数据库简称缺失或过长时，改用球队全称前两个字符并记录 warning。每支球队的本赛事历史战绩统一转换为该队在主队的展示方向；此转换只发生在 `auto_preview`，不会改变 `thufootball` 查询结果。
 
 比赛卡片使用固定赛事短名：男足甲级、男足乙级、男足丙级、女足、五人制。过往三届成绩固定输出三个赛季，无法取得排名时显示“未参赛”；交手记录以“赛季-等级”标识赛事，例如 `23-24-甲`、`22-23-甲`，近三年没有直接交手记录时显示“无”。已有 Article 会在 source 或模板变化后自动重新渲染。
+
+## 自动战报 auto_report
+
+`auto_report` 与 `auto_preview` 平级，按日期和赛事批量执行
+`report → article → publish`：
+
+```powershell
+python scripts/auto_report.py --dates 2026-04-11 --competitions male
+python scripts/auto_report.py --dates 2026-04-11 2026-04-12 --competitions male female futsal --stage report
+python scripts/auto_report.py --dates 2026-04-11 2026-04-12 --competitions male female --stage publish
+```
+
+`--dates` 与 `--competitions` 均为必填批量参数。日期和赛事自动去重，并固定按“日期升序，同日 male → female → futsal”展开。`--stage` 支持：
+
+| stage | 行为 |
+| --- | --- |
+| `report` | 查询比赛并生成完赛场次的 PNG 战报 |
+| `article` | 完成 report 后，把战报与弃赛说明组装成 Article；这是默认值 |
+| `publish` | 完成全部 report 和 article 后，一次创建微信公众号多图文草稿 |
+
+Python API 使用同样的批次模型：
+
+```python
+from datetime import date
+
+from auto_report import AutoReportPipeline, Competition, PipelineRequest, Stage
+
+pipeline = AutoReportPipeline()
+result = await pipeline.run(
+    PipelineRequest(
+        report_dates=(date(2026, 4, 11), date(2026, 4, 12)),
+        competitions=(Competition.MALE, Competition.FEMALE),
+        stage=Stage.ARTICLE,
+    )
+)
+```
+
+每个“日期 × 赛事”组合使用独立目录：
+
+```text
+runs/auto_report/YYYY-MM-DD_competition/
+├── reports/HHMM_GAME_ID.png
+├── report.json
+├── article/
+│   ├── article.json
+│   ├── body.html
+│   └── cover.*（仅显式使用文件封面时存在）
+├── run.json
+└── draft.json
+```
+
+同一批次中每个 competition 只查询一次当前赛事 ID 范围，再按北京日期筛选。比赛按开球时间、赛事 ID、比赛 ID 排序。未完赛比赛会 warning 并跳过；无比赛或只有未完赛比赛的组合记录为可复用的 skipped，普通重跑不再查询。弃赛比赛不渲染图片，而是在正文相同位置插入判定比分说明；球队名优先使用 `src/thufootball/notes/teams.json` 的全名。普通完赛比赛使用 `THUFootballReportService` 的默认设置，包含二维码、时间、场地和阵容。
+
+`auto_report` 不提供 `--refresh-stats`，并始终以
+`refresh_stats=False` 生成战报，因此不会调用可能修改服务端统计的
+`OnReStatGameData`。`--override` 会重新查询、重绘并删除当前组合中过期的
+PNG，但仍不会刷新服务端统计。
+
+`report.json` 保存正文顺序、图片相对路径及 SHA-256、战报校验 warning、弃赛说明和被跳过的未完赛比赛。普通重跑会严格校验 `run.json`、`report.json` 和所有图片；缺图或哈希不一致时安全失败，使用 `--override` 才会重建。
+
+Article 标题固定为“【马杯男足】今日战报”“【马杯女足】今日战报”或“【马杯五人制】今日战报”，作者为“清华绿茵”，摘要为“马杯战报”。正文图片按顺序以内嵌 PNG data URL 保存，宽度 100%、高度自适应；不额外添加比赛标题。不传封面时固定复用“今日战报”永久素材的 `media_id`，不会重复上传默认封面；也支持批次级 `--cover FILE` 或 `--cover-media-id ID` 覆盖默认值。
+
+`publish` 严格执行“全部 report → 全部 article → 一次 publish”，只纳入实际生成 Article 的组合，支持 1–8 篇且不自动拆分。它只创建公众号草稿，不发布或群发；同一批次回执写入所有参与组合的 `draft.json`。相同指纹的普通重跑复用已有草稿，`--override` 创建新草稿。全部组合均 skipped 时成功退出且不调用微信。
 
 ---
 > **以下内容是 GPT 写的，关于四个中层 service 的说明，没有进行过人工检查。若你是一个使用者，那么你只读到这里就可以了。若你想要进行二次开发，请提示你的 AI 配合代码确认真实用法和行为。**

@@ -12,13 +12,19 @@ import tempfile
 from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from PIL import Image, UnidentifiedImageError
 
 from .client import THUFootballClient
 from .errors import ConfigurationError, InvalidResponse, QueryValidationError
-from .models import GameDetail, GameEvent, GameReportFile, ReportSettings
+from .models import (
+    GameDetail,
+    GameEvent,
+    GameReportFile,
+    GameSummary,
+    ReportSettings,
+)
 from .rankings import load_static_outcome_catalog
 from .report_validation import validate_game_events
 
@@ -88,8 +94,12 @@ def _validate_settings(settings: object) -> ReportSettings:
     return settings
 
 
-def _report_team_name(detail: GameDetail, side: str) -> str:
-    game = detail.game
+def resolve_report_team_name(
+    game: GameSummary,
+    side: Literal["home", "away"],
+) -> str:
+    """Resolve the displayed report name, preferring the static full name."""
+
     team_id = game.home_team_id if side == "home" else game.away_team_id
     catalog = load_static_outcome_catalog()
     static_names = catalog.team_names_by_id.get(team_id)
@@ -106,6 +116,13 @@ def _report_team_name(detail: GameDetail, side: str) -> str:
         or game.away_team_brief_name
         or game.away_team_name
     )
+
+
+def _report_team_name(
+    detail: GameDetail,
+    side: Literal["home", "away"],
+) -> str:
+    return resolve_report_team_name(detail.game, side)
 
 
 def _report_subtitle(detail: GameDetail) -> str:
