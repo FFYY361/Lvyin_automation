@@ -33,15 +33,24 @@ PNG，不保存 `GetGameInfo` 原始响应。
 本地绘制逐项复现 `game.js` 的 jCanvas 逻辑：
 
 - 固定 1600px 宽、纯白背景和动态 `hy` 高度；
-- 使用网站相同的队名、比分、副标题、时间和场地坐标与字号；
+- 队名第一优先使用 `notes/teams.json` 按全局 `team_id` 对应的顶层全名；
+  未收录时依次回退到 API 的 `report_name`、`brief_name` 和 `name`；
+- 使用网站相同的比分、副标题、时间和场地坐标与字号；
+- 队名按实际 `simHei` 粗体字宽在 600px 内逐字符自动换行，无须人工插入
+  空格；换行后画布高度随队名行数增加；
 - 首发按号码排序，以网站相同的 600px 最大宽度和 36px 行高换行；
 - 比赛事件保留 API 顺序，按网站规则合并同一时间、转换乌龙球方向和第二张
   黄牌，并使用相同的事件框、横线、中轴线和图标布局；
+- 绘制前按球队校验首发人数、同时间事件、换人顺序和人数、球员在场状态、
+  纪律处罚及点球大战事件类型；助攻事件静默过滤，不进入校验或绘制；
 - `START`、`END`、图例、小程序码，以及 `G.png`、`YC.png`、`Y2C.png`、
   `SI.png`、`SO.png` 等事件图标，均直接读取网站同款公开图片资源，不再用
   Pillow 或矢量代码近似复刻。
+- 底部仅保留进球、点球、点球罚失和乌龙球四项图例，按实际图标与文字宽度
+  计算后整体居中。
 
-比赛 `4245` 的默认输出已与参考图核对，尺寸同为 `1600×1646`。
+比赛 `4245` 的回归数据按 11 人制校验通过；移除助攻图例后画布尺寸仍为
+`1600×1646`。
 
 像素级字体栅格依赖浏览器。程序会自动寻找 Microsoft Edge、Google Chrome
 或 Chromium；也可将 `THUFOOTBALL_CHROMIUM` 设置为浏览器可执行文件路径。
@@ -74,8 +83,11 @@ thufootball report 4245 --no-qrcode --no-time --no-field --no-lineup
 thufootball report 4245 --output tmp\game-4245.png --override
 ```
 
-成功后 CLI 输出 JSON，其中包含绝对路径、媒体类型、像素尺寸，以及本次是否
-执行了重新统计。
+成功后 CLI 输出 JSON，其中包含绝对路径、媒体类型、像素尺寸、本次是否
+执行了重新统计，以及结构化 `warnings`。warning 还会以一条
+`status=warning` JSON 写入 stderr，但不会阻止输出；任一 error 会以
+`ReportValidationError` 聚合全部 issues，并在请求二维码、静态图标和启动
+浏览器前终止。
 
 ## Python
 
@@ -101,6 +113,7 @@ async def main() -> None:
             overwrite=False,
         )
         print(result.path)
+        print(result.warnings)
 
 
 asyncio.run(main())

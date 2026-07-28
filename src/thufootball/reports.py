@@ -19,6 +19,8 @@ from PIL import Image, UnidentifiedImageError
 from .client import THUFootballClient
 from .errors import ConfigurationError, InvalidResponse, QueryValidationError
 from .models import GameDetail, GameEvent, GameReportFile, ReportSettings
+from .rankings import load_static_outcome_catalog
+from .report_validation import validate_game_events
 
 _REPORT_WIDTH = 1600
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -30,7 +32,6 @@ _EVENT_ASSET_NAMES = {
     "PENALTY": "event_penalty",
     "MISSPENALTY": "event_missed_penalty",
     "OWNGOAL": "event_own_goal",
-    "ASSIST": "event_assist",
     "YELLOWCARD": "event_yellow_card",
     "SECONDYELLOWCARD": "event_second_yellow_card",
     "REDCARD": "event_red_card",
@@ -39,7 +40,6 @@ _WEBSITE_ASSET_NAMES = (
     "start",
     "end",
     "legend_goal",
-    "legend_assist",
     "legend_penalty",
     "legend_missed_penalty",
     "legend_own_goal",
@@ -90,6 +90,11 @@ def _validate_settings(settings: object) -> ReportSettings:
 
 def _report_team_name(detail: GameDetail, side: str) -> str:
     game = detail.game
+    team_id = game.home_team_id if side == "home" else game.away_team_id
+    catalog = load_static_outcome_catalog()
+    static_names = catalog.team_names_by_id.get(team_id)
+    if static_names:
+        return catalog.teams_by_name[static_names[0]].institution_name
     if side == "home":
         return (
             game.home_team_report_name
@@ -372,6 +377,28 @@ async function renderReport() {
         });
     }
 
+    function wrapTitle(text, maxWidth) {
+        const context = $canvas[0].getContext("2d");
+        const lines = [];
+        context.save();
+        context.font = "bold 50px simHei";
+        for (const paragraph of String(text).split(/\r?\n/)) {
+            let line = "";
+            for (const character of Array.from(paragraph)) {
+                const candidate = line + character;
+                if (line && context.measureText(candidate).width > maxWidth) {
+                    lines.push(line.trimEnd());
+                    line = character.trimStart();
+                } else {
+                    line = candidate;
+                }
+            }
+            lines.push(line.trimEnd());
+        }
+        context.restore();
+        return lines.join("\n");
+    }
+
     function drawtitle(color, layername, text, x, y) {
         $canvas.drawText({
             layer: true,
@@ -379,7 +406,7 @@ async function renderReport() {
             fontFamily: "simHei",
             fontStyle: "bold",
             name: layername,
-            text: text,
+            text: wrapTitle(text, 600),
             x: x,
             y: y,
             fontSize: 50,
@@ -851,38 +878,61 @@ async function renderReport() {
         curY += 20;
     }
 
-    for (const [name, x] of [
-        ["legend_goal", 550],
-        ["legend_assist", 650],
-        ["legend_penalty", 750],
-        ["legend_missed_penalty", 850],
-        ["legend_own_goal", 1000]
-    ]) {
-        $canvas.drawImage({
-            layer: true,
-            name: name,
-            source: images[name],
-            x: x,
-            y: curY
-        });
-    }
-    for (const [name, text, x] of [
-        ["goaltext", "进球", 595],
-        ["assisttext", "助攻", 695],
-        ["pgtext", "点球", 795],
-        ["pmtext", "点球罚失", 920],
-        ["ogtext", "乌龙球", 1055]
-    ]) {
+    const legendItems = [
+        ["legend_goal", "goaltext", "进球"],
+        ["legend_penalty", "pgtext", "点球"],
+        ["legend_missed_penalty", "pmtext", "点球罚失"],
+        ["legend_own_goal", "ogtext", "乌龙球"]
+    ];
+    const measuredLegendItems = [];
+    for (const [imageName, textName, text] of legendItems) {
+        const measureName = "measure_" + textName;
         $canvas.drawText({
             layer: true,
-            name: name,
-            fillStyle: "#111",
-            x: x,
-            y: curY,
+            name: measureName,
+            fillStyle: "rgba(0, 0, 0, 0)",
+            x: 0,
+            y: 0,
             fontSize: 24,
             fontFamily: "simHei",
             text: text
         });
+        const textWidth = $canvas.measureText(measureName).width;
+        const imageWidth = images[imageName].naturalWidth;
+        measuredLegendItems.push({
+            imageName: imageName,
+            textName: textName,
+            text: text,
+            imageWidth: imageWidth,
+            imageHeight: images[imageName].naturalHeight,
+            textWidth: textWidth,
+            width: imageWidth + 8 + textWidth
+        });
+    }
+    const legendWidth = measuredLegendItems.reduce(
+        (width, item) => width + item.width,
+        20 * (measuredLegendItems.length - 1)
+    );
+    let legendX = 800 - legendWidth / 2;
+    for (const item of measuredLegendItems) {
+        $canvas.drawImage({
+            layer: true,
+            name: item.imageName,
+            source: images[item.imageName],
+            x: legendX + item.imageWidth / 2,
+            y: curY
+        });
+        $canvas.drawText({
+            layer: true,
+            name: item.textName,
+            fillStyle: "#111",
+            x: legendX + item.imageWidth + 8 + item.textWidth / 2,
+            y: curY,
+            fontSize: 24,
+            fontFamily: "simHei",
+            text: item.text
+        });
+        legendX += item.width + 20;
     }
 
     if (report.include_qr_code) {
@@ -1191,6 +1241,7 @@ class THUFootballReportService:
             # statistics. Keep this behind the explicit refresh_stats opt-in.
             await self._client.refresh_game_stats(game_id)
         detail = await self._client.get_game_info(game_id)
+        detail, warnings = validate_game_events(detail)
         qr_code = (
             await self._client.get_game_page_code(game_id)
             if settings.include_qr_code
@@ -1251,4 +1302,5 @@ class THUFootballReportService:
             width=width,
             height=height,
             refreshed_stats=refresh_stats,
+            warnings=warnings,
         )

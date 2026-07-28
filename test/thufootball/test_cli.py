@@ -16,7 +16,15 @@ _SRC_ROOT = _PROJECT_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from thufootball import ConfigurationError, GameQuery, GameStatus, ReportSettings
+from thufootball import (
+    ConfigurationError,
+    GameEventIssue,
+    GameQuery,
+    GameReportFile,
+    GameStatus,
+    ReportSettings,
+    ReportValidationError,
+)
 from thufootball.cli import _jsonable
 from thufootball.cli import main as cli_main
 
@@ -335,6 +343,79 @@ class ThufootballCliTests(unittest.TestCase):
         self.assertFalse(payload["retryable"])
         self.assertNotIn("openid", payload)
         self.assertNotIn("session_key", payload)
+
+    def test_report_warnings_are_written_to_stderr_and_success_json(
+        self,
+    ) -> None:
+        warning = GameEventIssue(
+            severity="warning",
+            code="lineup_under_capacity",
+            message="home has too few starters",
+            side="home",
+        )
+
+        async def warned_result(_args: object) -> GameReportFile:
+            return GameReportFile(
+                game_id=4245,
+                path="report.png",
+                media_type="image/png",
+                width=1600,
+                height=1646,
+                refreshed_stats=False,
+                warnings=(warning,),
+            )
+
+        stdout = StringIO()
+        stderr = StringIO()
+        with patch("thufootball.cli._run", warned_result):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cli_main(["report", "4245"])
+
+        self.assertEqual(status, 0)
+        success = json.loads(stdout.getvalue())
+        warning_payload = json.loads(stderr.getvalue())
+        self.assertEqual(success["warnings"][0]["code"], warning.code)
+        self.assertEqual(warning_payload["status"], "warning")
+        self.assertEqual(warning_payload["game_id"], 4245)
+        self.assertEqual(
+            warning_payload["warnings"][0]["code"],
+            warning.code,
+        )
+
+    def test_report_validation_error_serialises_all_issues(self) -> None:
+        issues = (
+            GameEventIssue(
+                severity="warning",
+                code="lineup_under_capacity",
+                message="home has too few starters",
+                side="home",
+            ),
+            GameEventIssue(
+                severity="error",
+                code="duplicate_start",
+                message="duplicate starter",
+                event_ids=(1, 2),
+                player_id=10,
+                side="home",
+            ),
+        )
+
+        async def failed_result(_args: object) -> object:
+            raise ReportValidationError(issues, game_id=4245)
+
+        stderr = StringIO()
+        with patch("thufootball.cli._run", failed_result):
+            with redirect_stderr(stderr):
+                status = cli_main(["report", "4245"])
+
+        self.assertEqual(status, 2)
+        payload = json.loads(stderr.getvalue())
+        self.assertEqual(payload["error"], "ReportValidationError")
+        self.assertEqual(payload["stage"], "event_validation")
+        self.assertEqual(
+            [issue["code"] for issue in payload["issues"]],
+            ["lineup_under_capacity", "duplicate_start"],
+        )
 
 
 if __name__ == "__main__":

@@ -13,8 +13,8 @@ from enum import Enum
 from typing import Any
 
 from .client import THUFootballClient
-from .errors import THUFootballError
-from .models import GameQuery, ReportSettings
+from .errors import ReportValidationError, THUFootballError
+from .models import GameQuery, GameReportFile, ReportSettings
 from .queries import THUFootballQueryService
 from .reports import THUFootballReportService
 
@@ -235,7 +235,7 @@ async def _run(args: argparse.Namespace) -> object:
 
 
 def _error_payload(error: THUFootballError) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "status": "error",
         "error": type(error).__name__,
         "stage": error.stage,
@@ -244,6 +244,9 @@ def _error_payload(error: THUFootballError) -> dict[str, object]:
         "game_id": error.game_id,
         "message": str(error),
     }
+    if isinstance(error, ReportValidationError):
+        payload["issues"] = _jsonable(error.issues)
+    return payload
 
 
 def _write_json(value: object, *, stream, indent: int | None = None) -> None:
@@ -261,6 +264,17 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(_error_payload(exc), stream=sys.stderr)
         return 2
 
+    if isinstance(result, GameReportFile) and result.warnings:
+        _write_json(
+            _jsonable(
+                {
+                    "status": "warning",
+                    "game_id": result.game_id,
+                    "warnings": result.warnings,
+                }
+            ),
+            stream=sys.stderr,
+        )
     _write_json(_jsonable(result), stream=sys.stdout, indent=2)
     return 0
 

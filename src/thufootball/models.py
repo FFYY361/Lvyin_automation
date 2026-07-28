@@ -198,10 +198,23 @@ class RefereeAssignment:
 
 
 @dataclass(frozen=True)
+class GameEventIssue:
+    severity: Literal["warning", "error"]
+    code: str
+    message: str
+    event_ids: tuple[int, ...] = ()
+    player_id: int | None = None
+    side: Literal["home", "away"] | None = None
+    minute: int | None = None
+    stoppage_minute: int | None = None
+
+
+@dataclass(frozen=True)
 class GameDetail:
     game: GameSummary
     events: tuple[GameEvent, ...]
     referees: tuple[RefereeAssignment, ...]
+    players_per_side: int
 
 
 @dataclass(frozen=True)
@@ -220,3 +233,4 @@ class GameReportFile:
     width: int
     height: int
     refreshed_stats: bool
+    warnings: tuple[GameEventIssue, ...] = ()

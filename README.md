@@ -162,6 +162,9 @@ thufootball report 4245 --output tmp\game-4245.png
 `report` 默认只读取 `GetGameInfo`，按需取得 `GetGamePageCode`，随后由本机
 Edge/Chromium 按官网 jCanvas 代码和原始图标渲染 1600px 宽 PNG（可用
 `THUFOOTBALL_CHROMIUM` 指定浏览器路径）。
+取得比赛详情后会先校验首发、换人、在场状态、纪律处罚和点球大战事件；
+校验 error 会在请求二维码、图标或启动浏览器前聚合返回，warning 则继续
+生成并同时写入 stderr 和成功 JSON。助攻事件不参与校验或绘制。
 
 网页端生成战报时，会在读取比赛信息和绘制战报前调用
 `OnReStatGameData`。官网没有公开这个端点的说明或服务端源码，目前无法确认
