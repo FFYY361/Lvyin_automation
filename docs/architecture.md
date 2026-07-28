@@ -9,7 +9,8 @@ thufootball       weather          preview                    wechat_official
 赛事领域查询       高德短期天气      本地 data + template 渲染  Article + 微信草稿 API
 ```
 
-- `thufootball` 和 `weather` 是互不依赖的只读外部查询适配器。
+- `thufootball` 和 `weather` 是互不依赖的外部适配器；前者的查询层只读，
+  战报服务可在显式下载命令中重新统计一场比赛。
 - `preview` 只依赖 `wechat_official` 导出的 `Article`、`CoverFile` 和 `CoverMediaId` 数据契约，不读取凭据、不访问网络。
 - `wechat_official` 不导入 `preview`，只接收完整文章。
 
@@ -33,7 +34,8 @@ article/
 
 ## 安全边界
 
-- THUFootball 能力只读。
+- THUFootball 查询能力只读；战报下载默认也不重新统计。只有显式 opt-in
+  才调用会修改服务端比赛统计的 `OnReStatGameData`。
 - 天气能力只读取高德短期预报，API Key 不写入日志或产物。
 - Preview 完全本地运行。
 - 微信能力止于草稿箱，不包含发布或群发。

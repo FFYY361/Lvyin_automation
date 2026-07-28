@@ -79,6 +79,9 @@ class GameSummary:
     field_name: str | None
     home_team_brief_name: str | None = None
     away_team_brief_name: str | None = None
+    tournament_report_name: str | None = None
+    home_team_report_name: str | None = None
+    away_team_report_name: str | None = None
 
     @property
     def decided_by_penalty_shootout(self) -> bool:
@@ -181,6 +184,10 @@ class GameEvent:
     kit_number: int
     during_penalty_shootout: bool
     valid: bool
+    note: str | None = None
+    tactical_position_id: int | None = None
+    sequence: int | None = None
+    time_ordering: int | None = None
 
 
 @dataclass(frozen=True)
@@ -195,3 +202,21 @@ class GameDetail:
     game: GameSummary
     events: tuple[GameEvent, ...]
     referees: tuple[RefereeAssignment, ...]
+
+
+@dataclass(frozen=True)
+class ReportSettings:
+    include_qr_code: bool = True
+    include_time: bool = True
+    include_field: bool = True
+    include_lineup: bool = True
+
+
+@dataclass(frozen=True)
+class GameReportFile:
+    game_id: int
+    path: str
+    media_type: str
+    width: int
+    height: int
+    refreshed_stats: bool

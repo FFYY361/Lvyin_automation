@@ -14,8 +14,9 @@ from typing import Any
 
 from .client import THUFootballClient
 from .errors import THUFootballError
-from .models import GameQuery
+from .models import GameQuery, ReportSettings
 from .queries import THUFootballQueryService
+from .reports import THUFootballReportService
 
 
 def _positive_id(value: str) -> int:
@@ -41,7 +42,7 @@ def _date(value: str) -> date:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="thufootball",
-        description="Run the public THUFootball domain queries",
+        description="Query THUFootball data and download match reports",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -113,6 +114,49 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="include valid scheduled and in-progress games",
     )
+
+    report = commands.add_parser(
+        "report",
+        help="render and download one match report as PNG",
+    )
+    report.add_argument("game_id", type=_positive_id)
+    report.add_argument(
+        "--output",
+        help="PNG file or destination directory (default: current directory)",
+    )
+    report.add_argument(
+        "--no-qrcode",
+        action="store_true",
+        help="omit the mini-program QR code",
+    )
+    report.add_argument(
+        "--no-time",
+        action="store_true",
+        help="omit the kickoff time",
+    )
+    report.add_argument(
+        "--no-field",
+        action="store_true",
+        help="omit the field name",
+    )
+    report.add_argument(
+        "--no-lineup",
+        action="store_true",
+        help="omit the starting lineups",
+    )
+    report.add_argument(
+        "--refresh-stats",
+        action="store_true",
+        help=(
+            "call the state-changing OnReStatGameData endpoint before rendering "
+            "(unsafe; may modify server-side match statistics)"
+        ),
+    )
+    report.add_argument(
+        "--override",
+        action="store_true",
+        help="replace an existing output file",
+    )
     return parser
 
 
@@ -172,6 +216,20 @@ async def _run(args: argparse.Namespace) -> object:
                 args.team_b_id,
                 tournament_ids,
                 include_unfinished=args.include_unfinished,
+            )
+        if args.command == "report":
+            reports = THUFootballReportService(client)
+            return await reports.download_game_report(
+                args.game_id,
+                args.output,
+                settings=ReportSettings(
+                    include_qr_code=not args.no_qrcode,
+                    include_time=not args.no_time,
+                    include_field=not args.no_field,
+                    include_lineup=not args.no_lineup,
+                ),
+                refresh_stats=args.refresh_stats,
+                overwrite=args.override,
             )
     raise AssertionError("unreachable command")
 

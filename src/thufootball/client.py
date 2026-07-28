@@ -1,4 +1,4 @@
-"""Asynchronous, read-only THUFootball HTTP client."""
+"""Asynchronous THUFootball HTTP client."""
 
 from __future__ import annotations
 
@@ -37,6 +37,25 @@ from .policy import BLACKLISTED_TOURNAMENT_IDS
 DEFAULT_BASE_URL = "https://api.thufootball.tech"
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=15.0, pool=5.0)
 _RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
+_REPORT_ASSET_ENDPOINTS = {
+    "start": "img_static/START.png",
+    "end": "img_static/END.png",
+    "legend_goal": "img_static/icon_goal.png",
+    "legend_assist": "img_static/icon_a.png",
+    "legend_penalty": "img_static/icon_point.png",
+    "legend_missed_penalty": "img_static/icon_point_1.png",
+    "legend_own_goal": "img_static/icon_w.png",
+    "event_on": "img_static/SI.png",
+    "event_off": "img_static/SO.png",
+    "event_goal": "img_static/G.png",
+    "event_penalty": "img_static/PG.png",
+    "event_missed_penalty": "img_static/PM.png",
+    "event_own_goal": "img_static/OG.png",
+    "event_assist": "img_static/AS.png",
+    "event_yellow_card": "img_static/YC.png",
+    "event_second_yellow_card": "img_static/Y2C.png",
+    "event_red_card": "img_static/RC.png",
+}
 _AUTH_HINTS = (
     "openid",
     "session",
@@ -77,7 +96,7 @@ def _query_date(value: object, name: str) -> date | None:
 
 
 class THUFootballClient:
-    """Map the verified THUFootball read APIs to safe domain objects."""
+    """Map verified THUFootball APIs to safe domain objects and assets."""
 
     def __init__(
         self,
@@ -262,6 +281,67 @@ class THUFootballClient:
 
         raise AssertionError("unreachable retry state")
 
+    async def _request_bytes(
+        self,
+        endpoint: str,
+        parameters: Mapping[str, str | int],
+        *,
+        authentication_required: bool,
+        content_type_prefix: str,
+    ) -> bytes:
+        if self._closed:
+            raise ConfigurationError("client is closed", stage="configuration")
+        request_parameters: dict[str, str | int] = (
+            self._auth_parameters(required=True) if authentication_required else {}
+        )
+        request_parameters.update(parameters)
+        url = f"{self._base_url}/{endpoint}"
+
+        for attempt in range(2):
+            try:
+                response = await self._http_client.get(
+                    url,
+                    params=request_parameters,
+                    headers={"Accept": f"{content_type_prefix}*"},
+                    timeout=self._timeout,
+                )
+            except httpx.TimeoutException as exc:
+                if attempt == 0:
+                    continue
+                raise Timeout(
+                    f"{endpoint} timed out",
+                    stage="http",
+                    retryable=True,
+                ) from exc
+            except httpx.RequestError as exc:
+                if attempt == 0:
+                    continue
+                raise InvalidResponse(
+                    f"{endpoint} request failed",
+                    stage="http",
+                    retryable=True,
+                ) from exc
+
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt == 0:
+                continue
+            if not 200 <= response.status_code < 300:
+                self._raise_http_error(endpoint, response.status_code)
+
+            content_type = response.headers.get("content-type", "").casefold()
+            if not content_type.startswith(content_type_prefix.casefold()):
+                raise InvalidResponse(
+                    f"{endpoint} returned an unexpected content type",
+                    stage="response",
+                )
+            if not response.content:
+                raise InvalidResponse(
+                    f"{endpoint} returned an empty response",
+                    stage="response",
+                )
+            return response.content
+
+        raise AssertionError("unreachable retry state")
+
     async def get_user_info(self) -> UserProbe:
         payload = await self._request_json(
             "GetUserInfo", {}, authentication_required=True
@@ -331,3 +411,41 @@ class THUFootballClient:
         if detail.game.tournament_id in BLACKLISTED_TOURNAMENT_IDS:
             raise _query_error(f"game_id {game_id} belongs to a blacklisted tournament")
         return detail
+
+    async def refresh_game_stats(self, game_id: int) -> None:
+        """Recalculate and modify server-side statistics for one game.
+
+        Warning:
+            ``OnReStatGameData`` is not a read-only API despite using HTTP GET.
+            Callers must require an explicit opt-in before invoking this method.
+        """
+
+        game_id = _positive_id(game_id, "game_id")
+        await self._request_json(
+            "OnReStatGameData",
+            {"game_id": game_id},
+            authentication_required=True,
+        )
+
+    async def get_game_page_code(self, game_id: int) -> bytes:
+        """Return the public mini-program QR image embedded in a game report."""
+
+        game_id = _positive_id(game_id, "game_id")
+        return await self._request_bytes(
+            "GetGamePageCode",
+            {"game_id": game_id},
+            authentication_required=False,
+            content_type_prefix="image/",
+        )
+
+    async def get_report_asset(self, name: str) -> bytes:
+        """Return one public static image used by the website report canvas."""
+
+        if not isinstance(name, str) or name not in _REPORT_ASSET_ENDPOINTS:
+            raise _query_error("name must identify a supported report asset")
+        return await self._request_bytes(
+            _REPORT_ASSET_ENDPOINTS[name],
+            {},
+            authentication_required=False,
+            content_type_prefix="image/",
+        )

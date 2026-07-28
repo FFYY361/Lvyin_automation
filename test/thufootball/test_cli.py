@@ -16,7 +16,7 @@ _SRC_ROOT = _PROJECT_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from thufootball import ConfigurationError, GameQuery, GameStatus
+from thufootball import ConfigurationError, GameQuery, GameStatus, ReportSettings
 from thufootball.cli import _jsonable
 from thufootball.cli import main as cli_main
 
@@ -98,17 +98,50 @@ class _FakeQueryService:
         return _Result("head-to-head")
 
 
+class _FakeReportService:
+    calls: list[tuple[object, ...]] = []
+
+    def __init__(self, client: _FakeClient) -> None:
+        self.client = client
+
+    async def download_game_report(
+        self,
+        game_id: int,
+        output: str | None,
+        *,
+        settings: ReportSettings,
+        refresh_stats: bool,
+        overwrite: bool,
+    ) -> _Result:
+        self.calls.append(
+            (
+                "download_game_report",
+                game_id,
+                output,
+                settings,
+                refresh_stats,
+                overwrite,
+            )
+        )
+        return _Result("report")
+
+
 class ThufootballCliTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeClient.init_calls = []
         _FakeQueryService.calls = []
+        _FakeReportService.calls = []
 
     def _run(self, argv: list[str]) -> tuple[int, object]:
         stdout = StringIO()
         with patch("thufootball.cli.THUFootballClient", _FakeClient):
             with patch("thufootball.cli.THUFootballQueryService", _FakeQueryService):
-                with redirect_stdout(stdout):
-                    status = cli_main(argv)
+                with patch(
+                    "thufootball.cli.THUFootballReportService",
+                    _FakeReportService,
+                ):
+                    with redirect_stdout(stdout):
+                        status = cli_main(argv)
         return status, json.loads(stdout.getvalue())
 
     def test_dispatches_all_public_domain_queries(self) -> None:
@@ -183,16 +216,67 @@ class ThufootballCliTests(unittest.TestCase):
                 {"command": "head-to-head"},
                 {},
             ),
+            (
+                [
+                    "report",
+                    "4245",
+                    "--output",
+                    "report.png",
+                    "--no-qrcode",
+                    "--no-time",
+                    "--no-field",
+                    "--no-lineup",
+                    "--override",
+                ],
+                (
+                    "download_game_report",
+                    4245,
+                    "report.png",
+                    ReportSettings(
+                        include_qr_code=False,
+                        include_time=False,
+                        include_field=False,
+                        include_lineup=False,
+                    ),
+                    False,
+                    True,
+                ),
+                {"command": "report"},
+                {},
+            ),
+            (
+                [
+                    "report",
+                    "4245",
+                    "--refresh-stats",
+                ],
+                (
+                    "download_game_report",
+                    4245,
+                    None,
+                    ReportSettings(),
+                    True,
+                    False,
+                ),
+                {"command": "report"},
+                {},
+            ),
         )
 
         for argv, expected_call, expected_output, expected_client_options in cases:
             with self.subTest(argv=argv):
                 _FakeClient.init_calls = []
                 _FakeQueryService.calls = []
+                _FakeReportService.calls = []
                 status, output = self._run(argv)
                 self.assertEqual(status, 0)
                 self.assertEqual(_FakeClient.init_calls, [expected_client_options])
-                self.assertEqual(_FakeQueryService.calls, [expected_call])
+                if argv[0] == "report":
+                    self.assertEqual(_FakeQueryService.calls, [])
+                    self.assertEqual(_FakeReportService.calls, [expected_call])
+                else:
+                    self.assertEqual(_FakeQueryService.calls, [expected_call])
+                    self.assertEqual(_FakeReportService.calls, [])
                 self.assertEqual(output, expected_output)
 
     def test_serialises_nested_public_values(self) -> None:
@@ -222,6 +306,7 @@ class ThufootballCliTests(unittest.TestCase):
             ["team-matches", "0"],
             ["team-outcomes", "not-an-id"],
             ["head-to-head", "48", "not-an-id"],
+            ["report", "0"],
         )
 
         for argv in invalid_commands:

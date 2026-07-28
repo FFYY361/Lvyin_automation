@@ -196,6 +196,7 @@ def map_game_summary(
     *,
     now: datetime | None = None,
     tournament_name: str | None = None,
+    tournament_report_name: str | None = None,
 ) -> GameSummary:
     item = _mapping(raw, path)
     game_id = _positive_int(item.get("id"), f"{path}.id")
@@ -203,8 +204,10 @@ def map_game_summary(
     if tournament_name is None:
         tournament = _mapping(item.get("tourn_info"), f"{path}.tourn_info")
         resolved_tournament_name = _display_name(tournament, f"{path}.tourn_info.name")
+        resolved_tournament_report_name = _optional_text(tournament.get("report_name"))
     else:
         resolved_tournament_name = _text(tournament_name, f"{path}.tournament_name")
+        resolved_tournament_report_name = _optional_text(tournament_report_name)
     kickoff_utc = _kickoff(item.get("time"), f"{path}.time")
     kickoff_local = kickoff_utc.astimezone(SHANGHAI)
     record_active = _bool(item.get("status"), f"{path}.status")
@@ -287,6 +290,9 @@ def map_game_summary(
         field_name=field_name,
         home_team_brief_name=_optional_text(home_team.get("brief_name")),
         away_team_brief_name=_optional_text(away_team.get("brief_name")),
+        tournament_report_name=resolved_tournament_report_name,
+        home_team_report_name=_optional_text(home_team.get("report_name")),
+        away_team_report_name=_optional_text(away_team.get("report_name")),
     )
     _validate_finished_game(game, path)
     return game
@@ -358,6 +364,7 @@ def _map_snapshot_games(
     raw_games: Sequence[object],
     *,
     tournament_name: str,
+    tournament_report_name: str | None,
 ) -> tuple[GameSummary, ...]:
     now = datetime.now(UTC)
     return tuple(
@@ -366,6 +373,7 @@ def _map_snapshot_games(
             f"games[{index}]",
             now=now,
             tournament_name=tournament_name,
+            tournament_report_name=tournament_report_name,
         )
         for index, raw in enumerate(raw_games)
     )
@@ -397,6 +405,7 @@ def map_tournament_snapshot(
     games = _map_snapshot_games(
         raw_games,
         tournament_name=tournament_name,
+        tournament_report_name=_optional_text(tournament.get("report_name")),
     )
     if any(game.tournament_id != tournament_id for game in games):
         raise _schema("games[].tourn_id")
@@ -446,6 +455,12 @@ def _map_event(raw: object, path: str, *, game_id: int) -> GameEvent:
             f"{path}.during_penalty_shootout",
         ),
         valid=_bool(item.get("valid"), f"{path}.valid"),
+        note=_optional_text(item.get("note")),
+        tactical_position_id=_optional_int(
+            item.get("position_id"), f"{path}.position_id"
+        ),
+        sequence=_optional_int(item.get("sequence"), f"{path}.sequence"),
+        time_ordering=_optional_int(item.get("time_ordering"), f"{path}.time_ordering"),
     )
 
 
@@ -472,6 +487,7 @@ def map_game_detail(
         payload.get("game_info"),
         "game_info",
         tournament_name=tournament_name,
+        tournament_report_name=_optional_text(tournament.get("report_name")),
     )
     if game.tournament_id != tournament_id:
         raise _schema("tourn_info.id")

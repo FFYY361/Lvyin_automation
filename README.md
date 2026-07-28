@@ -4,12 +4,12 @@
 
 `thufootball_automation` 用于搭建所有与 THUFootball 相关的自动化任务。仓库以可组合的中层 Service 为核心，目前提供：
 
-- `thufootball`：只读查询比赛、球队赛果、赛事成绩和交锋记录。
+- `thufootball`：查询比赛、球队赛果、赛事成绩和交锋记录，并下载单场战报。
 - `weather`：按行政区划代码和日期查询高德短期天气预报。
 - `preview`：把结构化前瞻 data 渲染为前瞻文章。
 - `wechat_official`：接收完整文章，处理图片和封面，并创建微信公众号草稿。
 
-THUFootball 侧不会修改服务端数据；`preview` 完全在本地运行；微信公众号侧只创建草稿，不自动发布或群发。模块边界见 [项目架构](docs/architecture.md)。
+除非为 `thufootball report` 显式开启 `--refresh-stats`，本仓库的现有命令不会触发已知安全风险；`preview` 完全在本地运行；微信公众号侧只创建草稿，不自动发布或群发。模块边界见 [项目架构](docs/architecture.md)。
 
 当前提供一个联动管线:
 
@@ -147,6 +147,7 @@ python scripts/auto_preview.py --dates 2026-04-11 --competitions female --stage 
 | `thufootball team-matches TEAM_ID` | 查询一支球队的比赛并换算为该队视角 |
 | `thufootball team-outcomes TEAM_ID` | 读取球队在支持赛事中的最终成绩 |
 | `thufootball head-to-head A B` | 汇总两队交锋和胜平负 |
+| `thufootball report GAME_ID` | 生成并下载指定比赛的 PNG 战报 |
 
 命令成功时输出格式化 JSON：
 
@@ -155,7 +156,21 @@ thufootball games --match-date 2026-07-15 --tournament-id 122
 thufootball team-matches 48 --tournament-id 122
 thufootball team-outcomes 48 --tournament-id 128 --tournament-id 122
 thufootball head-to-head 48 163 --tournament-id 122 --tournament-id 123
+thufootball report 4245 --output tmp\game-4245.png
 ```
+
+`report` 默认只读取 `GetGameInfo`，按需取得 `GetGamePageCode`，随后由本机
+Edge/Chromium 按官网 jCanvas 代码和原始图标渲染 1600px 宽 PNG（可用
+`THUFOOTBALL_CHROMIUM` 指定浏览器路径）。
+
+网页端生成战报时，会在读取比赛信息和绘制战报前调用
+`OnReStatGameData`。官网没有公开这个端点的说明或服务端源码，目前无法确认
+它的具体用途及影响范围。出于安全考虑，本地实现默认跳过该调用；只有用户
+明确传入 `--refresh-stats` 时才会执行。
+
+`report` 还可用 `--no-qrcode`、`--no-time`、`--no-field`、
+`--no-lineup` 控制内容，已有文件需显式传 `--override` 才会覆盖。完整分析见
+[单场战报下载实现](docs/thufootball/thufootball_report_download.md)。
 
 需要访问受保护数据时，在仓库根目录 `.env` 中配置：
 
