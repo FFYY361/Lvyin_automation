@@ -1240,6 +1240,27 @@ Python 函数使用参数名 `game_type`，发送 HTTP 请求时会映射为接�
 - 签名：`GET OnCreateTournament(openid: str, session_key: str, data: str) -> JSON`
 - 状态：暂不处理非只读API
 
+### `OnReStatGameData`
+
+- URL：`https://api.thufootball.tech/OnReStatGameData`
+- 签名：`GET OnReStatGameData(openid: str, session_key: str, game_id: int) -> JSON`
+- 状态：已验证（2026-07-28）
+- 调用方：比赛管理页“绘制战报”
+- 说明：重新计算指定比赛的服务端统计数据，属于有副作用操作。战报下载
+  默认不调用；只有显式传入 `--refresh-stats` / `refresh_stats=True` 才会
+  调用，查询服务始终不调用。
+
+成功响应至少包含 `success: true`。网页在成功后继续调用 `GetGameInfo`，
+并在浏览器 Canvas 上绘制战报。
+
+### `GetGamePageCode`
+
+- URL：`https://api.thufootball.tech/GetGamePageCode`
+- 签名：`GET GetGamePageCode(game_id: int) -> image/*`
+- 状态：已验证（2026-07-28）
+- 说明：返回战报可选的小程序码图片。该请求不需要 OpenID 或
+  `session_key`，本地客户端保持匿名调用。
+
 ### `OnEditTournInfo`
 
 - URL：`https://api.thufootball.tech/OnEditTournInfo`

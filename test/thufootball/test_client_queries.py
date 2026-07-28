@@ -213,10 +213,13 @@ def _tournament_payload(
 
 
 def _detail_payload() -> dict[str, Any]:
+    game_info = _game(1001, 10, started=True, ended=True)
+    game_info["home_tourn_team_info"]["report_name"] = "主队战报名"
+    game_info["away_tourn_team_info"]["report_name"] = "客队战报名"
     payload = {
         "success": True,
         "info": "ok",
-        "game_info": _game(1001, 10, started=True, ended=True),
+        "game_info": game_info,
         "tourn_info": {"id": 10, "name": "详情赛事", "brief_name": "详情赛"},
         "events": [
             {
@@ -233,6 +236,10 @@ def _detail_payload() -> dict[str, Any]:
                 "kitnum": 9,
                 "during_penalty_shootout": 0,
                 "valid": True,
+                "note": "队长",
+                "position_id": 8,
+                "sequence": 99,
+                "time_ordering": 2,
             }
         ],
         "referees": [
@@ -250,6 +257,7 @@ def _detail_payload() -> dict[str, Any]:
         "officials": [{"session_key": "secret-session"}],
         "game_time_metadata": {"status": "START"},
     }
+    payload["tourn_info"]["report_name"] = "赛事战报名"
     return payload
 
 
@@ -549,6 +557,11 @@ class MapperTests(unittest.TestCase):
         rendered = repr(asdict(detail))
 
         self.assertEqual(detail.events[0].side, "home")
+        self.assertEqual(detail.game.tournament_report_name, "赛事战报名")
+        self.assertEqual(detail.game.home_team_report_name, "主队战报名")
+        self.assertEqual(detail.game.away_team_report_name, "客队战报名")
+        self.assertEqual(detail.events[0].note, "队长")
+        self.assertEqual(detail.events[0].tactical_position_id, 8)
         self.assertEqual(detail.game.tournament_name, "详情赛事")
         self.assertEqual(detail.referees[0].referee_id, 601)
         self.assertNotIn("18800000000", rendered)

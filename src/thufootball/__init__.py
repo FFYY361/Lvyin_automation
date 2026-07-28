@@ -1,4 +1,4 @@
-"""Safe, read-only THUFootball integration package."""
+"""Safe THUFootball integration package."""
 
 from .client import THUFootballClient
 from .errors import (
@@ -18,12 +18,14 @@ from .models import (
     GameDetail,
     GameEvent,
     GameQuery,
+    GameReportFile,
     GameStatus,
     GameSummary,
     HeadToHeadHistory,
     HeadToHeadSummary,
     MatchResult,
     RefereeAssignment,
+    ReportSettings,
     TeamGameResult,
     TeamTournamentOutcome,
     TournamentRef,
@@ -33,6 +35,7 @@ from .models import (
 )
 from .policy import BLACKLISTED_TOURNAMENT_IDS
 from .queries import THUFootballQueryService
+from .reports import THUFootballReportService, render_game_report
 
 __all__ = [
     "AuthenticationError",
@@ -43,6 +46,7 @@ __all__ = [
     "GameDetail",
     "GameEvent",
     "GameQuery",
+    "GameReportFile",
     "GameStatus",
     "GameSummary",
     "HeadToHeadHistory",
@@ -53,10 +57,12 @@ __all__ = [
     "QueryValidationError",
     "RateLimited",
     "RefereeAssignment",
+    "ReportSettings",
     "SchemaError",
     "THUFootballClient",
     "THUFootballError",
     "THUFootballQueryService",
+    "THUFootballReportService",
     "TeamGameResult",
     "TeamTournamentOutcome",
     "Timeout",
@@ -64,4 +70,5 @@ __all__ = [
     "TournamentSnapshot",
     "TournamentTeam",
     "UserProbe",
+    "render_game_report",
 ]
