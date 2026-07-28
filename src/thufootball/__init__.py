@@ -37,7 +37,11 @@ from .models import (
 )
 from .policy import BLACKLISTED_TOURNAMENT_IDS
 from .queries import THUFootballQueryService
-from .reports import THUFootballReportService, render_game_report
+from .reports import (
+    THUFootballReportService,
+    render_game_report,
+    resolve_report_team_name,
+)
 
 __all__ = [
     "AuthenticationError",
@@ -75,4 +79,5 @@ __all__ = [
     "TournamentTeam",
     "UserProbe",
     "render_game_report",
+    "resolve_report_team_name",
 ]

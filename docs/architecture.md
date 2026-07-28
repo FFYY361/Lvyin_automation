@@ -30,12 +30,19 @@ article/
 └── cover.png
 ```
 
-当前已在 `src/auto_preview` 实现第一条高层自动化：接收一组日期和赛事，按日期 × 赛事展开组合，依次完成全部 data、全部 article，并将最多八篇文章一次创建为微信公众号多图文草稿。data 屏障完成后，它按不同日期调用天气 Service，并固定使用海淀区 `110108`。`auto_preview` 只编排公开中层 Service；每个组合的任务状态、`no_games` 负结果缓存、严格断点复用和运行记录保存在仓库根目录的 `runs/auto_preview`，不反向改变四个中层模块的依赖边界。
+当前有两条高层自动化：
+
+- `src/auto_preview` 接收一组日期和赛事，按日期 × 赛事展开组合，依次完成全部 data、全部 article，并将最多八篇文章一次创建为微信公众号多图文草稿。data 屏障完成后，它按不同日期调用天气 Service，并固定使用海淀区 `110108`。每个组合的状态、`no_games` 负结果缓存、严格断点复用和运行记录保存在 `runs/auto_preview`。
+- `src/auto_report` 复用 `auto_preview` 的当前赛事 ID 配置，执行全部 report、全部 article、一次 publish。每个赛事在同一批次只查询一次比赛列表；完赛场次交给 `THUFootballReportService`，弃赛转换为正文文字，未完赛跳过。每个组合的清单、PNG 哈希、skipped 负结果、Article 和共享草稿回执保存在 `runs/auto_report`。
+
+两条管线都只编排公开中层 Service，不反向改变四个中层模块的依赖边界。它们的 publish 都是批次屏障：任何前序组合失败时，不会提前创建部分草稿。
 
 ## 安全边界
 
 - THUFootball 查询能力只读；战报下载默认也不重新统计。只有显式 opt-in
   才调用会修改服务端比赛统计的 `OnReStatGameData`。
+- `auto_report` 不暴露刷新统计选项，包含 `--override` 的所有路径都固定使用
+  `refresh_stats=False`。
 - 天气能力只读取高德短期预报，API Key 不写入日志或产物。
 - Preview 完全本地运行。
 - 微信能力止于草稿箱，不包含发布或群发。
