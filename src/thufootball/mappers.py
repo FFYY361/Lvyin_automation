@@ -505,4 +505,8 @@ def map_game_detail(
             _map_referee(raw, f"referees[{index}]", game_id=game.game_id)
             for index, raw in enumerate(raw_referees)
         ),
+        players_per_side=_positive_int(
+            tournament.get("players"),
+            "tourn_info.players",
+        ),
     )

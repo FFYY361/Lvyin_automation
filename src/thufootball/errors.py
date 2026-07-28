@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import MappingProxyType
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
+
+if TYPE_CHECKING:
+    from .models import GameEventIssue
 
 
 class THUFootballError(RuntimeError):
@@ -74,6 +78,26 @@ class SchemaError(THUFootballError):
 
 class DataConflict(THUFootballError):
     """Raised when duplicate identifiers carry conflicting core data."""
+
+
+class ReportValidationError(THUFootballError):
+    """Raised when report events contain one or more blocking issues."""
+
+    def __init__(
+        self,
+        issues: Sequence[GameEventIssue],
+        *,
+        game_id: int,
+    ) -> None:
+        self.issues = tuple(issues)
+        error_count = sum(
+            issue.severity == "error" for issue in self.issues
+        )
+        super().__init__(
+            f"report event validation failed with {error_count} error(s)",
+            stage="event_validation",
+            game_id=game_id,
+        )
 
 
 class BatchQueryError(THUFootballError):

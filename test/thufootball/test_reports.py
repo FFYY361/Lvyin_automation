@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -23,6 +24,7 @@ from thufootball import (
     GameStatus,
     GameSummary,
     ReportSettings,
+    ReportValidationError,
     THUFootballClient,
     THUFootballReportService,
 )
@@ -41,7 +43,6 @@ _REPORT_ASSET_NAMES = (
     "start",
     "end",
     "legend_goal",
-    "legend_assist",
     "legend_penalty",
     "legend_missed_penalty",
     "legend_own_goal",
@@ -51,7 +52,6 @@ _REPORT_ASSET_NAMES = (
     "event_penalty",
     "event_missed_penalty",
     "event_own_goal",
-    "event_assist",
     "event_yellow_card",
     "event_second_yellow_card",
     "event_red_card",
@@ -205,19 +205,21 @@ def _detail() -> GameDetail:
         game=_summary(),
         events=tuple(events),
         referees=(),
+        players_per_side=11,
     )
 
 
 class _FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, detail: GameDetail | None = None) -> None:
         self.calls: list[tuple[str, int]] = []
+        self.detail = detail
 
     async def refresh_game_stats(self, game_id: int) -> None:
         self.calls.append(("refresh", game_id))
 
     async def get_game_info(self, game_id: int) -> GameDetail:
         self.calls.append(("detail", game_id))
-        return _detail()
+        return self.detail or _detail()
 
     async def get_game_page_code(self, game_id: int) -> bytes:
         self.calls.append(("qrcode", game_id))
@@ -229,6 +231,57 @@ class _FakeClient:
 
 
 class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
+    @patch("thufootball.reports._render_html_to_png")
+    async def test_validation_errors_stop_before_any_report_resources(
+        self,
+        renderer: object,
+    ) -> None:
+        detail = _detail()
+        duplicate_start = replace(detail.events[0], event_id=999)
+        client = _FakeClient(
+            replace(detail, events=(*detail.events, duplicate_start))
+        )
+        service = THUFootballReportService(client)  # type: ignore[arg-type]
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ReportValidationError) as caught:
+                await service.download_game_report(4245, Path(directory))
+
+        self.assertIn(
+            "duplicate_start",
+            [issue.code for issue in caught.exception.issues],
+        )
+        self.assertEqual(client.calls, [("detail", 4245)])
+        renderer.assert_not_called()  # type: ignore[attr-defined]
+
+    @patch(
+        "thufootball.reports._render_html_to_png",
+        return_value=_REPORT_PNG,
+    )
+    async def test_validation_warnings_are_returned_and_do_not_block(
+        self,
+        _renderer: object,
+    ) -> None:
+        detail = _detail()
+        invalid_event = replace(
+            detail.events[-1],
+            event_id=999,
+            valid=False,
+        )
+        client = _FakeClient(
+            replace(detail, events=(*detail.events, invalid_event))
+        )
+        service = THUFootballReportService(client)  # type: ignore[arg-type]
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = await service.download_game_report(4245, Path(directory))
+
+        self.assertEqual(
+            [warning.code for warning in result.warnings],
+            ["invalid_event_ignored"],
+        )
+        self.assertIn(("qrcode", 4245), client.calls)
+
     @patch(
         "thufootball.reports._render_html_to_png",
         return_value=_REPORT_PNG,
@@ -255,6 +308,7 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.path, str(output.resolve()))
             self.assertEqual(result.media_type, "image/png")
             self.assertFalse(result.refreshed_stats)
+            self.assertEqual(result.warnings, ())
             self.assertEqual((result.width, result.height), (1600, 1646))
             with Image.open(output) as rendered:
                 self.assertEqual(rendered.format, "PNG")
@@ -324,6 +378,38 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReportRendererTests(unittest.TestCase):
+    def test_prefers_static_full_team_names_and_keeps_api_fallbacks(
+        self,
+    ) -> None:
+        assets = {name: _TINY_PNG for name in _REPORT_ASSET_NAMES}
+        detail = _detail()
+
+        payload = _report_payload(
+            detail,
+            settings=ReportSettings(),
+            assets=assets,
+            qr_code=_TINY_PNG,
+        )
+        self.assertEqual(payload["home_name"], "车辆与运载学院")
+        self.assertEqual(payload["away_name"], "未央书院")
+
+        unknown_teams = replace(
+            detail,
+            game=replace(
+                detail.game,
+                home_team_id=999_998,
+                away_team_id=999_999,
+            ),
+        )
+        fallback_payload = _report_payload(
+            unknown_teams,
+            settings=ReportSettings(),
+            assets=assets,
+            qr_code=_TINY_PNG,
+        )
+        self.assertEqual(fallback_payload["home_name"], "汽车")
+        self.assertEqual(fallback_payload["away_name"], "未央")
+
     def test_uses_website_fonts_and_original_event_assets(self) -> None:
         assets = {name: _TINY_PNG for name in _REPORT_ASSET_NAMES}
         payload = _report_payload(
@@ -347,6 +433,15 @@ class ReportRendererTests(unittest.TestCase):
         self.assertIn('fontStyle: "bold"', html)
         self.assertIn('fontFamily: "WenQuanYi Micro Hei"', html)
         self.assertIn("source: images[event.asset]", html)
+        self.assertNotIn("legend_assist", html)
+        self.assertNotIn("event_assist", html)
+        self.assertNotIn("助攻", html)
+        self.assertIn("imageWidth + 8 + textWidth", html)
+        self.assertIn("20 * (measuredLegendItems.length - 1)", html)
+        self.assertIn("let legendX = 800 - legendWidth / 2", html)
+        self.assertIn("function wrapTitle(text, maxWidth)", html)
+        self.assertIn('context.font = "bold 50px simHei"', html)
+        self.assertIn("text: wrapTitle(text, 600)", html)
 
 
 class ReportClientTests(unittest.IsolatedAsyncioTestCase):

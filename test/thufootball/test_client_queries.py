@@ -220,7 +220,12 @@ def _detail_payload() -> dict[str, Any]:
         "success": True,
         "info": "ok",
         "game_info": game_info,
-        "tourn_info": {"id": 10, "name": "详情赛事", "brief_name": "详情赛"},
+        "tourn_info": {
+            "id": 10,
+            "name": "详情赛事",
+            "brief_name": "详情赛",
+            "players": 11,
+        },
         "events": [
             {
                 "id": 9001,
@@ -564,6 +569,7 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(detail.events[0].tactical_position_id, 8)
         self.assertEqual(detail.game.tournament_name, "详情赛事")
         self.assertEqual(detail.referees[0].referee_id, 601)
+        self.assertEqual(detail.players_per_side, 11)
         self.assertNotIn("18800000000", rendered)
         self.assertNotIn("sensitive-comment", rendered)
         self.assertNotIn("secret-session", rendered)
