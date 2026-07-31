@@ -147,7 +147,7 @@ _DIAGNOSIS_RULES: tuple[
             "本地产物校验错误",
             (
                 "根据失败阶段检查 source.json、previews/*.md、weather.json、config.json 和 run.json 的结构与字段路径。",
-                "article/ 属于可重建产物，会在 source、正文 Markdown、当前天气、人员配置、模板或封面变化时自动覆盖；--override 仅用于重新查询并覆盖 source 和正文 Markdown。",
+                "article/ 属于可重建产物，会在 source、正文 Markdown、当前天气、人员配置、模板或封面变化时自动覆盖；--override 会重新查询 source，并保留已填写的标题、作者和正文。",
             ),
         ),
     ),

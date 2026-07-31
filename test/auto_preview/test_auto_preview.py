@@ -812,7 +812,7 @@ class LoggingTests(unittest.TestCase):
         self.assertNotIn("sensitive low-level message", network)
         self.assertIn("类别：本地产物校验错误", local)
         self.assertIn(
-            "--override 仅用于重新查询并覆盖 source 和正文 Markdown",
+            "--override 会重新查询 source，并保留已填写的标题、作者和正文",
             local,
         )
         self.assertNotIn("secret-session", redacted)
@@ -2158,7 +2158,9 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((inputs / "weather.json").read_bytes(), weather_before)
             self.assertEqual((inputs / "config.json").read_bytes(), config_before)
 
-    async def test_override_rebuilds_markdown_and_removes_stale_files(self) -> None:
+    async def test_override_preserves_manual_fields_and_removes_stale_files(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
             runner, queries, _ = self._pipeline(root)
@@ -2166,10 +2168,17 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             first = await runner.run(request)
             raw = json.loads(first.source_path.read_text(encoding="utf-8"))
             preview = next(iter(raw["previews"].values()))
+            raw["headline"] = "人工填写的标题"
+            preview["authors"] = ["作者甲", "作者乙"]
+            first.source_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
             markdown_path = first.run_directory / preview["article_file"]
             markdown_path.write_text("人工正文。\n", encoding="utf-8")
             stale_path = first.run_directory / "previews" / "旧比赛.md"
             stale_path.write_text("旧内容。\n", encoding="utf-8")
+            queries.targets = [replace(queries.target, field_name="西操场")]
 
             rebuilt = await runner.run(
                 PipelineRequest(
@@ -2180,10 +2189,307 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-            self.assertIn("【待填写", markdown_path.read_text(encoding="utf-8"))
+            rebuilt_source = json.loads(
+                rebuilt.source_path.read_text(encoding="utf-8")
+            )
+            rebuilt_preview = next(iter(rebuilt_source["previews"].values()))
+            self.assertEqual(rebuilt_source["headline"], "人工填写的标题")
+            self.assertEqual(rebuilt_preview["authors"], ["作者甲", "作者乙"])
+            self.assertEqual(rebuilt_source["matches"][0]["venue"], "西操场")
+            self.assertEqual(
+                markdown_path.read_text(encoding="utf-8"),
+                "人工正文。\n",
+            )
             self.assertFalse(stale_path.exists())
             self.assertEqual(rebuilt.status, "ok")
             self.assertEqual(len(queries.game_queries), 2)
+
+    async def test_override_archives_removed_game_and_restores_it_by_game_id(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
+            first = await runner.run(request)
+            raw = json.loads(first.source_path.read_text(encoding="utf-8"))
+            raw["headline"] = "不会归档的标题"
+            preview = next(iter(raw["previews"].values()))
+            preview["authors"] = ["归档作者"]
+            first.source_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            markdown_path = first.run_directory / preview["article_file"]
+            markdown_path.write_text("归档正文。\n", encoding="utf-8")
+
+            queries.targets = []
+            removed = await runner.run(
+                PipelineRequest(
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.DATA,
+                    override=True,
+                )
+            )
+
+            archive_path = (
+                root
+                / "runs"
+                / "auto_preview"
+                / "archive"
+                / "matches"
+                / "500.json"
+            )
+            archived = json.loads(archive_path.read_text(encoding="utf-8"))
+            self.assertEqual(removed.status, "skipped")
+            self.assertFalse(first.source_path.exists())
+            self.assertEqual(archived["authors"], ["归档作者"])
+            self.assertEqual(archived["body"], "归档正文。\n")
+            self.assertFalse(
+                (root / "runs" / "auto_preview" / "archive" / "titles").exists()
+            )
+
+            queries.targets = [queries.target]
+            restored = await runner.run(
+                PipelineRequest(
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.DATA,
+                    override=True,
+                )
+            )
+
+            restored_source = json.loads(
+                restored.source_path.read_text(encoding="utf-8")
+            )
+            restored_preview = next(iter(restored_source["previews"].values()))
+            restored_markdown = (
+                restored.run_directory / restored_preview["article_file"]
+            )
+            self.assertTrue(restored_source["headline"].startswith("【待填写"))
+            self.assertEqual(restored_preview["authors"], ["归档作者"])
+            self.assertEqual(
+                restored_markdown.read_text(encoding="utf-8"),
+                "归档正文。\n",
+            )
+            self.assertFalse(archive_path.exists())
+
+    async def test_override_new_game_keeps_placeholders_and_archives_old_game(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
+            first = await runner.run(request)
+            raw = json.loads(first.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            preview["authors"] = ["旧比赛作者"]
+            first.source_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            markdown_path = first.run_directory / preview["article_file"]
+            markdown_path.write_text("旧比赛正文。\n", encoding="utf-8")
+            queries.targets = [replace(queries.target, game_id=501)]
+
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.DATA,
+                    override=True,
+                )
+            )
+
+            rebuilt_source = json.loads(
+                rebuilt.source_path.read_text(encoding="utf-8")
+            )
+            rebuilt_preview = next(iter(rebuilt_source["previews"].values()))
+            archive_path = (
+                root
+                / "runs"
+                / "auto_preview"
+                / "archive"
+                / "matches"
+                / "500.json"
+            )
+            self.assertEqual(rebuilt_source["matches"][0]["game_id"], 501)
+            self.assertTrue(rebuilt_preview["authors"][0].startswith("【待填写"))
+            self.assertIn("【待填写", markdown_path.read_text(encoding="utf-8"))
+            self.assertTrue(archive_path.exists())
+
+    async def test_override_current_manual_content_wins_over_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            runner, _, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
+            first = await runner.run(request)
+            raw = json.loads(first.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            preview["authors"] = ["当前作者"]
+            first.source_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            markdown_path = first.run_directory / preview["article_file"]
+            markdown_path.write_text("当前正文。\n", encoding="utf-8")
+            archive_path = (
+                root
+                / "runs"
+                / "auto_preview"
+                / "archive"
+                / "matches"
+                / "500.json"
+            )
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "game_id": 500,
+                        "authors": ["归档作者"],
+                        "body": "归档正文。\n",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            rebuilt = await runner.run(
+                PipelineRequest(
+                    request.preview_dates,
+                    request.competitions,
+                    stage=Stage.DATA,
+                    override=True,
+                )
+            )
+
+            rebuilt_source = json.loads(
+                rebuilt.source_path.read_text(encoding="utf-8")
+            )
+            rebuilt_preview = next(iter(rebuilt_source["previews"].values()))
+            self.assertEqual(rebuilt_preview["authors"], ["当前作者"])
+            self.assertEqual(
+                markdown_path.read_text(encoding="utf-8"),
+                "当前正文。\n",
+            )
+            self.assertFalse(archive_path.exists())
+
+    async def test_regular_run_does_not_read_related_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
+            first = await runner.run(request)
+            source_before = first.source_path.read_bytes()
+            archive_path = (
+                root
+                / "runs"
+                / "auto_preview"
+                / "archive"
+                / "matches"
+                / "500.json"
+            )
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_text("{broken", encoding="utf-8")
+
+            reused = await runner.run(request)
+
+            self.assertEqual(reused.status, "ok")
+            self.assertEqual(first.source_path.read_bytes(), source_before)
+            self.assertEqual(archive_path.read_text(encoding="utf-8"), "{broken")
+            self.assertEqual(len(queries.game_queries), 1)
+
+            with self.assertRaises(ArtifactValidationError):
+                await runner.run(
+                    PipelineRequest(
+                        request.preview_dates,
+                        request.competitions,
+                        stage=Stage.DATA,
+                        override=True,
+                    )
+                )
+            self.assertEqual(first.source_path.read_bytes(), source_before)
+
+    async def test_override_invalid_existing_source_fails_before_query_or_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            runner, queries, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
+            first = await runner.run(request)
+            raw = json.loads(first.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            markdown_path = first.run_directory / preview["article_file"]
+            markdown_before = markdown_path.read_bytes()
+            first.source_path.write_text("{broken", encoding="utf-8")
+
+            with self.assertRaises(ArtifactValidationError):
+                await runner.run(
+                    PipelineRequest(
+                        request.preview_dates,
+                        request.competitions,
+                        stage=Stage.DATA,
+                        override=True,
+                    )
+                )
+
+            self.assertEqual(first.source_path.read_text(encoding="utf-8"), "{broken")
+            self.assertEqual(markdown_path.read_bytes(), markdown_before)
+            self.assertEqual(len(queries.game_queries), 1)
+
+    async def test_override_keeps_write_ahead_archive_when_source_write_fails(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            runner, _, _ = self._pipeline(root)
+            request = self._request(Stage.DATA)
+            first = await runner.run(request)
+            raw = json.loads(first.source_path.read_text(encoding="utf-8"))
+            preview = next(iter(raw["previews"].values()))
+            preview["authors"] = ["受保护作者"]
+            first.source_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            markdown_path = first.run_directory / preview["article_file"]
+            markdown_path.write_text("受保护正文。\n", encoding="utf-8")
+            source_before = first.source_path.read_bytes()
+
+            with (
+                patch(
+                    "auto_preview.service.write_source",
+                    side_effect=OSError("simulated write failure"),
+                ),
+                self.assertRaises(OSError),
+            ):
+                await runner.run(
+                    PipelineRequest(
+                        request.preview_dates,
+                        request.competitions,
+                        stage=Stage.DATA,
+                        override=True,
+                    )
+                )
+
+            archive_path = (
+                root
+                / "runs"
+                / "auto_preview"
+                / "archive"
+                / "matches"
+                / "500.json"
+            )
+            archived = json.loads(archive_path.read_text(encoding="utf-8"))
+            self.assertEqual(first.source_path.read_bytes(), source_before)
+            self.assertEqual(archived["authors"], ["受保护作者"])
+            self.assertEqual(archived["body"], "受保护正文。\n")
 
     async def test_run_state_version_is_strict(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
