@@ -120,7 +120,7 @@ data 阶段完成后，可以人工填写或修改 `weather.json`、`config.json
 python scripts/auto_preview.py --dates 2026-04-11 --competitions female --stage article
 ```
 
-`--override` 会对每个组合从 data 开始无条件重做到目标阶段，可能覆盖人工编辑过的 `source.json` 和正文 Markdown，并强制重新查询请求日期的海淀天气。天气仅在查询成功后覆盖，失败时原记录不变；全局 `config.json` 始终不会被覆盖。`publish` 只接收 1–8 篇实际生成的文章，超过八篇会在调用微信前失败，不自动拆分。
+`--override` 会对每个组合从 data 开始无条件重做到目标阶段，并强制重新查询请求日期的海淀天气。重建时会保留当前组合中已填写的标题，并按比赛 `game_id` 保留每场已填写的作者和正文；纯 `【待填写...】` 占位内容不视为人工内容。重查后消失比赛的作者和正文会写入 `runs/auto_preview/archive/matches/{game_id}.json`，以后仅在再次使用 `--override` 且同一 `game_id` 重新出现时恢复，成功写回活动 source 和正文后删除归档。标题不归档，普通调用也不会读取或修改归档。天气仅在查询成功后覆盖，失败时原记录不变；全局 `config.json` 始终不会被覆盖。`publish` 只接收 1–8 篇实际生成的文章，超过八篇会在调用微信前失败，不自动拆分。
 
 `publish` 只创建公众号草稿，不正式发布或群发。多篇文章按规范顺序成为头条和次条，整个草稿只有一个 `media_id`，同一回执会写入所有参与组合的 `draft.json`。data 和 article 的批次起止、总耗时及“源数据 / 正文 Markdown”路径清单只输出一次；需要人工填充的 warning 在 data 完成后统一输出，天气 warning 按日期去重。批次级和各组合内部产生的详细日志均只输出到终端，不再在 `run` 目录生成 `auto_preview.log`。
 

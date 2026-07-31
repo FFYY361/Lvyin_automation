@@ -55,7 +55,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--override",
         action="store_true",
-        help="rebuild every stage from data through the requested target",
+        help=(
+            "requery and rebuild through the requested target while preserving "
+            "manual preview content"
+        ),
     )
     cover = parser.add_mutually_exclusive_group()
     cover.add_argument("--cover", help="local JPEG, PNG, or GIF cover")

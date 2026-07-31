@@ -23,6 +23,7 @@ from preview import (
     PreviewWeather,
     load_preview_bundle,
     parse_preview_document,
+    preview_article_file,
 )
 from thufootball import THUFootballQueryService
 from weather import (
@@ -47,6 +48,12 @@ from .inputs import (
     write_weather_for_date,
 )
 from .logging_utils import configure_logging
+from .manual import (
+    ManualContentArchive,
+    ManualContentSnapshot,
+    ManualMatchContent,
+    snapshot_manual_content,
+)
 from .models import (
     CombinationResult,
     Competition,
@@ -108,6 +115,9 @@ class _CombinationContext:
     logger: logging.Logger
     document: PreviewSourceDocument | None = None
     article: Article | None = field(default=None)
+    manual_content: ManualContentSnapshot = field(
+        default_factory=lambda: ManualContentSnapshot(None, {})
+    )
 
 
 def _quoted_command(arguments: list[str]) -> str:
@@ -539,6 +549,77 @@ class AutoPreviewPipeline:
         for path, content in expected_paths.items():
             write_text(path, content)
 
+    def _manual_archive(self) -> ManualContentArchive:
+        return ManualContentArchive(
+            self._project_root
+            / "runs"
+            / "auto_preview"
+            / "archive"
+            / "matches"
+        )
+
+    @staticmethod
+    def _validate_manual_source_identity(
+        document: PreviewSourceDocument,
+        request: _CombinationRequest,
+        config: CompetitionConfig,
+    ) -> None:
+        if document.preview_date != request.preview_date:
+            raise ArtifactValidationError(
+                "已有 source.json 的 preview_date 与本次请求不一致",
+                stage="data-validation",
+            )
+        if (
+            document.column.competition_full_name != config.full_name
+            or document.column.competition_short_name != config.short_name
+        ):
+            raise ArtifactValidationError(
+                "已有 source.json 的赛事配置与本次请求不一致",
+                stage="data-validation",
+            )
+
+    def _load_override_manual_content(
+        self,
+        context: _CombinationContext,
+    ) -> None:
+        if not context.paths.source.exists():
+            return
+        document = self._load_existing_source(context.paths.source)
+        self._validate_manual_source_identity(
+            document,
+            context.request,
+            context.config,
+        )
+        context.manual_content = snapshot_manual_content(
+            document,
+            context.paths.directory,
+        )
+
+    def _archive_current_manual_content(
+        self,
+        context: _CombinationContext,
+    ) -> dict[int, ManualMatchContent]:
+        archive = self._manual_archive()
+        return {
+            game_id: archive.store(game_id, content)
+            for game_id, content in context.manual_content.matches.items()
+        }
+
+    def _manual_content_for_queried_games(
+        self,
+        context: _CombinationContext,
+        queried_source: PreviewSourceData,
+    ) -> dict[int, ManualMatchContent]:
+        archive = self._manual_archive()
+        retained = self._archive_current_manual_content(context)
+        for match in queried_source.matches:
+            if match.game_id in retained:
+                continue
+            archived = archive.load(match.game_id)
+            if archived is not None:
+                retained[match.game_id] = archived
+        return retained
+
     @staticmethod
     def _query_scope_sha256(config: CompetitionConfig) -> str:
         return sha256_bytes(
@@ -563,6 +644,9 @@ class AutoPreviewPipeline:
         paths = context.paths
         state = context.state
         query_scope_sha256 = self._query_scope_sha256(context.config)
+        if request.override:
+            self._load_override_manual_content(context)
+            return False
         if paths.source.exists() and not request.override:
             source_state = self._source_state(state, request)
             if source_state["status"] != "ready":
@@ -606,6 +690,13 @@ class AutoPreviewPipeline:
         state = context.state
         query_scope_sha256 = self._query_scope_sha256(context.config)
         paths.directory.mkdir(parents=True, exist_ok=True)
+        if request.override:
+            archived = self._archive_current_manual_content(context)
+            if archived:
+                context.logger.info(
+                    "↳ 已按 game_id 归档 %s 场人工作者或正文",
+                    len(archived),
+                )
         self._remove_stale_data_artifacts(paths)
         state["source"] = {
             "status": "no_games",
@@ -630,8 +721,39 @@ class AutoPreviewPipeline:
         state = context.state
         query_scope_sha256 = self._query_scope_sha256(context.config)
         paths.directory.mkdir(parents=True, exist_ok=True)
+        manual_by_game: dict[int, ManualMatchContent] = {}
+        if request.override:
+            manual_by_game = self._manual_content_for_queried_games(
+                context,
+                queried_source,
+            )
+            queried_source = replace(
+                queried_source,
+                headline=context.manual_content.headline or queried_source.headline,
+                matches=tuple(
+                    replace(
+                        match,
+                        writers=(
+                            manual_by_game[match.game_id].authors
+                            if match.game_id in manual_by_game
+                            and manual_by_game[match.game_id].authors is not None
+                            else match.writers
+                        ),
+                    )
+                    for match in queried_source.matches
+                ),
+            )
         source_payload = source_to_dict(queried_source)
         article_files = preview_article_files(queried_source)
+        if request.override:
+            for match in queried_source.matches:
+                content = manual_by_game.get(match.game_id)
+                if content is not None and content.body is not None:
+                    reference = preview_article_file(
+                        match.home.short_name,
+                        match.away.short_name,
+                    )
+                    article_files[reference] = content.body
         self._write_preview_articles(
             paths.directory,
             article_files,
@@ -656,6 +778,25 @@ class AutoPreviewPipeline:
         }
         state["article"] = None
         write_json(paths.state, state)
+        if request.override:
+            archive = self._manual_archive()
+            restored = 0
+            queried_game_ids = {match.game_id for match in queried_source.matches}
+            for match in queried_source.matches:
+                if match.game_id in manual_by_game:
+                    restored += 1
+                archive.delete(match.game_id)
+            removed = set(context.manual_content.matches) - queried_game_ids
+            if removed:
+                context.logger.info(
+                    "↳ 已按 game_id 归档 %s 场消失比赛的人工内容",
+                    len(removed),
+                )
+            if restored:
+                context.logger.info(
+                    "↳ 已保留或恢复 %s 场人工作者或正文",
+                    restored,
+                )
 
     async def _query_data_group(
         self,
@@ -987,7 +1128,8 @@ class AutoPreviewPipeline:
         batch_logger = ordered_all_contexts[0].logger
         if request.override:
             batch_logger.warning(
-                "⚠ --override 已启用：将从 data 重做到 %s",
+                "⚠ --override 已启用：将从 data 重做到 %s；"
+                "保留已填写的标题、作者和正文，消失比赛按 game_id 归档",
                 request.stage.value,
             )
 
