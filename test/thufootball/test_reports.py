@@ -378,6 +378,26 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReportRendererTests(unittest.TestCase):
+    def test_zero_pads_day_in_report_date(self) -> None:
+        assets = {name: _TINY_PNG for name in _REPORT_ASSET_NAMES}
+        detail = _detail()
+        detail = replace(
+            detail,
+            game=replace(
+                detail.game,
+                kickoff_local=datetime(2026, 4, 4, 15, 0, tzinfo=UTC),
+            ),
+        )
+
+        payload = _report_payload(
+            detail,
+            settings=ReportSettings(),
+            assets=assets,
+            qr_code=_TINY_PNG,
+        )
+
+        self.assertTrue(payload["metadata"].startswith("2026-04-04 15:00"))
+
     def test_prefers_static_full_team_names_and_keeps_api_fallbacks(
         self,
     ) -> None:

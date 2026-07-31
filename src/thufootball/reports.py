@@ -138,11 +138,11 @@ def _report_subtitle(detail: GameDetail) -> str:
 
 
 def _report_time(detail: GameDetail) -> str:
-    """Mirror game.js, including its intentionally unpadded day-of-month."""
+    """Format the report kickoff time with a zero-padded calendar date."""
 
     local = detail.game.kickoff_local
     return (
-        f"{local.year}-{local.month:02d}-{local.day} "
+        f"{local.year}-{local.month:02d}-{local.day:02d} "
         f"{local.hour:02d}:{local.minute:02d}"
     )
 
