@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from wechat_official import Article, CoverFile, CoverMediaId
+from wechat_official import publication_fingerprint as _publication_fingerprint
 
 from .errors import ArtifactValidationError
 from .models import Competition
@@ -168,14 +169,7 @@ def load_run_state(
 
 
 def publication_fingerprint(articles: list[dict[str, str]]) -> str:
-    return sha256_bytes(
-        json.dumps(
-            articles,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
+    return _publication_fingerprint(articles)
 
 
 def _valid_publication_article(value: object) -> bool:
