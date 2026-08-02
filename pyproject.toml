@@ -18,6 +18,11 @@ dev = [
   "pytest>=9,<10",
   "ruff>=0.15,<1",
 ]
+website = [
+  "alembic>=1.14,<2",
+  "psycopg[binary]>=3.2,<4",
+  "SQLAlchemy>=2.0,<3",
+]
 
 [project.scripts]
 thufootball = "thufootball.cli:main"

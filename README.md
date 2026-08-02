@@ -18,21 +18,16 @@
 
 ## 环境
 
-项目要求 Python 3.11 或更高版本。推荐使用标准库 `venv`：
+项目要求 Python 3.11 或更高版本，统一使用名为 `lvyin` 的 Conda 环境：
 
 ```powershell
-python -m venv .venv --prompt lvyin
-.\.venv\Scripts\Activate.ps1
+conda create -n lvyin python=3.11 pip -y
+conda activate lvyin
 python -m pip install -e .
 ```
 
-也可以使用 Conda：
-
-```powershell
-conda create -n thufootball_automation python=3.11
-conda activate thufootball_automation
-python -m pip install -e .
-```
+以后进入项目开发前先执行 `conda activate lvyin`，不要同时为本项目引入另一套
+Python 环境管理工具。
 
 安装后检查四个入口：
 
@@ -44,6 +39,10 @@ wechat-official --help
 ```
 
 需要在 `./.env` 中配置 THUFootball、天气和公众号所需凭证，格式见 `./.env.example`，注意保密。
+
+网站开发按独立阶段推进。PostgreSQL、SQLAlchemy 和 Alembic 的 Stage 1
+环境准备与排错步骤见
+[网站 PostgreSQL 开发环境](docs/website/postgresql_development.md)。
 
 ## 自动化前瞻 auto_preview
 
