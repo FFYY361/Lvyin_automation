@@ -1,0 +1,23 @@
+name: lvyin-website
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${WEBSITE_POSTGRES_DB:?set WEBSITE_POSTGRES_DB in .env}
+      POSTGRES_USER: ${WEBSITE_POSTGRES_USER:?set WEBSITE_POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${WEBSITE_POSTGRES_PASSWORD:?set WEBSITE_POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

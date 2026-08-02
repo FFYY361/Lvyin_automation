@@ -40,7 +40,7 @@
 ### 工作内容
 
 1. 安装和验证开发环境：
-   - Python 3.11 及项目 `.venv`；
+   - Python 3.11 及名为 `lvyin` 的 Conda 环境；
    - Docker Desktop；
    - PostgreSQL 官方镜像；
    - DBeaver 或同类图形化数据库客户端；
