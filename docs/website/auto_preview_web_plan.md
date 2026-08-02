@@ -19,6 +19,8 @@
   封面和快照产物。
 - 网站不与 `runs/auto_preview` 双向同步。现有 CLI 暂时继续使用 `runs/`，
   网站稳定后再评估是否迁移 CLI。
+- 网站代码使用与 `src/` 平级的 `backend/` 和 `frontend/`；`src/` 保留可复用
+  业务能力，依赖方向固定为 frontend → backend → src。
 - 尽可能复用现有查询、数据构建、文章渲染、微信草稿和指纹能力，不复制业务
   算法。
 - 应用只供协会内部使用，实现密码哈希、登录会话、基本权限、输入校验和秘密
@@ -103,7 +105,20 @@
 
 - `users`：先支持单一管理员登录，Stage 4 扩展 writer 权限。
 - `preview_batches`：一个“日期 × 赛事”对应一篇文章。
-- `preview_matches`：一场比赛对应现在的一份 `previews/*.md` 正文。
+- `preview_matches`：一条记录表示一张完整的比赛前瞻卡片，以 THUFootball
+  `game_id` 作为全局业务主键；`batch_id` 只表示比赛当前属于哪篇“日期 ×
+  赛事”文章，不参与唯一标识。记录同时包含：
+  - 赛事 ID 与赛事名称、阶段、开球时间和地点；
+  - 主客队 ID、名称、简称、往届成绩和本届历史赛果；
+  - 双方近年交手记录；
+  - 当前是否 active、归档时间和归档原因；
+  - 人工署名、正文、正文版本以及 Stage 4 增加的认领人。
+
+  需要筛选、排序和关联的 `game_id`、`batch_id`、开球时间、赛事和 active 状态
+  使用独立数据库列；主客队完整信息、往届成绩、本届赛果和交手记录按照
+  `PreviewMatch` 契约保存为严格校验的 JSONB 快照。渲染时由这些自动数据与人工
+  署名、正文共同组装当前 `PreviewMatch`，不再读取 `source.json` 或
+  `previews/*.md`。
 - `weather`：按日期保存天气，自动查询后可由管理员修改。
 - `editorial_defaults`：编辑、责编、审核的全局默认值。
 - `article_versions`：不可变文章输入快照和 HTML 产物。
@@ -112,8 +127,16 @@
 封面文件保存在 `var/artifacts/covers/`，文件名、类型、SHA-256 和相对存储 key
 直接保存在 `preview_batches`，第一版不建立素材管理表。
 
-人工内容与自动数据分开保存。重新查询按 `game_id` 更新比赛数据，不覆盖管理员
-填写的署名和正文；消失比赛标记为 inactive，不直接删除人工内容。
+人工内容与自动数据分开保存。`preview_matches.game_id` 全局唯一，正常业务不物理
+删除比赛记录。重新查询统一按 `game_id` upsert：
+
+- 比赛仍存在时更新自动数据并设为 active，保留署名、正文、正文版本和认领人；
+- 比赛消失时设为 inactive，记录归档时间和原因，不删除人工内容；
+- 比赛改期或移动到另一篇文章时更新 `batch_id`，保留全部人工内容；
+- 同一 `game_id` 以后重新出现时恢复原记录，不新建第二条比赛数据。
+
+已经生成的 `article_versions` 保存不可变输入快照，因此比赛改期和当前
+`batch_id` 变化不会修改历史文章或已经创建的微信草稿。
 
 ### 同步执行
 
@@ -167,7 +190,7 @@ Stage 4 直接复用状态和接口语义。
 - `PUT /api/weather/{date}`：修改完整天气五项。
 - `POST /api/preview-batches/{id}/cover`：上传并校验本篇封面，保存文件元数据
   和相对 storage key。
-- `PATCH /api/preview-matches/{id}`：管理员修改署名和纯文本正文。
+- `PATCH /api/preview-matches/{game_id}`：管理员修改署名和纯文本正文。
 
 正文保持当前语义：空行分段，不解析 Markdown。保存使用 `expected_version`，
 旧版本返回 HTTP 409。
@@ -282,10 +305,10 @@ Stage 2 的全部操作。
 - `PATCH /api/admin/users/{id}`：修改显示名称或启用状态。
 - `POST /api/admin/users/{id}/reset-password`：重置密码。
 - `GET /api/tasks/open`：writer 查看可领取比赛。
-- `POST /api/preview-matches/{id}/claim`：原子认领。
-- `POST /api/preview-matches/{id}/release`：用户释放自己的认领。
-- `POST /api/preview-matches/{id}/assign`：管理员转交或释放。
-- `PATCH /api/preview-matches/{id}/body`：认领人或管理员保存正文。
+- `POST /api/preview-matches/{game_id}/claim`：原子认领。
+- `POST /api/preview-matches/{game_id}/release`：用户释放自己的认领。
+- `POST /api/preview-matches/{game_id}/assign`：管理员转交或释放。
+- `PATCH /api/preview-matches/{game_id}/body`：认领人或管理员保存正文。
 - `GET /api/me/tasks`：查看本人已认领任务。
 
 ### 认领规则
