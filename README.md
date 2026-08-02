@@ -42,7 +42,9 @@ wechat-official --help
 
 网站开发按独立阶段推进。PostgreSQL、SQLAlchemy 和 Alembic 的 Stage 1
 环境准备与排错步骤见
-[网站 PostgreSQL 开发环境](docs/website/postgresql_development.md)。
+[网站 PostgreSQL 开发环境](docs/website/stages/postgresql_development.md)。
+Stage 2 管理员后端的启动、`/docs` 闭环和 smoke test 见
+[管理员后端操作手册](docs/website/stages/admin_backend.md)。
 
 ## 自动化前瞻 auto_preview
 
@@ -104,7 +106,10 @@ result = await pipeline.run(request)
 
 data 阶段按“主队简称vs客队简称”自动生成 Markdown 文件名，不含空格，例如 `集电vs美院.md`。直接在文件中粘贴多段正文即可；一个或多个空白行表示分段，内容始终按纯文本转义，不解析 Markdown HTML。
 
-不传封面时自动使用随包提供的“默认封面 / 发布前请替换”图片；也可以显式指定本地封面或已有公众号永久素材：
+不传封面时，若配置了 `WEBSITE_DEFAULT_COVER_MEDIA_ID`，会直接复用该公众号
+永久素材，不再重复上传默认图片；未配置时仍使用随包提供的
+`default_cover.png`，保持 CLI 向后兼容。也可以显式指定本地封面或已有公众号
+永久素材：
 
 ```powershell
 python scripts/auto_preview.py --dates 2026-04-11 --competitions female --cover path/to/cover.png

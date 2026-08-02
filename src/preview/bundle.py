@@ -156,7 +156,12 @@ class _PreviewEntry:
     article_file: str
 
 
-def _markdown_paragraphs(content: str, path: str) -> tuple[str, ...]:
+def parse_preview_paragraphs(
+    content: str,
+    path: str = "$.body",
+) -> tuple[str, ...]:
+    """Split plain preview copy on blank lines without parsing Markdown."""
+
     normalised = (
         content.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     )
@@ -195,7 +200,7 @@ def _read_article_file(
         raise _error(path, f"Markdown 文件必须使用 UTF-8 编码：{reference}") from exc
     except OSError as exc:
         raise _error(path, f"无法读取 Markdown 文件：{reference}") from exc
-    return _markdown_paragraphs(content, path)
+    return parse_preview_paragraphs(content, path)
 
 
 def _parse_preview_entries(value: object) -> dict[str, _PreviewEntry]:

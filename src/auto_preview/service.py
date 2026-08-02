@@ -41,6 +41,7 @@ from wechat_official import (
 )
 
 from .config import CompetitionConfig, competition_config
+from .cover import default_cover
 from .errors import ArtifactValidationError, NoGamesForDate, PipelineError
 from .inputs import (
     GlobalInputStatus,
@@ -916,7 +917,7 @@ class AutoPreviewPipeline:
         cover = (
             request.cover
             or (existing.cover if existing is not None else None)
-            or CoverFile(Path(__file__).with_name("assets") / "default_cover.png")
+            or default_cover()
         )
         article = preview_service.render(
             source,

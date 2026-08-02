@@ -7,6 +7,7 @@ from .bundle import (
     parse_preview_bundle,
     parse_preview_config,
     parse_preview_document,
+    parse_preview_paragraphs,
     parse_weather_for_date,
     preview_article_file,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "load_preview_template",
     "matchup_key",
     "parse_preview_bundle",
+    "parse_preview_paragraphs",
     "parse_preview_config",
     "parse_preview_document",
     "parse_weather_for_date",

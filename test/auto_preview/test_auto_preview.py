@@ -31,6 +31,7 @@ from auto_preview import (
     PipelineRequest,
     PipelineResult,
     Stage,
+    default_cover,
 )
 from auto_preview.cli import _parser
 from auto_preview.cli import main as cli_main
@@ -58,7 +59,7 @@ from thufootball import (
     PermissionError as THUFootballPermissionError,
 )
 from weather import DailyWeather, WeatherNetworkError
-from wechat_official import Article, CoverFile, DraftReceipt
+from wechat_official import Article, CoverFile, CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
 
@@ -707,6 +708,21 @@ class DefaultCoverAssetTests(unittest.TestCase):
         self.assertEqual(struct.unpack(">II", content[16:24]), (1536, 1024))
         self.assertLess(len(content), 10 * 1024 * 1024)
 
+    def test_default_cover_prefers_configured_media_id_and_keeps_file_fallback(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {"WEBSITE_DEFAULT_COVER_MEDIA_ID": "permanent-cover"},
+        ):
+            configured = default_cover()
+        self.assertEqual(configured, CoverMediaId("permanent-cover"))
+
+        with patch.dict(os.environ, {}, clear=True):
+            fallback = default_cover()
+        self.assertIsInstance(fallback, CoverFile)
+        self.assertEqual(fallback.path.name, "default_cover.png")
+
 
 class LoggingTests(unittest.TestCase):
     def test_logging_permission_error_is_diagnosed_without_traceback(self) -> None:
@@ -1182,6 +1198,24 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(history["receipts"]), 3)
             self.assertEqual(history["schema_version"], 2)
             self.assertEqual(len(history["receipts"][-1]["articles"]), 1)
+
+    async def test_configured_default_cover_uses_existing_media_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            wechat = _FakeWechat()
+            runner, _, _ = self._pipeline(root, wechat=wechat)
+            with patch.dict(
+                os.environ,
+                {"WEBSITE_DEFAULT_COVER_MEDIA_ID": "permanent-cover"},
+            ):
+                result = await runner.run(self._request(Stage.PUBLISH, override=True))
+
+            article = Article.load(result.article_directory)
+            self.assertEqual(article.cover, CoverMediaId("permanent-cover"))
+            self.assertEqual(
+                wechat.articles[0][0].cover,
+                CoverMediaId("permanent-cover"),
+            )
 
     async def test_batch_phase_barriers_order_and_single_publish_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -15,8 +15,8 @@
 总体原则：
 
 - 先通过 FastAPI `/docs` 和 HTTP 请求跑通后端，再开发对应前端。
-- PostgreSQL 是网站唯一可编辑数据源；`var/artifacts/` 只保存可重建的文章、
-  封面和快照产物。
+- PostgreSQL 是网站唯一业务数据源；`var/artifacts/` 只保存管理员上传的封面
+  文件，文章输入快照、HTML 和微信回执全部保存在 PostgreSQL。
 - 网站不与 `runs/auto_preview` 双向同步。现有 CLI 暂时继续使用 `runs/`，
   网站稳定后再评估是否迁移 CLI。
 - 网站代码使用与 `src/` 平级的 `backend/` 和 `frontend/`；`src/` 保留可复用
@@ -81,156 +81,206 @@
 在没有前端的情况下，管理员可以通过 FastAPI `/docs` 完成从批量创建前瞻到
 微信公众号草稿的完整流程。
 
-### 与现有 Auto Preview 的关系
+### 配置和 Auto Preview 兼容改动
 
-网站不直接使用 `AutoPreviewPipeline` 的 `runs/` 文件状态机，因为网站的标题、
-天气、正文和任务状态必须以 PostgreSQL 为准。网站复用其下层能力：
+网站新增必填配置 `WEBSITE_DEFAULT_COVER_MEDIA_ID`。网站启动时缺失或为空立即
+报错；新建 Batch 默认保存为 `cover_kind=media_id`、
+`cover_storage_key=<该配置>`、`cover_content_type=NULL`。默认封面不属于完整性
+缺项，可以直接创建微信草稿，也不做远程预校验。
 
-- 复用 `Competition`、日期和赛事排序规则；
-- 复用 `PreviewSourceBuilder` 生成比赛、历史成绩和交手数据；
-- 复用现有天气 Service 和海淀区配置；
-- 复用 `PreviewSourceData`、校验逻辑和正文分段规则；
-- 复用 `PreviewService.render()` 和现有 HTML 模板；
-- 复用 `Article`、封面模型和文章内容指纹；
-- 复用 `WechatOfficialService.create_draft()`；
-- 复用微信草稿 1–8 篇限制和发布指纹幂等规则。
+这是对现有 Auto Preview 业务逻辑的修改：`AutoPreviewPipeline` 未显式指定封面
+且没有可复用旧封面时，优先把该配置解析成 `CoverMediaId`，避免把默认图片重复
+上传到微信；CLI 缺少配置时仍回退到原 `default_cover.png`。除这个小型解析函数
+外，不改变 CLI、`runs/` 状态机、日志、文件结构或公开返回值。
 
-如果现有逻辑只存在于 `AutoPreviewPipeline` 的私有方法中，应提取为命名清晰的
-共享函数或小型 Service，使 CLI 和网站共同调用；保持 `AutoPreviewPipeline`
-公开行为和原有测试不变。不得在网站层复制查询、排序、渲染或指纹算法。
+网站依赖方向固定为 `backend → src`。直接复用 `Competition`、赛事排序、
+`PreviewSourceBuilder`、天气 Service、`PreviewSourceData`、正文分段、
+`PreviewService.render()`、`Article`、`CoverFile`、`CoverMediaId`、
+`WechatOfficialService.create_draft()` 以及文章和发布指纹。网站 API、数据库、
+权限、动态状态和持久化逻辑只放在 `backend/`。
 
-### 数据模型
+### 数据库模型
 
-建立以下核心表：
+#### `users`
 
-- `users`：先支持单一管理员登录，Stage 4 扩展 writer 权限。
-- `preview_batches`：一个“日期 × 赛事”对应一篇文章。
-- `preview_matches`：一条记录表示一张完整的比赛前瞻卡片，以 THUFootball
-  `game_id` 作为全局业务主键；`batch_id` 只表示比赛当前属于哪篇“日期 ×
-  赛事”文章，不参与唯一标识。记录同时包含：
-  - 赛事 ID 与赛事名称、阶段、开球时间和地点；
-  - 主客队 ID、名称、简称、往届成绩和本届历史赛果；
-  - 双方近年交手记录；
-  - 当前是否 active、归档时间和归档原因；
-  - 人工署名、正文、正文版本以及 Stage 4 增加的认领人。
+| 列 | 类型与约束 |
+| --- | --- |
+| `id` | `BIGINT` PK identity |
+| `username` | `VARCHAR(64)` NOT NULL UNIQUE |
+| `display_name` | `VARCHAR(100)` NOT NULL |
+| `password_hash` | `TEXT` NOT NULL |
+| `role` | `VARCHAR(16)` NOT NULL，`admin` 或 `writer` |
+| `is_active` | `BOOLEAN` NOT NULL DEFAULT true |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` NOT NULL |
 
-  需要筛选、排序和关联的 `game_id`、`batch_id`、开球时间、赛事和 active 状态
-  使用独立数据库列；主客队完整信息、往届成绩、本届赛果和交手记录按照
-  `PreviewMatch` 契约保存为严格校验的 JSONB 快照。渲染时由这些自动数据与人工
-  署名、正文共同组装当前 `PreviewMatch`，不再读取 `source.json` 或
-  `previews/*.md`。
-- `weather`：按日期保存天气，自动查询后可由管理员修改。
-- `editorial_defaults`：编辑、责编、审核的全局默认值。
-- `article_versions`：不可变文章输入快照和 HTML 产物。
-- `wechat_drafts`：微信回执及包含文章的有序 JSON 数组。
+用户名区分大小写，不自动 trim，长度 1–64，且不得包含任何空白字符。Stage 2 的
+`python -m backend init-admin` 只创建 admin。
 
-封面文件保存在 `var/artifacts/covers/`，文件名、类型、SHA-256 和相对存储 key
-直接保存在 `preview_batches`，第一版不建立素材管理表。
+#### `preview_batches`
 
-人工内容与自动数据分开保存。`preview_matches.game_id` 全局唯一，正常业务不物理
-删除比赛记录。重新查询统一按 `game_id` upsert：
+| 列 | 类型与约束 |
+| --- | --- |
+| `id` | `BIGINT` PK identity |
+| `preview_date` | `DATE` NOT NULL |
+| `competition` | `VARCHAR(16)` NOT NULL |
+| `headline` | `VARCHAR(200)` NOT NULL DEFAULT `''` |
+| `editors`, `reviewers`, `approvers` | `JSONB` NOT NULL DEFAULT `[]` |
+| `cover_kind` | `VARCHAR(16)` NOT NULL，`file` 或 `media_id` |
+| `cover_storage_key` | `TEXT` NOT NULL，文件 key 或微信 media ID |
+| `cover_content_type` | `VARCHAR(64)` NULL |
+| `current_article_id` | `BIGINT` NULL FK → `articles.id` |
+| `last_error_code` | `VARCHAR(64)` NULL |
+| `last_error_message` | `TEXT` NULL |
+| `last_error_at` | `TIMESTAMPTZ` NULL |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` NOT NULL |
 
-- 比赛仍存在时更新自动数据并设为 active，保留署名、正文、正文版本和认领人；
-- 比赛消失时设为 inactive，记录归档时间和原因，不删除人工内容；
-- 比赛改期或移动到另一篇文章时更新 `batch_id`，保留全部人工内容；
-- 同一 `game_id` 以后重新出现时恢复原记录，不新建第二条比赛数据。
+`(preview_date, competition)` 唯一。文件封面 key 为
+`covers/<sha256>.<jpg|png|gif>` 且 MIME 非空；media ID 模式 MIME 为 NULL。Batch
+不保存封面 SHA、原文件名、文件大小、独立 `cover_media_id`，也不允许无封面。
+标题、人员、天气、封面、比赛自动数据、署名或正文实际变化时清空
+`current_article_id`；任务开放和错误信息变化不清空。render 成功后指向同 Batch
+的 Article，未被清空时重复 render 直接复用。
 
-已经生成的 `article_versions` 保存不可变输入快照，因此比赛改期和当前
-`batch_id` 变化不会修改历史文章或已经创建的微信草稿。
+#### `preview_matches`
 
-### 同步执行
+| 列 | 类型与约束 |
+| --- | --- |
+| `game_id` | `BIGINT` PK |
+| `batch_id` | `BIGINT` NOT NULL FK |
+| `tournament_id` | `BIGINT` NOT NULL |
+| `tournament_name`, `competition_name` | `VARCHAR(200)` NOT NULL |
+| `stage` | `VARCHAR(100)` NOT NULL |
+| `kickoff` | `TIMESTAMPTZ` NOT NULL |
+| `venue` | `VARCHAR(200)` NOT NULL |
+| `home_snapshot`, `away_snapshot`, `head_to_head_snapshot` | `JSONB` NOT NULL |
+| `active` | `BOOLEAN` NOT NULL DEFAULT true |
+| `task_open` | `BOOLEAN` NOT NULL DEFAULT false |
+| `claimed_by_user_id` | `BIGINT` NULL FK → `users.id` |
+| `writers` | `JSONB` NOT NULL DEFAULT `[]` |
+| `body` | `TEXT` NOT NULL DEFAULT `''` |
+| `body_version` | `INTEGER` NOT NULL DEFAULT 0 |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` NOT NULL |
 
-第一版不建立 `jobs` 表和独立 worker：
+`game_id` 全局唯一并自带主键索引。另建 `(batch_id, active, kickoff, game_id)`、
+活动且开放任务的 `(kickoff, game_id)` 部分索引，以及已认领记录的
+`(claimed_by_user_id, kickoff, game_id)` 部分索引。不保存归档时间和原因；比赛
+消失时设 inactive，重新出现时恢复，改期时更新 `batch_id` 并关闭任务，三种情况
+都保留人工正文、版本和认领人。正文保存携带 `expected_version`，冲突返回 409。
 
-- 数据查询、文章渲染和微信草稿创建在对应 HTTP 请求中直接执行并返回结果；
-- 前端在请求期间展示加载状态，失败后由管理员明确重试；
-- 同一日期和赛事使用数据库事务、唯一约束或 advisory lock 避免重复变更；
-- 批量创建按现有赛事查询缓存规则执行，避免为多个日期重复查询同一赛事；
-- 所有写入继续使用唯一约束和内容指纹保证重复请求安全。
+#### `weather`
 
-如果真实使用中经常超过请求超时、需要页面关闭后继续运行或需要详细进度，再
-把这些操作迁入后台 Job；在此之前不预先建设任务系统。
+列为：`date DATE PK`、`adcode CHAR(6)`、`region_name VARCHAR(100)`、
+`condition VARCHAR(100)`、`low_c SMALLINT`、`high_c SMALLINT`、
+`wind_direction VARCHAR(50)`、`wind_level VARCHAR(50)`、`source VARCHAR(16)`、
+`report_time TIMESTAMPTZ`，除主键外均 NOT NULL。自动查询采用上游报告时间，
+人工修改使用当前时间；普通 refresh 不覆盖人工天气。不另存创建和更新时间。
 
-### 基础认证 API
+#### `editorial_defaults`
 
-- `POST /api/auth/login`；
-- `POST /api/auth/logout`；
-- `GET /api/auth/me`；
-- 初始化命令创建首个管理员。
+列为：`id SMALLINT PK`（固定为 1）、`editors JSONB`、`reviewers JSONB`、
+`approvers JSONB`、`updated_at TIMESTAMPTZ`，均 NOT NULL，人员列默认 `[]`。
+新建 Batch 复制当时的默认人员，后续默认值修改不影响已有 Batch。
 
-使用用户名密码、Argon2 密码哈希和服务端签名的 HttpOnly Cookie。Cookie
-保存最小登录信息，不建立数据库 Session 表。此阶段只做基础登录保护，不做
-会话设备管理、主动撤销历史会话、OAuth、邮件验证、复杂风控或细粒度审计。
+#### `articles`
 
-### 管理员前瞻 API
+| 列 | 类型与约束 |
+| --- | --- |
+| `id` | `BIGINT` PK identity |
+| `batch_id` | `BIGINT` NOT NULL FK |
+| `version_number` | `INTEGER` NOT NULL |
+| `input_snapshot` | `JSONB` NOT NULL |
+| `title`, `body_html`, `digest` | `TEXT` NOT NULL |
+| `author` | `VARCHAR(100)` NOT NULL |
+| `source_url` | `TEXT` NOT NULL DEFAULT `''` |
+| `template_version` | `VARCHAR(128)` NOT NULL |
+| `content_fingerprint` | `CHAR(64)` NOT NULL |
+| `cover_kind` | `VARCHAR(16)` NOT NULL，`file` 或 `media_id` |
+| `cover_storage_key` | `TEXT` NOT NULL |
+| `cover_sha256` | `CHAR(64)` NOT NULL |
+| `is_complete` | `BOOLEAN` NOT NULL |
+| `missing_fields` | `JSONB` NOT NULL DEFAULT `[]` |
+| `created_at` | `TIMESTAMPTZ` NOT NULL |
 
-#### 批量创建与读取
+`(batch_id, version_number)` 唯一，并建相同字段的版本倒序索引。Article 创建后
+不可修改。Batch 的有效渲染过期后插入新行；当前有效版本通过
+`preview_batches.current_article_id` 查找，历史最新版本也可按版本倒序查询。
+media ID 封面的 SHA 为 media ID UTF-8 字节的 SHA-256。创建微信草稿前，文件
+封面重新读文件计算 SHA，media ID 重新计算字符串 SHA，防止渲染后封面被替换。
 
-- `POST /api/preview-batches/bulk`
-  - 输入 `dates[]` 和 `competitions[]`；
-  - 去重后展开笛卡尔积；
-  - 固定按日期升序和 male、female、futsal 排序；
-  - 同步查询所需赛事数据，为每个组合创建或复用 Batch；
-  - 请求完成后直接返回各组合的生成或跳过结果。
-- `GET /api/preview-batches`：按日期、赛事和状态筛选。
-- `GET /api/preview-batches/{id}`：读取文章、比赛、天气、人员和完整性。
-- `POST /api/preview-batches/{id}/refresh-data`：重新查询自动数据。
+#### `wechat_drafts`
 
-#### 待领取任务发布
+列为：`id BIGINT PK identity`、`articles JSONB NOT NULL`、
+`publication_fingerprint CHAR(64) NOT NULL UNIQUE`、`media_id TEXT NOT NULL`、
+`wechat_created_at TIMESTAMPTZ NOT NULL`、`created_at TIMESTAMPTZ NOT NULL`。
+`articles` 是有序 `{article_id, content_fingerprint, cover_sha256}` 数组。
+`confirm=false` 不写表；`confirm=true` 创建或按发布指纹复用回执。
 
-- `POST /api/preview-batches/{id}/open-tasks`：把所选活动比赛设为可领取。
-- `POST /api/preview-batches/{id}/close-tasks`：关闭领取。
+### Artifact、状态和执行模型
 
-Stage 2 尚无普通用户认领，但管理员前端需要能够预先发布和关闭这些任务；
-Stage 4 直接复用状态和接口语义。
+`var/artifacts/` 只保存管理员上传的文件封面：
 
-#### 编辑与写作
+```text
+var/artifacts/
+└── covers/
+    └── <sha256>.<jpg|png|gif>
+```
 
-- `PATCH /api/preview-batches/{id}`：修改标题和本篇编辑/责编/审核。
-- `PUT /api/weather/{date}`：修改完整天气五项。
-- `POST /api/preview-batches/{id}/cover`：上传并校验本篇封面，保存文件元数据
-  和相对 storage key。
-- `PATCH /api/preview-matches/{game_id}`：管理员修改署名和纯文本正文。
+相同内容复用相同 key，默认 media ID 不产生本地文件，Stage 2 不删除历史封面。
+PostgreSQL 和 covers 目录都必须备份。
 
-正文保持当前语义：空行分段，不解析 Markdown。保存使用 `expected_version`，
-旧版本返回 HTTP 409。
+Batch 不保存状态列，动态计算为：`incomplete` 表示标题、天气、人员、活动比赛、
+署名或正文有缺项；`ready` 表示当前数据完整但当前 Article 未进入草稿；`drafted`
+表示当前 Article 已包含在成功草稿中。封面不参与完整性判断。incomplete 也允许
+render，缺项用现有提示；零活动比赛由后端加入只用于预览的占位对阵。
 
-#### 渲染和预览
+第一版同步执行查询、render 和微信草稿创建，不建立 Job、worker 或 Session
+表。日期和赛事用事务、唯一约束与 advisory lock 防止重复写入；批量创建复用
+同赛事查询缓存，草稿通过有序发布指纹幂等。
 
-- `POST /api/preview-batches/{id}/render`：从数据库快照生成文章版本。
-- `GET /api/article-versions/{id}`：读取版本、完整性和产物信息。
-- `GET /api/article-versions/{id}/preview`：读取 HTML 预览。
+批量 create 先查询 PostgreSQL：已有日期赛事组合直接返回 `reused`，不访问天气或
+THUFootball，也不修改 Batch；只有缺失组合才查询并创建，已有 Batch 的重新查询
+统一由 `refresh-data` 完成。部分查询失败时返回 HTTP 200 和逐项结果；全部缺失
+组合都查询失败时返回 HTTP 502，并在 `error.details.results` 保留逐项错误。
 
-缺少标题、天气、人员、署名或正文时仍可生成带占位提示的预览，但文章版本标记
-为不可发布。每次渲染生成不可变版本；内容修改后旧版本保留但不再是 latest。
+THUFootball 查询 Service 和 Client 不跨 HTTP 请求复用。管理员可在网站运行期间
+通过设置接口更新一对完整凭据：接口只调用只读 `GetUserInfo` 验证，随后原子写回
+项目 `.env` 并更新当前进程环境。查询与凭据更新使用同一应用级互斥锁；更新返回
+后不再存在使用旧凭据的 Client。Stage 2 限定单 Uvicorn 进程，不启用多 worker。
 
-#### 微信草稿
+### 公共 API
 
-- `POST /api/wechat-drafts`
-  - 输入按顺序排列的 1–8 个最新完整文章版本；
-  - 显式 `confirm=true` 才允许真实调用微信；
-  - 相同文章、顺序和封面指纹复用已有回执；
-  - 文章版本 ID 和顺序直接保存为严格校验的 JSON 数组，不建立草稿明细表。
-- `GET /api/wechat-drafts/{id}`：读取 `media_id` 和文章顺序。
+- 认证：`POST /api/auth/login`、`POST /api/auth/logout`、
+  `GET /api/auth/me`、`python -m backend init-admin`。
+- 设置：`GET /api/settings/thufootball-credentials`、
+  `PUT /api/settings/thufootball-credentials`；只返回配置状态和脱敏凭据。
+- 批次：`POST /api/preview-batches/create`、`GET /api/preview-batches`、
+  `GET /api/preview-batches/{id}`、
+  `POST /api/preview-batches/{id}/refresh-data`、
+  `PATCH /api/preview-batches/{id}`。
+- 默认人员：`GET /api/editorial-defaults`、`PUT /api/editorial-defaults`。
+- 任务与内容：`POST /api/preview-batches/{id}/open-tasks`、
+  `POST /api/preview-batches/{id}/close-tasks`、
+  `GET /api/preview-matches`、`PATCH /api/preview-matches/{game_id}`、
+  `PUT /api/weather/{date}`。
+  open/close 不接收请求体，分别开放或关闭该 Batch 当前全部 active 比赛。
+  match 列表只返回 `active AND task_open` 的比赛，并附所属 Batch 的日期和赛事。
+- 封面：`POST /api/preview-batches/{id}/cover`、
+  `PUT /api/preview-batches/{id}/cover-media-id`。
+- 文章：`POST /api/preview-batches/{id}/render`、`GET /api/articles/{id}`、
+  `GET /api/articles/{id}/preview`。
+- 微信草稿：`POST /api/wechat-drafts`、`GET /api/wechat-drafts/{id}`。
 
-本阶段只创建微信公众号草稿，不正式发布或群发。
+不提供 `/bulk`、`/article-versions` 或 `default` cover kind。本阶段只创建微信
+草稿，不正式发布或群发。
 
-### 后端手动验收
+### 后端验收
 
-通过 `/docs` 顺序验证：
-
-1. 初始化管理员并登录。
-2. 批量提交多个 dates 和 competitions。
-3. 等待请求完成，确认生成所有日期赛事组合及比赛任务。
-4. 发布待领取任务。
-5. 修改标题、天气、人员和封面。
-6. 以管理员身份填写署名和多段正文。
-7. 生成不完整预览并确认微信接口拒绝。
-8. 补齐内容，生成最新完整文章版本。
-9. 使用假微信服务验证 1–8 篇排序、幂等和重复请求。
-10. 显式执行一次真实微信草稿写入并核对 `media_id`。
-
-同时提供可重复执行的 API smoke test。现有项目全部测试必须继续通过。
+先执行迁移 `upgrade → downgrade → upgrade` 和
+`python scripts/smoke_website_api.py`。随后通过 `/docs` 完成“初始化管理员并登录
+→ 创建多个日期赛事 Batch → refresh → 开放任务 → 编辑标题、天气、人员、封面、
+署名和正文 → 渲染 incomplete/ready 预览 → 使用 `confirm=false` 核对 1–8 篇顺序
+→ 明确确认后执行一次真实微信草稿创建 → 核对 media ID 与 drafted 状态”。具体
+命令和请求体见 [Stage 2 操作手册](stages/admin_backend.md)。
 
 ## Stage 3：管理员闭环前端
 
@@ -290,8 +340,8 @@ Stage 2 的全部操作。
 ### 账号与权限
 
 - 写作者通过公开注册接口自行创建账号，注册成功后固定为 `writer`。
-- 用户名去除首尾空白并按大小写不敏感规则规范化，数据库保证全局唯一；重复
-  用户名返回 HTTP 409。
+- 用户名沿用 Stage 2 契约：不自动 trim、区分大小写、禁止任何空白字符，数据库
+  保证完全相同的用户名全局唯一；重复用户名返回 HTTP 409。
 - 管理员可以查询、禁用和重置 writer 账号，但不是创建账号的唯一入口。
 - `admin` 可以管理全部批次、任务、署名、正文、文章和草稿。
 - `writer` 可以查看已开放任务、认领一场比赛、编辑自己的正文和查看相关预览。
@@ -365,7 +415,8 @@ Stage 2 的全部操作。
 - 管理员可以批量创建日期赛事组合、发布任务、编辑和生成微信草稿。
 - 多位 writer 可以自行注册、登录、领取不同比赛并保存正文。
 - 并发认领、越权修改和正文版本冲突均得到明确处理。
-- PostgreSQL 是唯一业务数据源，Artifact 丢失后可重新生成。
+- PostgreSQL 是唯一业务数据源；管理员上传的 covers 不是全部可重建数据，必须
+  和 PostgreSQL 一起备份。
 - 现有 Auto Preview CLI 和测试没有被网站开发破坏。
 - 协会成员能够在手机或电脑浏览器中完成日常前瞻工作。
 
