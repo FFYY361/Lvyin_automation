@@ -1586,31 +1586,53 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(with_unfinished[0].score_text)
         self.assertEqual(no_matches, [])
 
-    async def test_query_team_matches_uses_five_goal_forfeit(self) -> None:
-        game = _game(
-            1,
-            10,
-            started=True,
-            ended=True,
-            home_goal=0,
-            away_goal=0,
-            penalty_shootout=0,
-            away_abandon=1,
-        )
+    async def test_query_team_matches_uses_forfeit_scores_in_both_directions(
+        self,
+    ) -> None:
+        for players_per_side, awarded_goals in ((11, 3), (5, 5)):
+            with self.subTest(players_per_side=players_per_side):
+                games = [
+                    _game(
+                        1,
+                        10,
+                        started=True,
+                        ended=True,
+                        home_goal=0,
+                        away_goal=0,
+                        penalty_shootout=0,
+                        away_abandon=1,
+                    ),
+                    _game(
+                        2,
+                        10,
+                        started=True,
+                        ended=True,
+                        home_goal=0,
+                        away_goal=0,
+                        penalty_shootout=0,
+                        home_abandon=1,
+                    ),
+                ]
 
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200,
-                json=_tournament_payload(10, [game], players_per_side=5),
-                request=request,
-            )
+                async def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(
+                        200,
+                        json=_tournament_payload(
+                            10,
+                            games,
+                            players_per_side=players_per_side,
+                        ),
+                        request=request,
+                    )
 
-        async with self._service(handler) as service:
-            result = await service.query_team_matches(101, 10)
+                async with self._service(handler) as service:
+                    results = await service.query_team_matches(101, 10)
 
-        self.assertEqual(result[0].goals_for, 5)
-        self.assertEqual(result[0].goals_against, 0)
-        self.assertEqual(result[0].score_text, "5:0")
+                by_game_id = {item.game.game_id: item for item in results}
+                self.assertEqual(by_game_id[1].score_text, f"{awarded_goals}:0")
+                self.assertEqual(by_game_id[1].game.result_text, f"{awarded_goals}:0")
+                self.assertEqual(by_game_id[2].score_text, f"0:{awarded_goals}")
+                self.assertEqual(by_game_id[2].game.result_text, f"0:{awarded_goals}")
 
     async def test_query_team_to_team_matches_summarises_all_tournaments(self) -> None:
         games_by_tournament = {

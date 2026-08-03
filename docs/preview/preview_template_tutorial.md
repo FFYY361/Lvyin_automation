@@ -6,7 +6,7 @@
 
 正式模板位于 `templates/qhly_preview_v1/template.html`，示例 source、weather、config 和 JSON Schema 位于同一目录。
 
-三份 JSON 使用严格解码：缺失必填字段、未知字段、非法日期、非 `+08:00` 开球时间、不完整比分和非法比赛 ID 都会在渲染前报错。`qhly_preview_v1` 模板的 source 由同目录 `schema.json` 唯一定义；`previews` 以 `主队简称 vs 客队简称` 为键，并使用 `article_file` 引用同目录下的正文 Markdown，例如 `previews/集电vs美院.md`。正文可以直接粘贴，以空白行分段，模板负责生成 HTML 标签和转义内容。
+三份 JSON 使用严格解码：缺失必填字段、未知字段、非法日期、非 `+08:00` 开球时间、不完整比分和非法比赛 ID 都会在渲染前报错。`qhly_preview_v1` 模板的 source 由同目录 `schema.json` 唯一定义；`previews` 以 `主队简称 vs 客队简称` 为键，并使用 `article_file` 引用同目录下的正文 Markdown，例如 `previews/集电vs美院.md`。正文可以直接粘贴，一个或多个换行都表示分段，段前空格自动去除，模板负责生成 HTML 标签和转义内容。
 
 weather 文件顶层以 `YYYY-MM-DD` 为键，条目严格对应 `PreviewWeather`：
 

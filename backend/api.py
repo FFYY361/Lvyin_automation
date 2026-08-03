@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import case, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
@@ -25,7 +26,7 @@ from thufootball import (
 )
 
 from .auth import get_session, require_admin, verify_password
-from .config import DEFAULT_ENV_FILE, WebsiteSettings
+from .config import DEFAULT_ENV_FILE, PROJECT_ROOT, WebsiteSettings
 from .credentials import activate_credentials, credential_status, persist_credentials
 from .database import create_database_engine, create_session_factory
 from .models import (
@@ -87,6 +88,7 @@ def create_app(
     session_factory: sessionmaker[Session] | None = None,
     external_factories: ExternalFactories | None = None,
     credential_env_path: str | Path = DEFAULT_ENV_FILE,
+    frontend_dist: str | Path | None = None,
 ) -> FastAPI:
     resolved_settings = settings or WebsiteSettings.from_environment()
     engine = None
@@ -272,7 +274,7 @@ def create_app(
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         statement = select(PreviewBatch).order_by(
-            PreviewBatch.preview_date,
+            PreviewBatch.preview_date.desc(),
             case(
                 (PreviewBatch.competition == "male", 0),
                 (PreviewBatch.competition == "female", 1),
@@ -598,7 +600,10 @@ def create_app(
         record = session.get(ArticleRecord, article_id)
         if record is None:
             raise _not_found("article")
-        return HTMLResponse(record.body_html)
+        return HTMLResponse(
+            record.body_html,
+            headers={"Referrer-Policy": "no-referrer"},
+        )
 
     @app.post("/api/wechat-drafts")
     async def post_wechat_draft(
@@ -626,5 +631,17 @@ def create_app(
         if draft is None:
             raise _not_found("wechat draft")
         return draft_payload(draft)
+
+    resolved_frontend_dist = (
+        Path(frontend_dist)
+        if frontend_dist is not None
+        else PROJECT_ROOT / "frontend" / "dist"
+    )
+    if (resolved_frontend_dist / "index.html").is_file():
+        app.mount(
+            "/",
+            StaticFiles(directory=resolved_frontend_dist, html=True),
+            name="frontend",
+        )
 
     return app

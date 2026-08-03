@@ -270,17 +270,31 @@ def _header_background_url(value: str) -> str:
     return DEFAULT_HEADER_BACKGROUND_URL
 
 
+def format_result_text(
+    home_score: int | None,
+    away_score: int | None,
+    home_penalty: int | None = None,
+    away_penalty: int | None = None,
+) -> str:
+    """Return the canonical score text for a completed match."""
+    if home_score is None or away_score is None:
+        raise ValueError("完赛记录必须提供常规比分")
+    if (home_penalty is None) != (away_penalty is None):
+        raise ValueError("点球比分必须同时提供主队和客队得分")
+    if home_penalty is not None:
+        return f"{home_score}({home_penalty}):{away_score}({away_penalty})"
+    return f"{home_score}:{away_score}"
+
+
 def _score_text(value: PlayedMatch) -> str:
     if not isinstance(value, PlayedMatch):
         raise TypeError("比分格式化器需要 PlayedMatch")
-    if value.home_penalty is not None:
-        return (
-            f"{value.home_score}({value.home_penalty}):"
-            f"{value.away_score}({value.away_penalty})"
-        )
-    if value.result_text is not None:
-        return value.result_text
-    return f"{value.home_score}:{value.away_score}"
+    return format_result_text(
+        value.home_score,
+        value.away_score,
+        value.home_penalty,
+        value.away_penalty,
+    )
 
 
 def _result_line(value: PlayedMatch) -> str:

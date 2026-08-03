@@ -38,7 +38,7 @@ from auto_preview.cli import main as cli_main
 from auto_preview.config import competition_config
 from auto_preview.diagnostics import failure_lines
 from auto_preview.logging_utils import configure_logging
-from auto_preview.source import PreviewSourceBuilder
+from auto_preview.source import PreviewSourceBuilder, preview_data_to_dict
 from auto_preview.state import sha256_file
 from preview import PreviewValidationError, SeasonOutcome
 from preview.template import _head_to_head_line
@@ -369,6 +369,19 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
             all(
                 (result.home_score, result.away_score) == (1, 2)
                 for result in source.matches[0].away.current_results
+            )
+        )
+        self.assertTrue(
+            all(
+                result.result_text == "1:2"
+                for result in source.matches[0].away.current_results
+            )
+        )
+        payload = preview_data_to_dict(source)
+        self.assertTrue(
+            all(
+                result["result_text"] == "1:2"
+                for result in payload["matches"][0]["away"]["current_results"]
             )
         )
         self.assertFalse(

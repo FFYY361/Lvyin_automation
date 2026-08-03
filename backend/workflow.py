@@ -34,6 +34,7 @@ from preview import (
     PreviewWeather,
     SeasonOutcome,
     TeamRef,
+    format_result_text,
     parse_preview_paragraphs,
     validate_preview_source,
 )
@@ -974,6 +975,23 @@ def weather_payload(value: Weather | None) -> dict[str, Any] | None:
 
 
 def match_payload(value: PreviewMatchRecord) -> dict[str, Any]:
+    def played_payload(item: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(item)
+        payload["result_text"] = format_result_text(
+            item.get("home_score"),
+            item.get("away_score"),
+            item.get("home_penalty"),
+            item.get("away_penalty"),
+        )
+        return payload
+
+    def team_payload(item: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(item)
+        payload["current_results"] = [
+            played_payload(result) for result in item.get("current_results", [])
+        ]
+        return payload
+
     return {
         "game_id": value.game_id,
         "batch_id": value.batch_id,
@@ -983,9 +1001,11 @@ def match_payload(value: PreviewMatchRecord) -> dict[str, Any]:
         "stage": value.stage,
         "kickoff": value.kickoff.isoformat(),
         "venue": value.venue,
-        "home": value.home_snapshot,
-        "away": value.away_snapshot,
-        "head_to_head": value.head_to_head_snapshot,
+        "home": team_payload(value.home_snapshot),
+        "away": team_payload(value.away_snapshot),
+        "head_to_head": [
+            played_payload(result) for result in value.head_to_head_snapshot
+        ],
         "active": value.active,
         "task_open": value.task_open,
         "claimed_by_user_id": value.claimed_by_user_id,
@@ -998,6 +1018,12 @@ def match_payload(value: PreviewMatchRecord) -> dict[str, Any]:
 
 def batch_payload(session: Session, batch: PreviewBatch, *, detail: bool) -> dict[str, Any]:
     missing = completeness(session, batch)
+    latest_article_id = session.scalar(
+        select(ArticleRecord.id)
+        .where(ArticleRecord.batch_id == batch.id)
+        .order_by(ArticleRecord.version_number.desc(), ArticleRecord.id.desc())
+        .limit(1)
+    )
     payload: dict[str, Any] = {
         "id": batch.id,
         "preview_date": batch.preview_date.isoformat(),
@@ -1013,6 +1039,7 @@ def batch_payload(session: Session, batch: PreviewBatch, *, detail: bool) -> dic
             "content_type": batch.cover_content_type,
         },
         "current_article_id": batch.current_article_id,
+        "latest_article_id": latest_article_id,
         "missing_fields": missing,
         "last_error": (
             None
