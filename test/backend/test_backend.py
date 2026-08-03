@@ -4,17 +4,19 @@ import asyncio
 import hashlib
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import CHAR, create_engine, inspect, text
+from sqlalchemy import CHAR, create_engine, delete, inspect, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -214,7 +216,7 @@ def test_database_columns_and_indexes_match_plan(postgres_engine) -> None:
     expected = {
         "users": {
             "id", "username", "display_name", "password_hash", "role",
-            "is_active", "created_at", "updated_at",
+            "is_active", "auth_version", "created_at", "updated_at",
         },
         "preview_batches": {
             "id", "preview_date", "competition", "headline", "editors",
@@ -556,10 +558,10 @@ def test_match_move_and_recovery_preserve_manual_content_and_claim(
 ) -> None:
     with session_factory.begin() as session:
         writer = User(
-            username="writer",
+            username="user",
             display_name="Writer",
             password_hash="hash",
-            role="writer",
+            role="user",
         )
         session.add(writer)
         source_batch = _batch(session, complete=True, game_id=9271)
@@ -1013,6 +1015,290 @@ def test_task_endpoints_toggle_all_active_matches_without_request_body(
         match = session.get(PreviewMatch, 9401)
         assert match is not None
         assert match.task_open is False
+
+
+def test_stage4_registration_profile_user_queries_and_session_invalidation(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    with session_factory.begin() as session:
+        admin = User(
+            username="Stage4Admin",
+            display_name="Stage 4 Admin",
+            password_hash=hash_password("admin-password"),
+            role="admin",
+        )
+        session.add(admin)
+        session.flush()
+        admin_id = admin.id
+
+    app = create_app(settings=settings, session_factory=session_factory)
+    with (
+        TestClient(app) as admin_client,
+        TestClient(app) as user_client,
+        TestClient(app) as old_session,
+    ):
+        admin_client.post(
+            "/api/auth/login",
+            json={"username": "Stage4Admin", "password": "admin-password"},
+        ).raise_for_status()
+        registered = user_client.post(
+            "/api/auth/register",
+            json={
+                "username": "Stage4User",
+                "display_name": "普通用户",
+                "password": "user-password",
+            },
+        )
+        assert registered.status_code == 201
+        assert registered.json()["role"] == "user"
+        user_id = registered.json()["id"]
+        assert user_client.get("/api/auth/me").status_code == 200
+        assert user_client.get("/api/admin/users").status_code == 403
+        assert user_client.get(f"/api/admin/users/{admin_id}").json() == {
+            "id": admin_id,
+            "display_name": "Stage 4 Admin",
+        }
+
+        profile = user_client.patch(
+            "/api/auth/me", json={"display_name": "  新显示名称  "}
+        )
+        profile.raise_for_status()
+        assert profile.json()["display_name"] == "新显示名称"
+        assert user_client.get(f"/api/admin/users/{user_id}").json() == {
+            "id": user_id,
+            "display_name": "新显示名称",
+        }
+
+        old_session.post(
+            "/api/auth/login",
+            json={"username": "Stage4User", "password": "user-password"},
+        ).raise_for_status()
+        changed = user_client.post(
+            "/api/auth/change-password",
+            json={
+                "current_password": "user-password",
+                "new_password": "changed-password",
+            },
+        )
+        assert changed.status_code == 204
+        assert user_client.get("/api/auth/me").status_code == 200
+        assert old_session.get("/api/auth/me").status_code == 401
+
+        users = admin_client.get("/api/admin/users")
+        users.raise_for_status()
+        managed = next(item for item in users.json()["items"] if item["id"] == user_id)
+        assert managed["username"] == "Stage4User"
+        assert managed["claimed_task_count"] == 0
+        assert "password_hash" not in managed
+        assert "auth_version" not in managed
+
+        reset = admin_client.post(
+            f"/api/admin/users/{user_id}/reset-password",
+            json={"new_password": "reset-password"},
+        )
+        assert reset.status_code == 204
+        assert user_client.get("/api/auth/me").status_code == 401
+
+
+def test_stage4_task_claim_content_release_assign_and_read_permissions(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    with session_factory.begin() as session:
+        admin = User(
+            username="CollabAdmin",
+            display_name="协作管理员",
+            password_hash=hash_password("admin-password"),
+            role="admin",
+        )
+        first = User(
+            username="CollabUser1",
+            display_name="用户甲",
+            password_hash=hash_password("first-password"),
+            role="user",
+        )
+        second = User(
+            username="CollabUser2",
+            display_name="用户乙",
+            password_hash=hash_password("second-password"),
+            role="user",
+        )
+        session.add_all([admin, first, second])
+        session.flush()
+        first_id = first.id
+        second_id = second.id
+        batch = _batch(
+            session,
+            target_date=date(2026, 9, 4),
+            competition="futsal",
+            complete=True,
+            game_id=9501,
+        )
+        batch_id = batch.id
+
+    app = create_app(settings=settings, session_factory=session_factory)
+    with (
+        TestClient(app) as admin_client,
+        TestClient(app) as first_client,
+        TestClient(app) as second_client,
+    ):
+        admin_client.post(
+            "/api/auth/login",
+            json={"username": "CollabAdmin", "password": "admin-password"},
+        ).raise_for_status()
+        first_client.post(
+            "/api/auth/login",
+            json={"username": "CollabUser1", "password": "first-password"},
+        ).raise_for_status()
+        second_client.post(
+            "/api/auth/login",
+            json={"username": "CollabUser2", "password": "second-password"},
+        ).raise_for_status()
+
+        rendered = admin_client.post(f"/api/preview-batches/{batch_id}/render")
+        rendered.raise_for_status()
+        article_id = rendered.json()["article"]["id"]
+        assert first_client.get("/api/preview-batches").status_code == 200
+        assert first_client.get(f"/api/preview-batches/{batch_id}").status_code == 200
+        assert first_client.get(f"/api/articles/{article_id}").status_code == 200
+        assert first_client.get(f"/api/articles/{article_id}/preview").status_code == 200
+        assert first_client.post(f"/api/preview-batches/{batch_id}/render").status_code == 403
+
+        admin_client.post(f"/api/preview-batches/{batch_id}/open-tasks").raise_for_status()
+        waiting = first_client.get("/api/tasks/wait_claim")
+        waiting.raise_for_status()
+        waiting_item = waiting.json()["items"][0]
+        assert waiting_item["batch_id"] == batch_id
+        assert waiting_item["competition"] == "futsal"
+        assert "current_article_id" not in waiting_item
+        assert "preview_date" not in waiting_item
+        assert second_client.get("/api/tasks/open").status_code == 403
+        assert len(admin_client.get("/api/tasks/open").json()["items"]) == 1
+
+        claimed = first_client.post("/api/preview-matches/9501/claim")
+        claimed.raise_for_status()
+        assert claimed.json()["reused"] is False
+        assert claimed.json()["match"]["claimed_by_user_id"] == first_id
+        assert claimed.json()["match"]["writers"] == ["用户甲"]
+        assert first_client.get("/api/tasks/wait_claim").json() == {"items": []}
+        assert len(first_client.get("/api/me/tasks").json()["items"]) == 1
+        assert second_client.post("/api/preview-matches/9501/claim").status_code == 409
+
+        version = claimed.json()["match"]["body_version"]
+        assert second_client.patch(
+            "/api/preview-matches/9501/body",
+            json={"expected_version": version, "body": "越权正文"},
+        ).status_code == 403
+        with session_factory.begin() as session:
+            match = session.get(PreviewMatch, 9501)
+            match.active = False
+            match.task_open = False
+        saved = first_client.patch(
+            "/api/preview-matches/9501/body",
+            json={"expected_version": version, "body": "失效后仍可保存"},
+        )
+        saved.raise_for_status()
+        assert saved.json()["body"] == "失效后仍可保存"
+        assert len(first_client.get("/api/me/tasks").json()["items"]) == 1
+        assert second_client.post("/api/preview-matches/9501/release").status_code == 403
+
+        released = admin_client.post("/api/preview-matches/9501/release")
+        released.raise_for_status()
+        assert released.json()["claimed_by_user_id"] is None
+        assert released.json()["writers"] == []
+        assert released.json()["body"] == "失效后仍可保存"
+        assigned = admin_client.post(
+            "/api/preview-matches/9501/assign", json={"user_id": second_id}
+        )
+        assigned.raise_for_status()
+        assert assigned.json()["claimed_by_user_id"] == second_id
+        assert assigned.json()["writers"] == ["用户乙"]
+        assert assigned.json()["body"] == "失效后仍可保存"
+
+        users = admin_client.get("/api/admin/users").json()["items"]
+        managed = next(item for item in users if item["id"] == second_id)
+        assert managed["claimed_task_count"] == 1
+        detail = first_client.get(f"/api/preview-batches/{batch_id}").json()
+        assert detail["current_article_id"] is None
+
+
+def test_stage4_concurrent_claim_has_one_winner(
+    postgres_engine,
+    settings: WebsiteSettings,
+) -> None:
+    direct_factory = sessionmaker(bind=postgres_engine, expire_on_commit=False)
+    suffix = uuid.uuid4().hex[:8]
+    target_date = date(2099, 12, 31)
+    game_id = 9599_000_000 + int(suffix, 16)
+    with direct_factory.begin() as session:
+        first = User(
+            username=f"ConcurrentA{suffix}",
+            display_name="并发甲",
+            password_hash=hash_password("first-password"),
+            role="user",
+        )
+        second = User(
+            username=f"ConcurrentB{suffix}",
+            display_name="并发乙",
+            password_hash=hash_password("second-password"),
+            role="user",
+        )
+        session.add_all([first, second])
+        session.flush()
+        user_ids = (first.id, second.id)
+        batch = _batch(
+            session,
+            target_date=target_date,
+            competition="male",
+            complete=True,
+            game_id=game_id,
+        )
+        batch_id = batch.id
+        match = session.get(PreviewMatch, game_id)
+        match.task_open = True
+        match.writers = []
+        match.body = ""
+
+    app = create_app(settings=settings, session_factory=direct_factory)
+    gate = Barrier(2)
+    try:
+        with TestClient(app) as first_client, TestClient(app) as second_client:
+            first_client.post(
+                "/api/auth/login",
+                json={
+                    "username": f"ConcurrentA{suffix}",
+                    "password": "first-password",
+                },
+            ).raise_for_status()
+            second_client.post(
+                "/api/auth/login",
+                json={
+                    "username": f"ConcurrentB{suffix}",
+                    "password": "second-password",
+                },
+            ).raise_for_status()
+
+            def claim(client: TestClient):
+                gate.wait()
+                return client.post(f"/api/preview-matches/{game_id}/claim")
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                responses = list(
+                    executor.map(claim, (first_client, second_client))
+                )
+            assert sorted(response.status_code for response in responses) == [200, 409]
+        with direct_factory() as session:
+            match = session.get(PreviewMatch, game_id)
+            assert match.claimed_by_user_id in user_ids
+            assert match.writers in (["并发甲"], ["并发乙"])
+            assert match.body_version == 1
+    finally:
+        with direct_factory.begin() as session:
+            session.execute(delete(PreviewMatch).where(PreviewMatch.game_id == game_id))
+            session.execute(delete(PreviewBatch).where(PreviewBatch.id == batch_id))
+            session.execute(delete(Weather).where(Weather.date == target_date))
+            session.execute(delete(User).where(User.id.in_(user_ids)))
 
 
 def test_built_frontend_is_mounted_after_api_routes(

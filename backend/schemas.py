@@ -28,6 +28,15 @@ def validate_username(value: str) -> str:
     return value
 
 
+def validate_display_name(value: str) -> str:
+    resolved = value.strip()
+    if not resolved:
+        raise ValueError("display_name must not be empty")
+    if len(resolved) > 100:
+        raise ValueError("display_name cannot exceed 100 characters")
+    return resolved
+
+
 def _names(values: list[str]) -> list[str]:
     if len(values) > 20:
         raise ValueError("a personnel list cannot contain more than 20 names")
@@ -47,6 +56,73 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
     _username = field_validator("username")(validate_username)
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str
+    display_name: str
+    password: str = Field(min_length=8, max_length=128)
+
+    _username = field_validator("username")(validate_username)
+    _display_name = field_validator("display_name")(validate_display_name)
+
+
+class UpdateSelfRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str
+
+    _display_name = field_validator("display_name")(validate_display_name)
+
+
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class UpdateAdminUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = None
+    is_active: bool | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def normalize_display_name(cls, value: str | None) -> str | None:
+        return None if value is None else validate_display_name(value)
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "UpdateAdminUserRequest":
+        if not self.model_fields_set:
+            raise ValueError("at least one field must be supplied")
+        if "display_name" in self.model_fields_set and self.display_name is None:
+            raise ValueError("display_name must be a string")
+        if "is_active" in self.model_fields_set and self.is_active is None:
+            raise ValueError("is_active must be a boolean")
+        return self
+
+
+class ResetPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class AssignMatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: int | None = Field(default=None, gt=0)
+
+
+class UpdateBodyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=0)
+    body: str = Field(max_length=100_000)
 
 
 class THUFootballCredentialsRequest(BaseModel):

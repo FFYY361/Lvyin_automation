@@ -1,4 +1,4 @@
-"""Repeatable Stage 2 API smoke test against real PostgreSQL."""
+"""Repeatable Stage 4 API smoke test against real PostgreSQL."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def main() -> int:
                 session_factory=factory,
                 external_factories=ExternalFactories(wechat=lambda: fake_wechat),
             )
-            with TestClient(app) as client:
+            with TestClient(app) as client, TestClient(app) as user_client:
                 login = client.post(
                     "/api/auth/login",
                     json={
@@ -154,10 +154,42 @@ def main() -> int:
                     },
                 )
                 login.raise_for_status()
+                registered = user_client.post(
+                    "/api/auth/register",
+                    json={
+                        "username": "smoke-user",
+                        "display_name": "Smoke User",
+                        "password": "smoke-user-password",
+                    },
+                )
+                registered.raise_for_status()
+                client.post(
+                    f"/api/preview-batches/{batch_id}/open-tasks"
+                ).raise_for_status()
+                waiting = user_client.get("/api/tasks/wait_claim")
+                waiting.raise_for_status()
+                assert len(waiting.json()["items"]) == 1
+                claim = user_client.post("/api/preview-matches/990000001/claim")
+                claim.raise_for_status()
+                version = claim.json()["match"]["body_version"]
+                saved = user_client.patch(
+                    "/api/preview-matches/990000001/body",
+                    json={
+                        "expected_version": version,
+                        "body": "Stage 4 smoke body.",
+                    },
+                )
+                saved.raise_for_status()
+                assert len(user_client.get("/api/me/tasks").json()["items"]) == 1
+                assert user_client.get("/api/preview-batches").status_code == 200
+                assert (
+                    user_client.get(f"/api/preview-batches/{batch_id}").status_code
+                    == 200
+                )
                 rendered = client.post(f"/api/preview-batches/{batch_id}/render")
                 rendered.raise_for_status()
                 article_id = rendered.json()["article"]["id"]
-                preview = client.get(f"/api/articles/{article_id}/preview")
+                preview = user_client.get(f"/api/articles/{article_id}/preview")
                 preview.raise_for_status()
                 dry_run = client.post(
                     "/api/wechat-drafts",
@@ -175,7 +207,7 @@ def main() -> int:
                 batch = client.get(f"/api/preview-batches/{batch_id}")
                 batch.raise_for_status()
                 assert batch.json()["status"] == "drafted"
-            print("Stage 2 PostgreSQL API smoke test passed")
+            print("Stage 4 PostgreSQL API smoke test passed")
             return 0
         finally:
             if "engine" in locals():
