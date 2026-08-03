@@ -1,4 +1,4 @@
-"""FastAPI application for the Stage 2 administrator workflow."""
+"""FastAPI application for the website workflow."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ from typing import Any
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import case, select, update
+from sqlalchemy import case, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -25,7 +26,13 @@ from thufootball import (
     THUFootballQueryService,
 )
 
-from .auth import get_session, require_admin, verify_password
+from .auth import (
+    get_session,
+    hash_password,
+    require_admin,
+    require_user,
+    verify_password,
+)
 from .config import DEFAULT_ENV_FILE, PROJECT_ROOT, WebsiteSettings
 from .credentials import activate_credentials, credential_status, persist_credentials
 from .database import create_database_engine, create_session_factory
@@ -38,16 +45,23 @@ from .models import (
     WechatDraft,
 )
 from .schemas import (
+    AssignMatchRequest,
     BatchStatus,
+    ChangePasswordRequest,
     CompetitionValue,
     CoverMediaIdRequest,
     CreateBatchesRequest,
     CreateWechatDraftRequest,
     EditorialRequest,
     LoginRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
     THUFootballCredentialsRequest,
+    UpdateAdminUserRequest,
     UpdateBatchRequest,
+    UpdateBodyRequest,
     UpdateMatchRequest,
+    UpdateSelfRequest,
     WeatherRequest,
 )
 from .workflow import (
@@ -80,6 +94,105 @@ def _user_payload(user: User) -> dict[str, Any]:
         "role": user.role,
         "is_active": user.is_active,
     }
+
+
+def _user_summary_payload(user: User) -> dict[str, Any]:
+    return {"id": user.id, "display_name": user.display_name}
+
+
+def _admin_user_payload(user: User, claimed_task_count: int) -> dict[str, Any]:
+    return {
+        **_user_payload(user),
+        "created_at": user.created_at.isoformat(),
+        "updated_at": user.updated_at.isoformat(),
+        "claimed_task_count": claimed_task_count,
+    }
+
+
+def _set_login_session(request: Request, user: User) -> None:
+    request.session.clear()
+    request.session["user_id"] = user.id
+    request.session["auth_version"] = user.auth_version
+
+
+def _task_rows(session: Session, *conditions: Any) -> list[tuple[PreviewMatch, PreviewBatch]]:
+    return list(
+        session.execute(
+            select(PreviewMatch, PreviewBatch)
+            .join(PreviewBatch, PreviewBatch.id == PreviewMatch.batch_id)
+            .where(*conditions)
+            .order_by(PreviewMatch.kickoff, PreviewMatch.game_id)
+        )
+    )
+
+
+def _task_payload(match: PreviewMatch, batch: PreviewBatch) -> dict[str, Any]:
+    return {**match_payload(match), "competition": batch.competition}
+
+
+def _match_content_payload(match: PreviewMatch) -> dict[str, Any]:
+    return {
+        "game_id": match.game_id,
+        "writers": match.writers,
+        "body": match.body,
+        "body_version": match.body_version,
+    }
+
+
+def _body_version_conflict(match: PreviewMatch | None) -> WorkflowError:
+    return WorkflowError(
+        409,
+        "body_version_conflict",
+        "preview match was updated",
+        details={
+            "body_version": match.body_version if match else None,
+            "writers": match.writers if match else [],
+            "body": match.body if match else "",
+        },
+    )
+
+
+def _invalidate_match_batch(session: Session, match: PreviewMatch) -> None:
+    batch = session.get(PreviewBatch, match.batch_id)
+    if batch is not None:
+        batch.current_article_id = None
+        batch.updated_at = datetime.now(UTC)
+
+
+def _save_match_content(
+    session: Session,
+    match: PreviewMatch,
+    *,
+    expected_version: int,
+    writers: list[str],
+    body: str,
+) -> dict[str, Any]:
+    if match.body_version != expected_version:
+        raise _body_version_conflict(match)
+    normalized_body = body.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if writers == match.writers and normalized_body == match.body:
+        return _match_content_payload(match)
+    result = session.execute(
+        update(PreviewMatch)
+        .where(
+            PreviewMatch.game_id == match.game_id,
+            PreviewMatch.body_version == expected_version,
+        )
+        .values(
+            writers=writers,
+            body=normalized_body,
+            body_version=PreviewMatch.body_version + 1,
+            updated_at=datetime.now(UTC),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        session.rollback()
+        raise _body_version_conflict(session.get(PreviewMatch, match.game_id))
+    _invalidate_match_batch(session, match)
+    session.commit()
+    session.refresh(match)
+    return _match_content_payload(match)
 
 
 def create_app(
@@ -128,7 +241,7 @@ def create_app(
 
     app = FastAPI(
         title="清华绿茵前瞻管理 API",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings
@@ -170,8 +283,33 @@ def create_app(
             or not verify_password(user.password_hash, payload.password)
         ):
             raise HTTPException(401, "invalid username or password")
-        request.session.clear()
-        request.session["user_id"] = user.id
+        _set_login_session(request, user)
+        return _user_payload(user)
+
+    @app.post("/api/auth/register", status_code=201)
+    def register(
+        payload: RegisterRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        user = User(
+            username=payload.username,
+            display_name=payload.display_name,
+            password_hash=hash_password(payload.password),
+            role="user",
+        )
+        session.add(user)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise WorkflowError(
+                409,
+                "username_exists",
+                "username already exists",
+            ) from exc
+        session.refresh(user)
+        _set_login_session(request, user)
         return _user_payload(user)
 
     @app.post("/api/auth/logout", status_code=204)
@@ -180,8 +318,138 @@ def create_app(
         return Response(status_code=204)
 
     @app.get("/api/auth/me")
-    def me(user: User = Depends(require_admin)) -> dict[str, Any]:
+    def me(user: User = Depends(require_user)) -> dict[str, Any]:
         return _user_payload(user)
+
+    @app.patch("/api/auth/me")
+    def update_me(
+        payload: UpdateSelfRequest,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        if user.display_name != payload.display_name:
+            user.display_name = payload.display_name
+            user.updated_at = datetime.now(UTC)
+            session.commit()
+            session.refresh(user)
+        return _user_payload(user)
+
+    @app.post("/api/auth/change-password", status_code=204)
+    def change_password(
+        payload: ChangePasswordRequest,
+        request: Request,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> Response:
+        if not verify_password(user.password_hash, payload.current_password):
+            raise WorkflowError(
+                400,
+                "invalid_current_password",
+                "current password is invalid",
+            )
+        user.password_hash = hash_password(payload.new_password)
+        user.auth_version += 1
+        user.updated_at = datetime.now(UTC)
+        session.commit()
+        _set_login_session(request, user)
+        return Response(status_code=204)
+
+    @app.get("/api/admin/users")
+    def list_users(
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        counts = {
+            user_id: count
+            for user_id, count in session.execute(
+                select(
+                    PreviewMatch.claimed_by_user_id,
+                    func.count(PreviewMatch.game_id),
+                )
+                .where(PreviewMatch.claimed_by_user_id.is_not(None))
+                .group_by(PreviewMatch.claimed_by_user_id)
+            )
+        }
+        users = session.scalars(select(User).order_by(User.created_at, User.id))
+        return {
+            "items": [
+                _admin_user_payload(user, counts.get(user.id, 0)) for user in users
+            ]
+        }
+
+    @app.get("/api/admin/users/{user_id}")
+    def get_user_summary(
+        user_id: int,
+        _: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        user = session.get(User, user_id)
+        if user is None:
+            raise _not_found("user")
+        return _user_summary_payload(user)
+
+    @app.patch("/api/admin/users/{user_id}")
+    def update_user(
+        user_id: int,
+        payload: UpdateAdminUserRequest,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        user = session.get(User, user_id)
+        if user is None:
+            raise _not_found("user")
+        if user.role == "admin":
+            raise WorkflowError(
+                403,
+                "administrator_account_protected",
+                "administrator accounts cannot be modified here",
+            )
+        changed = False
+        if (
+            "display_name" in payload.model_fields_set
+            and user.display_name != payload.display_name
+        ):
+            user.display_name = payload.display_name or ""
+            changed = True
+        if (
+            "is_active" in payload.model_fields_set
+            and user.is_active != payload.is_active
+        ):
+            user.is_active = bool(payload.is_active)
+            user.auth_version += 1
+            changed = True
+        if changed:
+            user.updated_at = datetime.now(UTC)
+            session.commit()
+            session.refresh(user)
+        claimed_task_count = session.scalar(
+            select(func.count(PreviewMatch.game_id)).where(
+                PreviewMatch.claimed_by_user_id == user.id
+            )
+        )
+        return _admin_user_payload(user, claimed_task_count or 0)
+
+    @app.post("/api/admin/users/{user_id}/reset-password", status_code=204)
+    def reset_user_password(
+        user_id: int,
+        payload: ResetPasswordRequest,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> Response:
+        user = session.get(User, user_id)
+        if user is None:
+            raise _not_found("user")
+        if user.role == "admin":
+            raise WorkflowError(
+                403,
+                "administrator_account_protected",
+                "administrator passwords cannot be reset here",
+            )
+        user.password_hash = hash_password(payload.new_password)
+        user.auth_version += 1
+        user.updated_at = datetime.now(UTC)
+        session.commit()
+        return Response(status_code=204)
 
     @app.get("/api/settings/thufootball-credentials")
     async def get_thufootball_credentials(
@@ -270,7 +538,7 @@ def create_app(
         preview_date: date | None = None,
         competition: CompetitionValue | None = None,
         status: BatchStatus | None = None,
-        _: User = Depends(require_admin),
+        _: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         statement = select(PreviewBatch).order_by(
@@ -293,7 +561,7 @@ def create_app(
     @app.get("/api/preview-batches/{batch_id}")
     def get_preview_batch(
         batch_id: int,
-        _: User = Depends(require_admin),
+        _: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         batch = session.get(PreviewBatch, batch_id)
@@ -428,29 +696,203 @@ def create_app(
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        rows = session.execute(
-            select(
-                PreviewMatch,
-                PreviewBatch.preview_date,
-                PreviewBatch.competition,
-            )
-            .join(PreviewBatch, PreviewBatch.id == PreviewMatch.batch_id)
-            .where(
-                PreviewMatch.active.is_(True),
-                PreviewMatch.task_open.is_(True),
-            )
-            .order_by(PreviewMatch.kickoff, PreviewMatch.game_id)
+        rows = _task_rows(
+            session,
+            PreviewMatch.active.is_(True),
+            PreviewMatch.task_open.is_(True),
         )
         return {
             "items": [
                 {
-                    **match_payload(match),
-                    "preview_date": preview_date.isoformat(),
-                    "competition": competition,
+                    **_task_payload(match, batch),
+                    "preview_date": batch.preview_date.isoformat(),
                 }
-                for match, preview_date, competition in rows
+                for match, batch in rows
             ]
         }
+
+    @app.get("/api/tasks/open")
+    def list_open_tasks(
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        rows = _task_rows(
+            session,
+            PreviewMatch.active.is_(True),
+            PreviewMatch.task_open.is_(True),
+        )
+        return {"items": [_task_payload(match, batch) for match, batch in rows]}
+
+    @app.get("/api/tasks/wait_claim")
+    def list_waiting_tasks(
+        _: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        rows = _task_rows(
+            session,
+            PreviewMatch.active.is_(True),
+            PreviewMatch.task_open.is_(True),
+            PreviewMatch.claimed_by_user_id.is_(None),
+        )
+        return {"items": [_task_payload(match, batch) for match, batch in rows]}
+
+    @app.get("/api/me/tasks")
+    def list_my_tasks(
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        rows = _task_rows(
+            session,
+            PreviewMatch.claimed_by_user_id == user.id,
+        )
+        return {"items": [_task_payload(match, batch) for match, batch in rows]}
+
+    @app.post("/api/preview-matches/{game_id}/claim")
+    def claim_preview_match(
+        game_id: int,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        current = session.get(PreviewMatch, game_id)
+        if current is None:
+            raise _not_found("preview match")
+        if current.claimed_by_user_id == user.id:
+            batch = session.get(PreviewBatch, current.batch_id)
+            return {
+                "reused": True,
+                "match": _task_payload(current, batch),
+            }
+        if not current.active or not current.task_open:
+            raise WorkflowError(
+                409,
+                "task_unavailable",
+                "preview match is not available for claiming",
+            )
+        result = session.execute(
+            update(PreviewMatch)
+            .where(
+                PreviewMatch.game_id == game_id,
+                PreviewMatch.active.is_(True),
+                PreviewMatch.task_open.is_(True),
+                PreviewMatch.claimed_by_user_id.is_(None),
+            )
+            .values(
+                claimed_by_user_id=user.id,
+                writers=[user.display_name],
+                body_version=PreviewMatch.body_version + 1,
+                updated_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            session.rollback()
+            latest = session.get(PreviewMatch, game_id)
+            if latest is not None and latest.claimed_by_user_id == user.id:
+                batch = session.get(PreviewBatch, latest.batch_id)
+                return {"reused": True, "match": _task_payload(latest, batch)}
+            if latest is None:
+                raise _not_found("preview match")
+            if latest.claimed_by_user_id is not None:
+                raise WorkflowError(
+                    409,
+                    "task_claimed",
+                    "preview match has already been claimed",
+                    details={"claimed_by_user_id": latest.claimed_by_user_id},
+                )
+            raise WorkflowError(
+                409,
+                "task_unavailable",
+                "preview match is not available for claiming",
+            )
+        _invalidate_match_batch(session, current)
+        session.commit()
+        session.refresh(current)
+        batch = session.get(PreviewBatch, current.batch_id)
+        return {"reused": False, "match": _task_payload(current, batch)}
+
+    @app.post("/api/preview-matches/{game_id}/release")
+    def release_preview_match(
+        game_id: int,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        current = session.get(PreviewMatch, game_id)
+        if current is None:
+            raise _not_found("preview match")
+        claimed_by_user_id = current.claimed_by_user_id
+        if claimed_by_user_id is None:
+            raise WorkflowError(409, "task_not_claimed", "preview match is not claimed")
+        if user.role != "admin" and claimed_by_user_id != user.id:
+            raise WorkflowError(
+                403,
+                "not_claim_owner",
+                "preview match is claimed by another user",
+            )
+        result = session.execute(
+            update(PreviewMatch)
+            .where(
+                PreviewMatch.game_id == game_id,
+                PreviewMatch.claimed_by_user_id == claimed_by_user_id,
+            )
+            .values(
+                claimed_by_user_id=None,
+                writers=[],
+                body_version=PreviewMatch.body_version + 1,
+                updated_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            session.rollback()
+            raise WorkflowError(409, "task_changed", "preview match claim changed")
+        _invalidate_match_batch(session, current)
+        session.commit()
+        session.refresh(current)
+        batch = session.get(PreviewBatch, current.batch_id)
+        return _task_payload(current, batch)
+
+    @app.post("/api/preview-matches/{game_id}/assign")
+    def assign_preview_match(
+        game_id: int,
+        payload: AssignMatchRequest,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        current = session.get(PreviewMatch, game_id)
+        if current is None:
+            raise _not_found("preview match")
+        target = None if payload.user_id is None else session.get(User, payload.user_id)
+        if payload.user_id is not None and (
+            target is None
+            or not target.is_active
+            or target.role not in {"user", "admin"}
+        ):
+            raise WorkflowError(
+                409,
+                "invalid_assignment_target",
+                "assignment target must be an active user",
+            )
+        target_id = target.id if target is not None else None
+        writers = [target.display_name] if target is not None else []
+        if current.claimed_by_user_id == target_id and current.writers == writers:
+            batch = session.get(PreviewBatch, current.batch_id)
+            return _task_payload(current, batch)
+        session.execute(
+            update(PreviewMatch)
+            .where(PreviewMatch.game_id == game_id)
+            .values(
+                claimed_by_user_id=target_id,
+                writers=writers,
+                body_version=PreviewMatch.body_version + 1,
+                updated_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        _invalidate_match_batch(session, current)
+        session.commit()
+        session.refresh(current)
+        batch = session.get(PreviewBatch, current.batch_id)
+        return _task_payload(current, batch)
 
     @app.patch("/api/preview-matches/{game_id}")
     def update_preview_match(
@@ -462,60 +904,39 @@ def create_app(
         current = session.get(PreviewMatch, game_id)
         if current is None:
             raise _not_found("preview match")
-        if current.body_version != payload.expected_version:
-            raise WorkflowError(
-                409,
-                "body_version_conflict",
-                "preview match was updated",
-                details={
-                    "body_version": current.body_version,
-                    "writers": current.writers,
-                    "body": current.body,
-                },
-            )
         writers = current.writers if payload.writers is None else payload.writers
-        body = current.body if payload.body is None else payload.body.replace("\r\n", "\n").replace("\r", "\n").strip()
-        if writers == current.writers and body == current.body:
-            return {"game_id": current.game_id, "writers": current.writers, "body": current.body, "body_version": current.body_version}
-        result = session.execute(
-            update(PreviewMatch)
-            .where(
-                PreviewMatch.game_id == game_id,
-                PreviewMatch.body_version == payload.expected_version,
-            )
-            .values(
-                writers=writers,
-                body=body,
-                body_version=PreviewMatch.body_version + 1,
-                updated_at=datetime.now(UTC),
-            )
-            .execution_options(synchronize_session=False)
+        body = current.body if payload.body is None else payload.body
+        return _save_match_content(
+            session,
+            current,
+            expected_version=payload.expected_version,
+            writers=writers,
+            body=body,
         )
-        if result.rowcount != 1:
-            session.rollback()
-            latest = session.get(PreviewMatch, game_id)
+
+    @app.patch("/api/preview-matches/{game_id}/body")
+    def update_preview_match_body(
+        game_id: int,
+        payload: UpdateBodyRequest,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        current = session.get(PreviewMatch, game_id)
+        if current is None:
+            raise _not_found("preview match")
+        if user.role != "admin" and current.claimed_by_user_id != user.id:
             raise WorkflowError(
-                409,
-                "body_version_conflict",
-                "preview match was updated",
-                details={
-                    "body_version": latest.body_version if latest else None,
-                    "writers": latest.writers if latest else [],
-                    "body": latest.body if latest else "",
-                },
+                403,
+                "not_claim_owner",
+                "preview match is claimed by another user",
             )
-        batch = session.get(PreviewBatch, current.batch_id)
-        if batch is not None:
-            batch.current_article_id = None
-            batch.updated_at = datetime.now(UTC)
-        session.commit()
-        session.refresh(current)
-        return {
-            "game_id": current.game_id,
-            "writers": current.writers,
-            "body": current.body,
-            "body_version": current.body_version,
-        }
+        return _save_match_content(
+            session,
+            current,
+            expected_version=payload.expected_version,
+            writers=current.writers,
+            body=payload.body,
+        )
 
     @app.put("/api/weather/{target_date}")
     def put_weather(
@@ -582,7 +1003,7 @@ def create_app(
     @app.get("/api/articles/{article_id}")
     def get_article(
         article_id: int,
-        _: User = Depends(require_admin),
+        _: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         record = session.get(ArticleRecord, article_id)
@@ -594,7 +1015,7 @@ def create_app(
     @app.get("/api/articles/{article_id}/preview", response_class=HTMLResponse)
     def preview_article(
         article_id: int,
-        _: User = Depends(require_admin),
+        _: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> HTMLResponse:
         record = session.get(ArticleRecord, article_id)

@@ -109,7 +109,8 @@
 | `username` | `VARCHAR(64)` NOT NULL UNIQUE |
 | `display_name` | `VARCHAR(100)` NOT NULL |
 | `password_hash` | `TEXT` NOT NULL |
-| `role` | `VARCHAR(16)` NOT NULL，`admin` 或 `writer` |
+| `role` | `VARCHAR(16)` NOT NULL，`admin` 或 `user` |
+| `auth_version` | `INTEGER` NOT NULL DEFAULT 0，必须非负 |
 | `is_active` | `BOOLEAN` NOT NULL DEFAULT true |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` NOT NULL |
 
@@ -335,37 +336,55 @@ Stage 2 的全部操作。
 
 ### 目标
 
-在管理员闭环稳定后，加入写作者账号、权限和单场比赛认领，使多人可以安全协作。
+在管理员闭环稳定后，加入普通用户账号、权限和单场比赛认领，使多人可以安全协作。管理员继承全部普通用户权限。
+
+### 数据库
+
+- 不新增表；任务继续使用 `preview_matches`。
+- `users` 新增非负的 `auth_version INTEGER NOT NULL DEFAULT 0`，角色约束改为
+  `role IN ('user', 'admin')`。当前数据库没有普通用户数据，迁移不转换角色值。
+- `preview_matches` 已有 `claimed_by_user_id`、`writers`、`body` 和
+  `body_version`，不新增列或索引。
 
 ### 账号与权限
 
-- 写作者通过公开注册接口自行创建账号，注册成功后固定为 `writer`。
-- 用户名沿用 Stage 2 契约：不自动 trim、区分大小写、禁止任何空白字符，数据库
-  保证完全相同的用户名全局唯一；重复用户名返回 HTTP 409。
-- 管理员可以查询、禁用和重置 writer 账号，但不是创建账号的唯一入口。
-- `admin` 可以管理全部批次、任务、署名、正文、文章和草稿。
-- `writer` 可以查看已开放任务、认领一场比赛、编辑自己的正文和查看相关预览。
-- writer 不能修改天气、标题、编辑人员、封面、其他人的正文或创建微信草稿。
-- 管理员可以释放、转交认领并修改最终署名。
+- `require_user` 校验签名 Cookie 中的 `user_id`、`auth_version`、启用状态以及
+  `user/admin` 角色；`require_admin` 在其上继续校验管理员角色。
+- `POST /api/auth/register` 公开注册固定角色为 `user` 的账号并自动登录；用户名
+  不 trim、区分大小写、禁止空白，重复用户名返回 409。
+- `PATCH /api/auth/me` 允许所有有效用户修改自己的显示名称；不回写已有署名。
+- `POST /api/auth/change-password` 修改本人密码并使其他旧会话失效。
+- 管理员通过 `GET /api/admin/users`、`PATCH /api/admin/users/{id}` 和
+  `POST /api/admin/users/{id}/reset-password` 管理普通用户。列表不返回密码哈希或
+  会话版本。
+- `GET /api/admin/users/{id}` 对所有有效用户开放，只返回 `id` 和
+  `display_name`，用于按认领人 ID 获取展示名称。
+- `GET /api/preview-batches`、`GET /api/preview-batches/{id}`、文章 JSON 和 HTML
+  预览对所有有效用户只读开放；批次写操作、渲染和微信草稿仍只限管理员。
 
-### 用户和认领 API
+### 任务 API
 
-- `POST /api/auth/register`：输入用户名、显示名称和密码，自助注册 writer。
-- `GET /api/admin/users`：查询用户。
-- `PATCH /api/admin/users/{id}`：修改显示名称或启用状态。
-- `POST /api/admin/users/{id}/reset-password`：重置密码。
-- `GET /api/tasks/open`：writer 查看可领取比赛。
-- `POST /api/preview-matches/{game_id}/claim`：原子认领。
-- `POST /api/preview-matches/{game_id}/release`：用户释放自己的认领。
-- `POST /api/preview-matches/{game_id}/assign`：管理员转交或释放。
-- `PATCH /api/preview-matches/{game_id}/body`：认领人或管理员保存正文。
-- `GET /api/me/tasks`：查看本人已认领任务。
+- `GET /api/tasks/open` 只限管理员，返回全部 `active AND task_open` 比赛。
+- `GET /api/tasks/wait_claim` 对所有有效用户开放，返回
+  `active AND task_open AND claimed_by_user_id IS NULL` 比赛。
+- `GET /api/me/tasks` 返回本人全部认领，包括已关闭或失效的比赛。
+- 新任务列表复用比赛 payload，只额外返回 Batch 的稳定 `competition` 值；不返回
+  `preview_date`、`current_article_id` 或重复的认领人对象。
+- `POST /api/preview-matches/{game_id}/claim` 原子认领；成功时署名替换为当前用户
+  显示名称，正文保留，版本递增并使 Article 过期。
+- `POST /api/preview-matches/{game_id}/release` 普通用户只能释放本人任务，管理员
+  可释放任意任务；释放清空认领人和署名，保留正文并递增版本。
+- `POST /api/preview-matches/{game_id}/assign` 由管理员转交给任意启用账号或释放；
+  自动更新署名、保留正文并递增版本。
+- `PATCH /api/preview-matches/{game_id}/body` 由认领人或管理员保存正文并携带
+  `expected_version`；认领人保存时不要求比赛仍有效或开放。
 
 ### 认领规则
 
 - 一场比赛只能有一个认领用户；并发认领只能一人成功，其他请求返回 409。
-- 认领时默认署名为用户 display name。
-- 认领人和署名分离；管理员可将署名改为多位作者而不改变认领人。
+- 同一用户重复认领按幂等成功；管理员可以调用全部普通用户接口。
+- 认领时署名替换为用户 display name；释放时清空署名；转交时替换为目标用户
+  display name。三者均保留正文、递增版本并使当前 Article 过期。
 - 正文手动保存并带 `expected_version`。
 - 不增加提交、审核或锁稿状态；正文非空即可视为已填写，管理员随时可以渲染。
 - 关闭待领取状态后禁止新的认领，但不删除已有认领和正文。
@@ -374,7 +393,8 @@ Stage 2 的全部操作。
 
 - 服务端执行角色和资源归属校验，不能只靠前端隐藏按钮。
 - 密码哈希、签名 HttpOnly Cookie、输入校验、上传类型和大小限制继续保留。
-- 自助注册不允许指定 role，管理员账号仍只通过本地初始化方式创建。
+- 自助注册不允许指定 role，管理员账号仍只通过本地初始化方式创建。密码重置、
+  本人改密或启用状态切换会递增 `auth_version`，立即失效旧 Cookie。
 - 不增加邀请码、邮箱验证、验证码、复杂组织架构、审批流、OAuth 或企业级审计
   平台。
 - 测试重点覆盖并发重复注册、用户名大小写与空白规范化、权限矩阵、并发认领、
@@ -384,7 +404,7 @@ Stage 2 的全部操作。
 
 ### 用户前端
 
-- 注册 writer 账号、登录和修改密码。
+- 注册普通用户账号、登录和修改密码。
 - 查看可领取任务，并按日期、赛事筛选。
 - 原子认领并看到失败原因。
 - 查看自己的任务和比赛只读数据。
@@ -413,7 +433,7 @@ Stage 2 的全部操作。
 ### 最终验收
 
 - 管理员可以批量创建日期赛事组合、发布任务、编辑和生成微信草稿。
-- 多位 writer 可以自行注册、登录、领取不同比赛并保存正文。
+- 多位普通用户可以自行注册、登录、领取不同比赛并保存正文。
 - 并发认领、越权修改和正文版本冲突均得到明确处理。
 - PostgreSQL 是唯一业务数据源；管理员上传的 covers 不是全部可重建数据，必须
   和 PostgreSQL 一起备份。

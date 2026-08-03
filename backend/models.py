@@ -32,7 +32,8 @@ from .database import Base
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'writer')", name="ck_users_role"),
+        CheckConstraint("role IN ('admin', 'user')", name="ck_users_role"),
+        CheckConstraint("auth_version >= 0", name="ck_users_auth_version"),
         CheckConstraint(
             "length(username) BETWEEN 1 AND 64 "
             "AND username !~ '[[:space:]]'",
@@ -44,8 +45,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(String(16), nullable=False, default="admin")
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    auth_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -1,4 +1,4 @@
-"""Password and current-admin helpers."""
+"""Password and current-user helpers."""
 
 from __future__ import annotations
 
@@ -31,17 +31,27 @@ def get_session(request: Request):
         yield session
 
 
-def require_admin(
+def require_user(
     request: Request,
     session: Session = Depends(get_session),
 ) -> User:
     user_id = request.session.get("user_id")
-    if not isinstance(user_id, int):
+    auth_version = request.session.get("auth_version")
+    if not isinstance(user_id, int) or not isinstance(auth_version, int):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     user = session.get(User, user_id)
-    if user is None or not user.is_active:
+    if (
+        user is None
+        or not user.is_active
+        or user.auth_version != auth_version
+        or user.role not in {"user", "admin"}
+    ):
         request.session.clear()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    return user
+
+
+def require_admin(user: User = Depends(require_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "administrator role required")
     return user

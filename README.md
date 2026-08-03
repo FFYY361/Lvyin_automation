@@ -47,6 +47,8 @@ Stage 2 管理员后端的启动、`/docs` 闭环和 smoke test 见
 [管理员后端操作手册](docs/website/stages/admin_backend.md)。
 Stage 3 管理网站的开发、构建和页面闭环见
 [管理员前端操作手册](docs/website/stages/admin_frontend.md)。
+Stage 4 普通用户、权限、任务认领和正文协作后端见
+[用户协作后端操作手册](docs/website/stages/collaboration_backend.md)。
 
 ## 自动化前瞻 auto_preview
 
