@@ -517,8 +517,22 @@ def _validate_played_match(match: PlayedMatch, path: str, *, stage: str) -> None
         raise _error(path, "点球比分必须同时提供主队和客队得分", stage=stage)
     if match.home_penalty is not None and match.home_score is None:
         raise _error(path, "点球比分需要同时提供常规比分", stage=stage)
-    if match.result_text is None and match.home_score is None:
-        raise _error(path, "必须提供完整比分或 result_text", stage=stage)
+    if match.home_score is None:
+        raise _error(path, "完赛记录必须提供完整比分", stage=stage)
+    from .template import format_result_text
+
+    expected_result_text = format_result_text(
+        match.home_score,
+        match.away_score,
+        match.home_penalty,
+        match.away_penalty,
+    )
+    if match.result_text is not None and match.result_text != expected_result_text:
+        raise _error(
+            f"{path}.result_text",
+            "必须与结构化比分一致",
+            stage=stage,
+        )
     for field in ("home_score", "away_score", "home_penalty", "away_penalty"):
         value = getattr(match, field)
         if value is not None and (

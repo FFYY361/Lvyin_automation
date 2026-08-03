@@ -23,7 +23,7 @@ preview render templates/qhly_preview_v1/template.html `
   --output tmp/qhly_preview_v1/article
 ```
 
-source 必须符合 `schema.json`，未知字段会被拒绝。每场文案位于顶层 `previews`，键为 `主队简称 vs 客队简称`，并通过 `article_file` 引用同目录 `previews/主队简称vs客队简称.md`。Markdown 文件可直接粘贴多段纯文本，以空白行分段，不允许注入 HTML。天气和人员分别从显式传入的 weather/config 文件加载。weather 顶层以日期为键，每项必须恰好包含 `condition`、`low_c`、`high_c`、`wind_direction`、`wind_level`；五项必须全部有值或全部为 `null`。模板语法、字段校验和文章目录格式见 [前瞻模板与渲染教程](../../docs/preview/preview_template_tutorial.md)。
+source 必须符合 `schema.json`，未知字段会被拒绝。每场文案位于顶层 `previews`，键为 `主队简称 vs 客队简称`，并通过 `article_file` 引用同目录 `previews/主队简称vs客队简称.md`。Markdown 文件可直接粘贴多段纯文本，一个或多个换行都表示分段，段前空格自动去除，不允许注入 HTML。天气和人员分别从显式传入的 weather/config 文件加载。weather 顶层以日期为键，每项必须恰好包含 `condition`、`low_c`、`high_c`、`wind_direction`、`wind_level`；五项必须全部有值或全部为 `null`。模板语法、字段校验和文章目录格式见 [前瞻模板与渲染教程](../../docs/preview/preview_template_tutorial.md)。
 
 顶部赛程表通过 `venue_short_name` 格式化器缩写场地：紫荆/西区/东区足球场分别显示为“紫操/西操/东操”，紫荆与西区的南北侧场地显示为“紫南/紫北/西南/西北”。映射表位于 `src/preview/template.py` 的 `VENUE_SHORT_NAMES`；未配置名称原样显示，比赛详情仍保留场地全称。
 

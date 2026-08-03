@@ -39,6 +39,7 @@ from backend.workflow import (
     assemble_source,
     batch_status,
     create_wechat_draft,
+    match_payload,
     render_batch,
     save_batch_cover,
     set_batch_cover_media_id,
@@ -413,6 +414,88 @@ def test_article_media_id_sha_is_checked(
             article_domain(settings, article)
 
 
+def test_batch_exposes_latest_stale_article_and_preview_omits_referrer(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    with session_factory.begin() as session:
+        session.add(
+            User(
+                username="PreviewAdmin",
+                display_name="Preview Admin",
+                password_hash=hash_password("password-123"),
+                role="admin",
+            )
+        )
+        batch = _batch(session, complete=True, game_id=9211)
+        article, _ = render_batch(session, settings, batch)
+        article_id = article.id
+        batch_id = batch.id
+        set_batch_cover_media_id(batch, "new-cover")
+        never_rendered = _batch(
+            session,
+            target_date=date(2026, 8, 10),
+            competition="male",
+            complete=False,
+        )
+        never_rendered_id = never_rendered.id
+
+    app = create_app(settings=settings, session_factory=session_factory)
+    with TestClient(app) as client:
+        client.post(
+            "/api/auth/login",
+            json={"username": "PreviewAdmin", "password": "password-123"},
+        ).raise_for_status()
+
+        stale = client.get(f"/api/preview-batches/{batch_id}")
+        stale.raise_for_status()
+        assert stale.json()["current_article_id"] is None
+        assert stale.json()["latest_article_id"] == article_id
+
+        empty = client.get(f"/api/preview-batches/{never_rendered_id}")
+        empty.raise_for_status()
+        assert empty.json()["current_article_id"] is None
+        assert empty.json()["latest_article_id"] is None
+
+        preview = client.get(f"/api/articles/{article_id}/preview")
+        preview.raise_for_status()
+        assert preview.headers["referrer-policy"] == "no-referrer"
+
+        draft = client.post(
+            "/api/wechat-drafts",
+            json={"article_ids": [article_id], "confirm": False},
+        )
+        assert draft.status_code == 409
+        assert draft.json()["error"]["code"] == "article_stale"
+
+
+def test_match_payload_fills_legacy_result_text_without_mutating_snapshot(
+    session_factory,
+) -> None:
+    with session_factory.begin() as session:
+        _batch(session, complete=True, game_id=9221)
+        match = session.get(PreviewMatch, 9221)
+        assert match is not None
+        legacy_result = {
+            "game_id": 8001,
+            "home": {"team_id": 1, "name": "主队", "short_name": "主队"},
+            "away": {"team_id": 2, "name": "客队", "short_name": "客队"},
+            "home_score": 1,
+            "away_score": 1,
+            "home_penalty": 5,
+            "away_penalty": 4,
+        }
+        match.home_snapshot = {
+            **match.home_snapshot,
+            "current_results": [legacy_result],
+        }
+
+        payload = match_payload(match)
+
+        assert payload["home"]["current_results"][0]["result_text"] == "1(5):1(4)"
+        assert "result_text" not in legacy_result
+
+
 def test_uploaded_cover_is_content_addressed_and_checked(
     session_factory,
     settings: WebsiteSettings,
@@ -566,7 +649,7 @@ def test_login_case_sensitivity_and_body_version_conflict(
         assert too_many.status_code == 422
 
 
-def test_batch_list_uses_business_competition_order(
+def test_batch_list_uses_descending_dates_and_business_competition_order(
     session_factory,
     settings: WebsiteSettings,
 ) -> None:
@@ -579,16 +662,17 @@ def test_batch_list_uses_business_competition_order(
                 role="admin",
             )
         )
-        for competition in ("futsal", "female", "male"):
-            session.add(
-                PreviewBatch(
-                    preview_date=date(2026, 8, 20),
-                    competition=competition,
-                    cover_kind="media_id",
-                    cover_storage_key="website-default-cover",
-                    cover_content_type=None,
+        for target_date in (date(2026, 8, 19), date(2026, 8, 20)):
+            for competition in ("futsal", "female", "male"):
+                session.add(
+                    PreviewBatch(
+                        preview_date=target_date,
+                        competition=competition,
+                        cover_kind="media_id",
+                        cover_storage_key="website-default-cover",
+                        cover_content_type=None,
+                    )
                 )
-            )
     app = create_app(settings=settings, session_factory=session_factory)
     with TestClient(app) as client:
         client.post(
@@ -597,10 +681,16 @@ def test_batch_list_uses_business_competition_order(
         ).raise_for_status()
         response = client.get("/api/preview-batches")
         response.raise_for_status()
-        assert [item["competition"] for item in response.json()["items"]] == [
-            "male",
-            "female",
-            "futsal",
+        assert [
+            (item["preview_date"], item["competition"])
+            for item in response.json()["items"]
+        ] == [
+            ("2026-08-20", "male"),
+            ("2026-08-20", "female"),
+            ("2026-08-20", "futsal"),
+            ("2026-08-19", "male"),
+            ("2026-08-19", "female"),
+            ("2026-08-19", "futsal"),
         ]
 
 
@@ -923,3 +1013,26 @@ def test_task_endpoints_toggle_all_active_matches_without_request_body(
         match = session.get(PreviewMatch, 9401)
         assert match is not None
         assert match.task_open is False
+
+
+def test_built_frontend_is_mounted_after_api_routes(
+    session_factory,
+    settings: WebsiteSettings,
+    tmp_path: Path,
+) -> None:
+    frontend_dist = tmp_path / "frontend-dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text(
+        '<!doctype html><div id="root">frontend</div>',
+        encoding="utf-8",
+    )
+    app = create_app(
+        settings=settings,
+        session_factory=session_factory,
+        frontend_dist=frontend_dist,
+    )
+
+    with TestClient(app) as client:
+        assert "frontend" in client.get("/").text
+        assert client.get("/api/auth/me").status_code == 401
+        assert "Swagger UI" in client.get("/docs").text

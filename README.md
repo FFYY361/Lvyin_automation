@@ -45,6 +45,8 @@ wechat-official --help
 [网站 PostgreSQL 开发环境](docs/website/stages/postgresql_development.md)。
 Stage 2 管理员后端的启动、`/docs` 闭环和 smoke test 见
 [管理员后端操作手册](docs/website/stages/admin_backend.md)。
+Stage 3 管理网站的开发、构建和页面闭环见
+[管理员前端操作手册](docs/website/stages/admin_frontend.md)。
 
 ## 自动化前瞻 auto_preview
 
@@ -104,7 +106,7 @@ result = await pipeline.run(request)
 }
 ```
 
-data 阶段按“主队简称vs客队简称”自动生成 Markdown 文件名，不含空格，例如 `集电vs美院.md`。直接在文件中粘贴多段正文即可；一个或多个空白行表示分段，内容始终按纯文本转义，不解析 Markdown HTML。
+data 阶段按“主队简称vs客队简称”自动生成 Markdown 文件名，不含空格，例如 `集电vs美院.md`。直接在文件中粘贴多段正文即可；一个或多个换行都表示分段，段前空格自动去除，内容始终按纯文本转义，不解析 Markdown HTML。
 
 不传封面时，若配置了 `WEBSITE_DEFAULT_COVER_MEDIA_ID`，会直接复用该公众号
 永久素材，不再重复上传默认图片；未配置时仍使用随包提供的
