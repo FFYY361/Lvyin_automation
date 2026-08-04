@@ -38,7 +38,9 @@ preview --help
 wechat-official --help
 ```
 
-需要在 `./.env` 中配置 THUFootball、天气和公众号所需凭证，格式见 `./.env.example`，注意保密。
+网站后端通过 `TAFA_USERNAME`、`TAFA_PASSWORD` 自动取得 THUFootball 凭据；CLI
+仍可直接使用 `THUFOOTBALL_OPENID`、`THUFOOTBALL_SESSION_KEY`。天气和公众号等
+配置格式见 `./.env.example`，注意保密。
 
 网站开发按独立阶段推进。PostgreSQL、SQLAlchemy 和 Alembic 的 Stage 1
 环境准备与排错步骤见

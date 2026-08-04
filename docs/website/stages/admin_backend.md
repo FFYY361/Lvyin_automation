@@ -10,6 +10,8 @@
 ```dotenv
 THUFOOTBALL_OPENID=
 THUFOOTBALL_SESSION_KEY=
+TAFA_USERNAME=足联网站登录邮箱
+TAFA_PASSWORD=足联网站登录密码
 AMAP_WEATHER_API_KEY=
 WECHAT_APP_ID=
 WECHAT_APP_SECRET=
@@ -53,6 +55,12 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ## 3. `/docs` 闭环顺序
 
 ### 更新 THUFootball 凭据
+
+后端启动时会使用 `TAFA_USERNAME`、`TAFA_PASSWORD` 登录足联网站，从
+`ref_db_new.php` 读取并验证 `OPENID`、`SESSION_KEY`，随后更新当前进程环境。
+THUFootball 拒绝凭据时会自动获取并重试两次。自动获取只更新当前进程，
+不会写入 `.env`；只有下方手动设置接口会同时更新 `.env`。两次均失败时，请使用手动
+方式更新；现有设置接口和前端设置页面继续保留。
 
 `THUFOOTBALL_OPENID` 和 `THUFOOTBALL_SESSION_KEY` 会过期。网站运行期间不要只修改
 `.env`：运行中的进程不会自动重新读取该文件。请在已经登录 TAFA 的

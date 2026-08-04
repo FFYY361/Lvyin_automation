@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -21,11 +22,19 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 import backend.api as backend_api
+import backend.credentials as backend_credentials
 from backend.api import create_app
 from backend.artifacts import resolve_storage_key
 from backend.auth import hash_password
 from backend.config import WebsiteSettings, load_env_file
-from backend.credentials import persist_credentials
+from backend.credentials import (
+    MANUAL_CREDENTIAL_HINT,
+    AutomaticCredentialError,
+    AutomaticCredentialManager,
+    AutoRefreshingTHUFootballClient,
+    fetch_tafa_credentials,
+    persist_credentials,
+)
 from backend.models import (
     Base,
     PreviewBatch,
@@ -48,10 +57,16 @@ from backend.workflow import (
     set_manual_weather,
     upsert_source,
 )
-from thufootball import UserProbe
+from thufootball import AuthenticationError, UserProbe
 from wechat_official import CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
+
+
+@pytest.fixture(autouse=True)
+def clear_tafa_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("TAFA_USERNAME", raising=False)
+    monkeypatch.delenv("TAFA_PASSWORD", raising=False)
 
 
 @pytest.fixture(scope="session")
@@ -714,6 +729,183 @@ def test_persist_credentials_preserves_other_dotenv_content(tmp_path: Path) -> N
     assert "THUFOOTBALL_SESSION_KEY=new-session\r\n" in content
     assert "old-openid" not in content
     assert "old-session" not in content
+
+
+def test_fetch_tafa_credentials_logs_in_and_extracts_values() -> None:
+    requests: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.method == "GET" and request.url.path.endswith("login.php"):
+            return httpx.Response(200, text='<form id="flogin"></form>')
+        if request.method == "POST" and request.url.path.endswith("login.php"):
+            assert b"username=user%40example.com" in request.content
+            assert b"password=secret" in request.content
+            return httpx.Response(200, text="logged in")
+        return httpx.Response(
+            200,
+            text=(
+                '<script>var USER_OPENID = "new-openid";\n'
+                'var USER_SESSION_KEY = "new-session";</script>'
+            ),
+        )
+
+    async def scenario() -> tuple[str, str]:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=True
+        ) as client:
+            return await fetch_tafa_credentials(
+                "user@example.com", "secret", http_client=client
+            )
+
+    assert asyncio.run(scenario()) == ("new-openid", "new-session")
+    assert requests == [
+        ("GET", "/member/login.php"),
+        ("POST", "/member/login.php"),
+        ("GET", "/member/ref_db_new.php"),
+    ]
+
+
+def test_automatic_refresh_updates_runtime_without_writing_env(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "THUFOOTBALL_OPENID=manual-openid\n"
+        "THUFOOTBALL_SESSION_KEY=manual-session\n",
+        encoding="utf-8",
+    )
+
+    async def fetch(_username: str, _password: str) -> tuple[str, str]:
+        return "automatic-openid", "automatic-session"
+
+    class Validator:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_user_info(self) -> UserProbe:
+            return UserProbe(user_registered=True)
+
+    monkeypatch.setattr(backend_credentials, "THUFootballClient", Validator)
+    manager = AutomaticCredentialManager(
+        "user@example.com", "secret", fetcher=fetch
+    )
+
+    assert asyncio.run(manager.refresh()) == (
+        "automatic-openid",
+        "automatic-session",
+    )
+    assert os.environ["THUFOOTBALL_OPENID"] == "automatic-openid"
+    assert os.environ["THUFOOTBALL_SESSION_KEY"] == "automatic-session"
+    assert env_path.read_text(encoding="utf-8") == (
+        "THUFOOTBALL_OPENID=manual-openid\n"
+        "THUFOOTBALL_SESSION_KEY=manual-session\n"
+    )
+
+
+def test_auto_refreshing_client_retries_authentication_twice() -> None:
+    seen_credentials: list[tuple[str | None, str | None]] = []
+    refreshed = iter(
+        [("first-openid", "first-session"), ("second-openid", "second-session")]
+    )
+    refresh_count = 0
+
+    async def refresh() -> tuple[str, str]:
+        nonlocal refresh_count
+        refresh_count += 1
+        return next(refreshed)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        credentials = (
+            request.url.params.get("openid"),
+            request.url.params.get("session_key"),
+        )
+        seen_credentials.append(credentials)
+        return httpx.Response(
+            200,
+            json={
+                "success": credentials == ("second-openid", "second-session"),
+                "user_registered": True,
+                "info": "invalid session credential",
+            },
+            request=request,
+        )
+
+    async def scenario() -> UserProbe:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            async with AutoRefreshingTHUFootballClient(
+                openid="old-openid",
+                session_key="old-session",
+                load_environment=False,
+                http_client=http,
+                credential_refresher=refresh,
+                authentication_retries=2,
+            ) as client:
+                return await client.get_user_info()
+
+    assert asyncio.run(scenario()).user_registered is True
+    assert refresh_count == 2
+    assert seen_credentials == [
+        ("old-openid", "old-session"),
+        ("first-openid", "first-session"),
+        ("second-openid", "second-session"),
+    ]
+
+
+def test_auto_refreshing_client_points_to_manual_fallback_after_failures() -> None:
+    refresh_count = 0
+
+    async def refresh() -> tuple[str, str]:
+        nonlocal refresh_count
+        refresh_count += 1
+        raise AutomaticCredentialError("TAFA unavailable")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, request=request)
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = AutoRefreshingTHUFootballClient(
+                openid="old-openid",
+                session_key="old-session",
+                load_environment=False,
+                http_client=http,
+                credential_refresher=refresh,
+                authentication_retries=2,
+            )
+            with pytest.raises(AuthenticationError, match=MANUAL_CREDENTIAL_HINT):
+                await client.get_user_info()
+
+    asyncio.run(scenario())
+    assert refresh_count == 2
+
+
+def test_app_refreshes_automatic_credentials_at_startup(
+    settings: WebsiteSettings,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def refresh(_manager) -> tuple[str, str]:
+        calls.append("refresh")
+        return "startup-openid", "startup-session"
+
+    monkeypatch.setenv("TAFA_USERNAME", "user@example.com")
+    monkeypatch.setenv("TAFA_PASSWORD", "secret")
+    monkeypatch.setattr(backend_api.AutomaticCredentialManager, "refresh", refresh)
+    app = create_app(settings=settings, session_factory=lambda: None)
+
+    with TestClient(app):
+        pass
+
+    assert calls == ["refresh"]
 
 
 class _FakeCredentialClient:
