@@ -1398,10 +1398,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [])
         self.assertEqual(peak, 4)
 
-    async def test_batch_failure_has_failed_tournament_ids(self) -> None:
+    async def test_batch_failure_uses_first_failed_tournament_message(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             tournament_id = int(request.url.params["tourn_id"])
             if tournament_id == 2:
+                return httpx.Response(401, request=request)
+            if tournament_id == 3:
                 return httpx.Response(
                     200,
                     json={"success": False, "info": "resource unavailable"},
@@ -1417,10 +1419,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(BatchQueryError) as h2h_caught:
                 await service.query_team_to_team_matches(101, 202, [1, 2, 3])
 
-        self.assertEqual(caught.exception.failed_tournament_ids, (2,))
-        self.assertIsInstance(caught.exception.failures[2], InvalidResponse)
-        self.assertEqual(h2h_caught.exception.failed_tournament_ids, (2,))
-        self.assertIsInstance(h2h_caught.exception.failures[2], InvalidResponse)
+        self.assertEqual(caught.exception.failed_tournament_ids, (2, 3))
+        self.assertIsInstance(caught.exception.failures[2], AuthenticationError)
+        self.assertIsInstance(caught.exception.failures[3], InvalidResponse)
+        self.assertEqual(str(caught.exception), "GetTournInfo rejected the current credentials")
+        self.assertEqual(h2h_caught.exception.failed_tournament_ids, (2, 3))
+        self.assertEqual(str(h2h_caught.exception), "GetTournInfo rejected the current credentials")
 
     async def test_single_failure_is_not_wrapped(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:

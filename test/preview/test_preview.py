@@ -647,7 +647,14 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
             rendered.body_html.count("margin:0 0 .6em;text-indent:2em"),
             5,
         )
-        self.assertEqual(rendered.body_html.count("width:33%"), 2)
+        self.assertEqual(rendered.body_html.count("width:58%"), 2)
+        self.assertEqual(
+            rendered.body_html.count(
+                "color:#000;font-size:19px;line-height:1.2;"
+                "margin:10px 24px 0;text-align:left"
+            ),
+            2,
+        )
         self.assertEqual(
             rendered.body_html.count(
                 '<section style="width:100%"><p style="margin:0;word-break:break-all"'
@@ -656,7 +663,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         )
         self.assertEqual(
             rendered.body_html.count(
-                "color:#000;margin-left:auto;text-align:right;width:100%"
+                "margin-left:auto;text-align:right;width:100%"
             ),
             1,
         )

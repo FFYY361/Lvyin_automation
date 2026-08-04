@@ -5,8 +5,19 @@ export interface User {
   id: number;
   username: string;
   display_name: string;
-  role: "admin" | "writer";
+  role: "admin" | "user";
   is_active: boolean;
+}
+
+export interface UserSummary {
+  id: number;
+  display_name: string;
+}
+
+export interface AdminUser extends User {
+  created_at: string;
+  updated_at: string;
+  claimed_task_count: number;
 }
 
 export interface ApiErrorDetails {
@@ -88,6 +99,10 @@ export interface PreviewMatch {
   body: string;
   body_version: number;
   updated_at: string;
+}
+
+export interface TaskMatch extends PreviewMatch {
+  competition: Competition;
 }
 
 export interface PreviewBatch {

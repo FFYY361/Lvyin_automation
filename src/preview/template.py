@@ -360,7 +360,7 @@ def _paragraph_margin(value: bool) -> str:
 def _team_name_width(value: str) -> str:
     if not isinstance(value, str):
         raise TypeError("team_name_width 需要球队名称")
-    return "33%" if len(value.strip()) >= 14 else "100%"
+    return "58%" if len(value.strip()) >= 14 else "100%"
 
 
 _FILTERS = {

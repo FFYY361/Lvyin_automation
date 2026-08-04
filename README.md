@@ -49,6 +49,8 @@ Stage 3 管理网站的开发、构建和页面闭环见
 [管理员前端操作手册](docs/website/stages/admin_frontend.md)。
 Stage 4 普通用户、权限、任务认领和正文协作后端见
 [用户协作后端操作手册](docs/website/stages/collaboration_backend.md)。
+Stage 5 普通用户前端、任务中心、管理员用户管理和响应式页面见
+[协作前端操作手册](docs/website/stages/collaboration_frontend.md)。
 
 ## 自动化前瞻 auto_preview
 

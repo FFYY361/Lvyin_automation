@@ -2,14 +2,16 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ChevronRight, CloudSun, FileImage, FileText, Save, Send, Users } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { api, errorMessage, jsonBody } from "../api";
+import { useAuth } from "../auth";
+import { useClaimantNames } from "../claimants";
 import { Alert, Badge, Button, EmptyState, Field, LoadingScreen, NameInput, PageHeader, Panel, SectionTitle } from "../components";
 import { competitionLabels, labelMissingField, statusLabels, type PreviewBatch, type PreviewMatch, type Weather } from "../types";
 import { formatDateTime, matchTaskStatus, namesText, parseNames, teamName } from "../utils";
 
-function MatchCard({ batchId, match }: { batchId: number; match: PreviewMatch }) {
+function MatchCard({ batchId, match, claimantName, canEnter }: { batchId: number; match: PreviewMatch; claimantName: string; canEnter: boolean }) {
   const status = matchTaskStatus(match);
-  return (
-    <Link className="match-card" to={`/batches/${batchId}/matches/${match.game_id}`}>
+  const content = (
+    <>
       <div className="match-card__heading">
         <span>{match.competition_name} · {match.stage}</span>
         <Badge tone={status.tone}>{status.label}</Badge>
@@ -18,13 +20,19 @@ function MatchCard({ batchId, match }: { batchId: number; match: PreviewMatch })
       <div className="match-card__meta">
         <span>{formatDateTime(match.kickoff)}</span>
         <span>{match.venue}</span>
+        <span>认领人：<strong>{claimantName}</strong></span>
       </div>
-      <ChevronRight className="match-card__arrow" size={18} aria-hidden />
-    </Link>
+      {canEnter ? <ChevronRight className="match-card__arrow" size={18} aria-hidden /> : null}
+    </>
   );
+  return canEnter
+    ? <Link className="match-card" to={`/batches/${batchId}/matches/${match.game_id}`}>{content}</Link>
+    : <article className="match-card match-card--readonly">{content}</article>;
 }
 
 export function BatchDetailPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const { batchId } = useParams();
   const [batch, setBatch] = useState<PreviewBatch | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +112,8 @@ export function BatchDetailPage() {
     void run("cover-media", () => api(`/api/preview-batches/${batchId}/cover-media-id`, { method: "PUT", ...jsonBody({ media_id: mediaId }) }), "永久素材封面已更新");
   };
 
+  const claimantNames = useClaimantNames((batch?.matches ?? []).map((match) => match.claimed_by_user_id));
+
   if (loading && !batch) return <LoadingScreen label="正在读取批次详情" />;
   if (!batch) return <><PageHeader title="批次详情" /><Alert tone="danger">{error || "批次不存在"}</Alert></>;
   const matches = batch.matches ?? [];
@@ -120,24 +130,23 @@ export function BatchDetailPage() {
         <div><span>开放任务</span><strong>{openCount}/{activeMatches.length}</strong></div>
       </div>
       {batch.last_error ? <Alert tone="warning"><strong>{batch.last_error.code}</strong>{batch.last_error.message}<span>{formatDateTime(batch.last_error.at)}</span></Alert> : null}
-      {batch.missing_fields.length ? <Panel className="missing-panel"><SectionTitle title="完整性缺项" description="这些状态由后端实时计算。" /><div className="chip-list">{batch.missing_fields.map((item) => <Badge tone="warning" key={item}>{labelMissingField(item, batch.matches ?? [])}</Badge>)}</div></Panel> : <Alert tone="success">当前内容完整，可以渲染并加入微信草稿。</Alert>}
+      {batch.missing_fields.length ? <Panel className="missing-panel"><SectionTitle title="完整性缺项" description="这些状态由后端实时计算。" /><div className="chip-list">{batch.missing_fields.map((item) => <Badge tone="warning" key={item}>{labelMissingField(item, batch.matches ?? [])}</Badge>)}</div></Panel> : <Alert tone="success">{isAdmin ? "当前内容完整，可以渲染并加入微信草稿。" : "当前批次内容完整。"}</Alert>}
 
-      <Panel className="headline-panel">
+      {isAdmin ? <Panel className="headline-panel">
         <SectionTitle title="文章标题" description="标题是文章的主要信息，修改后需要重新渲染文章。" actions={<FileText size={20} />} />
         <form className="headline-form" onSubmit={saveHeadline}>
           <Field label="标题内容" htmlFor="batch-headline"><input id="batch-headline" className="headline-input" value={headline} maxLength={200} placeholder="填写本批次的文章标题" onChange={(event) => setHeadline(event.target.value)} /></Field>
           <Button variant="primary" loading={action === "headline"} type="submit"><Save size={16} />保存标题</Button>
         </form>
-      </Panel>
+      </Panel> : null}
 
       <Panel className="matches-overview-panel">
         <SectionTitle title="比赛" description={`${matches.length} 场比赛，当前开放 ${openCount}/${activeMatches.length} 场有效比赛。`} actions={<Send size={20} />} />
-        {!matches.length ? <EmptyState title="当前没有比赛" description="可以返回批次列表重新查询数据。" /> : <div className="match-card-list">{matches.map((match) => <MatchCard key={match.game_id} batchId={batch.id} match={match} />)}</div>}
-        <p className="panel-copy">开放或关闭操作会一次作用于当前批次的全部有效比赛，不影响已填写的正文。</p>
-        <div className="button-row"><Button variant="primary" loading={action === "open"} onClick={() => void run("open", () => api(`/api/preview-batches/${batch.id}/open-tasks`, { method: "POST" }), "已开放全部有效比赛")}>开放全部任务</Button><Button loading={action === "close"} onClick={() => void run("close", () => api(`/api/preview-batches/${batch.id}/close-tasks`, { method: "POST" }), "已关闭全部有效比赛")}>关闭全部任务</Button></div>
+        {!matches.length ? <EmptyState title="当前没有比赛" description={isAdmin ? "可以返回批次列表重新查询数据。" : "该批次暂时没有比赛。"} /> : <div className="match-card-list">{matches.map((match) => <MatchCard key={match.game_id} batchId={batch.id} match={match} claimantName={match.claimed_by_user_id === null ? "未认领" : match.claimed_by_user_id === user?.id ? user.display_name : claimantNames[match.claimed_by_user_id] ?? "读取中…"} canEnter={isAdmin || match.claimed_by_user_id === user?.id} />)}</div>}
+        {isAdmin ? <><p className="panel-copy">开放或关闭操作会一次作用于当前批次的全部有效比赛，不影响已填写的正文。</p><div className="button-row"><Button variant="primary" loading={action === "open"} onClick={() => void run("open", () => api(`/api/preview-batches/${batch.id}/open-tasks`, { method: "POST" }), "已开放全部有效比赛")}>开放全部任务</Button><Button loading={action === "close"} onClick={() => void run("close", () => api(`/api/preview-batches/${batch.id}/close-tasks`, { method: "POST" }), "已关闭全部有效比赛")}>关闭全部任务</Button></div></> : <p className="panel-copy">只有本人已认领的比赛可以进入编辑。</p>}
       </Panel>
 
-      <section className="admin-settings" aria-labelledby="admin-settings-title">
+      {isAdmin ? <section className="admin-settings" aria-labelledby="admin-settings-title">
         <div className="admin-settings__heading">
           <p className="eyebrow">ADMIN SETTINGS</p>
           <h2 id="admin-settings-title">管理设置</h2>
@@ -176,7 +185,7 @@ export function BatchDetailPage() {
             </form>
           </Panel>
         </div>
-      </section>
+      </section> : null}
     </>
   );
 }
