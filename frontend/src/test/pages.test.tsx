@@ -168,5 +168,7 @@ describe("article preview page", () => {
     expect(screen.getByText("已过期，仅供查看")).toBeInTheDocument();
     expect(screen.getByText("环境 vs 探微 · 作者")).toBeInTheDocument();
     expect(screen.getByTitle("文章预览")).toHaveAttribute("src", "/api/articles/44/preview");
+    expect(screen.getByRole("link", { name: "全屏预览" })).toHaveAttribute("href", "/api/articles/44/preview");
+    expect(screen.getByRole("link", { name: "全屏预览" })).toHaveAttribute("target", "_blank");
   });
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -34,7 +35,14 @@ from .auth import (
     verify_password,
 )
 from .config import DEFAULT_ENV_FILE, PROJECT_ROOT, WebsiteSettings
-from .credentials import activate_credentials, credential_status, persist_credentials
+from .credentials import (
+    AutomaticCredentialError,
+    AutomaticCredentialManager,
+    AutoRefreshingTHUFootballClient,
+    activate_credentials,
+    credential_status,
+    persist_credentials,
+)
 from .database import create_database_engine, create_session_factory
 from .models import (
     ArticleRecord,
@@ -80,6 +88,8 @@ from .workflow import (
     set_manual_weather,
     weather_payload,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _not_found(name: str) -> HTTPException:
@@ -208,13 +218,25 @@ def create_app(
     if session_factory is None:
         engine = create_database_engine(resolved_settings.database_url)
         session_factory = create_session_factory(engine)
+    resolved_credential_env_path = Path(credential_env_path)
+    automatic_credentials = AutomaticCredentialManager.from_environment()
+
     @asynccontextmanager
     async def process_environment_queries():
-        async with THUFootballClient(
-            openid=os.environ.get("THUFOOTBALL_OPENID") or None,
-            session_key=os.environ.get("THUFOOTBALL_SESSION_KEY") or None,
-            load_environment=False,
-        ) as client:
+        client_options: dict[str, Any] = {
+            "openid": os.environ.get("THUFOOTBALL_OPENID") or None,
+            "session_key": os.environ.get("THUFOOTBALL_SESSION_KEY") or None,
+            "load_environment": False,
+        }
+        if automatic_credentials.configured:
+            client = AutoRefreshingTHUFootballClient(
+                **client_options,
+                credential_refresher=automatic_credentials.refresh,
+                authentication_retries=2,
+            )
+        else:
+            client = THUFootballClient(**client_options)
+        async with client:
             async with THUFootballQueryService(client) as service:
                 yield service
 
@@ -230,11 +252,19 @@ def create_app(
                 yield service
 
     resolved_factories = replace(base_factories, queries=locked_queries)
-    resolved_credential_env_path = Path(credential_env_path)
     resolved_settings.artifact_root.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if automatic_credentials.configured:
+            try:
+                await automatic_credentials.refresh()
+            except AutomaticCredentialError as exc:
+                logger.warning(
+                    "Automatic THUFootball credential refresh failed at startup: %s. "
+                    "The server will remain available for manual credential updates.",
+                    exc,
+                )
         yield
         if engine is not None:
             engine.dispose()
@@ -248,6 +278,7 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.external_factories = resolved_factories
     app.state.thufootball_lock = thufootball_lock
+    app.state.automatic_credentials = automatic_credentials
     app.add_middleware(
         SessionMiddleware,
         secret_key=resolved_settings.cookie_secret,

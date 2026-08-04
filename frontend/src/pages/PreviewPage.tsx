@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, Maximize2, RefreshCw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { api, errorMessage } from "../api";
 import { useAuth } from "../auth";
@@ -69,7 +69,7 @@ export function PreviewPage() {
             {article.missing_fields.length ? <div className="missing-box"><strong>仍需补充</strong><div className="chip-list">{article.missing_fields.map((item) => <Badge tone="warning" key={item}>{labelMissingField(item, snapshotMatches)}</Badge>)}</div></div> : null}
           </Panel>
           <Panel className="article-frame-panel">
-            <SectionTitle title="最终效果" description="以下内容由后端模板直接生成。" />
+            <SectionTitle title="最终效果" description="以下内容由后端模板直接生成。" actions={<a className="button button--quiet" href={`/api/articles/${article.id}/preview`} target="_blank" rel="noreferrer"><Maximize2 size={15} />全屏预览</a>} />
             <iframe className="article-frame" title="文章预览" src={`/api/articles/${article.id}/preview`} />
           </Panel>
         </div>
