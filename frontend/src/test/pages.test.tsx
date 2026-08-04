@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { AuthProvider } from "../auth";
 import { BatchDetailPage } from "../pages/BatchDetailPage";
 import { MatchPage } from "../pages/MatchPage";
 import { PreviewPage } from "../pages/PreviewPage";
-import type { Article, PreviewBatch } from "../types";
+import type { Article, PreviewBatch, User } from "../types";
+
+const admin: User = { id: 99, username: "admin", display_name: "管理员", role: "admin", is_active: true };
 
 const batch: PreviewBatch = {
   id: 1,
@@ -63,7 +66,7 @@ function json(value: unknown) {
 
 function renderRoute(path: string, routePath: string, element: React.ReactNode) {
   const router = createMemoryRouter([{ path: routePath, element }], { initialEntries: [path] });
-  render(<RouterProvider router={router} />);
+  render(<AuthProvider initialUser={admin}><RouterProvider router={router} /></AuthProvider>);
 }
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });

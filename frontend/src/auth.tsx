@@ -6,16 +6,19 @@ interface AuthContextValue {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<User>;
+  register: (username: string, displayName: string, password: string) => Promise<User>;
+  updateProfile: (displayName: string) => Promise<User>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+export function AuthProvider({ children, initialUser }: { children: ReactNode; initialUser?: User }) {
+  const [user, setUser] = useState<User | null>(initialUser ?? null);
+  const [loading, setLoading] = useState(!initialUser);
 
   useEffect(() => {
+    if (initialUser) return;
     let active = true;
     api<User>("/api/auth/me")
       .then((value) => active && setUser(value))
@@ -27,7 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active = false;
       window.removeEventListener("auth:expired", expired);
     };
-  }, []);
+  }, [initialUser]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -37,6 +40,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const result = await api<User>("/api/auth/login", {
           method: "POST",
           ...jsonBody({ username, password }),
+        });
+        setUser(result);
+        return result;
+      },
+      register: async (username, displayName, password) => {
+        const result = await api<User>("/api/auth/register", {
+          method: "POST",
+          ...jsonBody({ username, display_name: displayName, password }),
+        });
+        setUser(result);
+        return result;
+      },
+      updateProfile: async (displayName) => {
+        const result = await api<User>("/api/auth/me", {
+          method: "PATCH",
+          ...jsonBody({ display_name: displayName }),
         });
         setUser(result);
         return result;

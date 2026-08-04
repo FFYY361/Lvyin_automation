@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight, Save } from "lucide-react";
 import { Link, useBlocker, useParams } from "react-router-dom";
 import { ApiError, api, errorMessage, jsonBody } from "../api";
+import { useAuth } from "../auth";
 import { Alert, Badge, Button, Field, LoadingScreen, Modal, NameInput, PageHeader, Panel, SectionTitle } from "../components";
 import { competitionLabels, type PlayedMatchSnapshot, type PreviewBatch, type PreviewMatch, type SeasonOutcomeSnapshot } from "../types";
 import { formatDateTime, formatPlayedMatch, formatSeasonOutcome, matchTaskStatus, namesText, parseNames, teamName } from "../utils";
@@ -14,6 +15,8 @@ function HistoryList({ values, empty, render }: { values: Array<PlayedMatchSnaps
 }
 
 export function MatchPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const { batchId, gameId } = useParams();
   const [batch, setBatch] = useState<PreviewBatch | null>(null);
   const [match, setMatch] = useState<PreviewMatch | null>(null);
@@ -27,8 +30,9 @@ export function MatchPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictValue | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
   const parsedWriters = useMemo(() => parseNames(writers), [writers]);
-  const dirty = body !== baseBody || JSON.stringify(parsedWriters) !== JSON.stringify(baseWriters);
+  const dirty = body !== baseBody || (isAdmin && JSON.stringify(parsedWriters) !== JSON.stringify(baseWriters));
   const blocker = useBlocker(dirty);
 
   const applyMatch = useCallback((value: PreviewMatch) => {
@@ -50,7 +54,11 @@ export function MatchPage() {
       if (!selected) {
         setMatch(null);
         setError("该比赛不属于当前批次，或比赛数据已不存在。");
+      } else if (!isAdmin && selected.claimed_by_user_id !== user?.id) {
+        setMatch(null); setAccessDenied(true);
+        setError("普通用户只能进入本人已经认领的比赛。");
       } else {
+        setAccessDenied(false);
         applyMatch(selected);
       }
     } catch (value) {
@@ -58,7 +66,7 @@ export function MatchPage() {
     } finally {
       setLoading(false);
     }
-  }, [applyMatch, batchId, gameId]);
+  }, [applyMatch, batchId, gameId, isAdmin, user?.id]);
 
   useEffect(() => { document.title = "比赛写作 · 前瞻管理"; void load(); }, [load]);
   useEffect(() => {
@@ -71,7 +79,7 @@ export function MatchPage() {
     if (!match) return;
     setSaving(true); setError(null); setSuccess(null);
     try {
-      const result = await api<{ game_id: number; writers: string[]; body: string; body_version: number }>(`/api/preview-matches/${match.game_id}`, { method: "PATCH", ...jsonBody({ expected_version: version, writers: parsedWriters, body }) });
+      const result = await api<{ game_id: number; writers: string[]; body: string; body_version: number }>(`/api/preview-matches/${match.game_id}${isAdmin ? "" : "/body"}`, { method: "PATCH", ...jsonBody(isAdmin ? { expected_version: version, writers: parsedWriters, body } : { expected_version: version, body }) });
       setWriters(namesText(result.writers)); setBody(result.body); setBaseWriters(result.writers); setBaseBody(result.body); setVersion(result.body_version);
       setMatch({ ...match, writers: result.writers, body: result.body, body_version: result.body_version });
       setSuccess("正文与署名已保存。");
@@ -97,9 +105,9 @@ export function MatchPage() {
   };
 
   if (loading && !match) return <LoadingScreen label="正在读取比赛详情" />;
-  if (!batch || !match) return <><PageHeader title="比赛不存在" actions={batchId ? <Link className="button button--quiet" to={`/batches/${batchId}`}><ArrowLeft size={16} />返回批次</Link> : undefined} /><Alert tone="danger">{error || "无法读取比赛"}</Alert></>;
+  if (!batch || !match) return <><PageHeader title={accessDenied ? "无法进入比赛" : "比赛不存在"} actions={batchId ? <Link className="button button--quiet" to={`/batches/${batchId}`}><ArrowLeft size={16} />返回批次</Link> : undefined} /><Alert tone="danger">{error || "无法读取比赛"}</Alert></>;
 
-  const matches = batch.matches ?? [];
+  const matches = isAdmin ? batch.matches ?? [] : (batch.matches ?? []).filter((item) => item.claimed_by_user_id === user?.id);
   const index = matches.findIndex((item) => item.game_id === match.game_id);
   const previous = index > 0 ? matches[index - 1] : null;
   const next = index >= 0 && index < matches.length - 1 ? matches[index + 1] : null;
@@ -126,10 +134,10 @@ export function MatchPage() {
       <Panel className="match-writing-panel">
         <SectionTitle title="正文与署名" description="一个或多个换行都会分段，段前空格会自动去除。" />
         <div className="writer-grid">
-          <Field label="署名"><NameInput value={writers} onChange={setWriters} /></Field>
+          <Field label="署名" htmlFor="match-writers">{isAdmin ? <NameInput id="match-writers" value={writers} onChange={setWriters} /> : <input id="match-writers" value={writers} readOnly aria-readonly="true" />}</Field>
           <div className="version-display"><span>保存版本</span><strong>v{version}</strong>{dirty ? <Badge tone="warning">未保存</Badge> : <Badge tone="success">已保存</Badge>}</div>
         </div>
-        <Field label="前瞻正文"><textarea rows={14} value={body} onChange={(event) => setBody(event.target.value)} placeholder="粘贴或填写本场比赛的前瞻正文……" /></Field>
+        <Field label="前瞻正文" htmlFor="match-body"><textarea id="match-body" rows={14} value={body} onChange={(event) => setBody(event.target.value)} placeholder="粘贴或填写本场比赛的前瞻正文……" /></Field>
         <div className="editor-actions"><Button disabled={!dirty} onClick={() => { setWriters(namesText(baseWriters)); setBody(baseBody); }}>撤销修改</Button><Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}><Save size={16} />保存正文</Button></div>
       </Panel>
 
