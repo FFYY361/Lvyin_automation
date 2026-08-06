@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Check, GripVertical } from "lucide-react";
 import { api, errorMessage, jsonBody } from "../api";
 import { Alert, Badge, Button, EmptyState, LoadingScreen, Modal, PageHeader, Panel, SectionTitle } from "../components";
-import { competitionLabels, type Article, type DraftResponse, type PreviewBatch, type WechatDraft } from "../types";
+import { competitionLabels, type Article, type Competition, type DraftResponse, type WechatDraft } from "../types";
 import { formatDate, formatDateTime, moveItem } from "../utils";
 
-interface Candidate { batch: PreviewBatch; article: Article }
+interface Candidate { batch: { id: number; batch_date: string; competition: Competition }; article: Article }
 
 export function WechatDraftPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -16,14 +16,15 @@ export function WechatDraftPage() {
   const [preview, setPreview] = useState<Extract<DraftResponse, { status: "ready" }> | null>(null);
   const [result, setResult] = useState<{ status: "created" | "reused"; draft: WechatDraft } | null>(null);
   const [dragged, setDragged] = useState<number | null>(null);
+  const [articleType, setArticleType] = useState<"all" | "preview" | "report">("all");
 
   useEffect(() => {
     document.title = "微信草稿 · 前瞻管理";
-    api<{ items: PreviewBatch[] }>("/api/preview-batches").then(async ({ items }) => {
-      const withArticles = items.filter((item) => item.current_article_id).map(async (batch) => ({ batch, article: await api<Article>(`/api/articles/${batch.current_article_id}`) }));
-      const values = await Promise.all(withArticles);
-      setCandidates(values.filter(({ article }) => article.is_complete && article.is_current !== false));
-    }).catch((value) => setError(errorMessage(value))).finally(() => setLoading(false));
+    setLoading(true);
+    api<{ items: Candidate[] }>("/api/articles/candidates?article_type=all")
+      .then(({ items }) => setCandidates(items))
+      .catch((value) => setError(errorMessage(value)))
+      .finally(() => setLoading(false));
   }, []);
 
   const toggle = (id: number) => {
@@ -56,18 +57,21 @@ export function WechatDraftPage() {
   };
 
   const ordered = selected.map((id) => candidates.find(({ article }) => article.id === id)).filter(Boolean) as Candidate[];
+  const visibleCandidates = articleType === "all"
+    ? candidates
+    : candidates.filter(({ article }) => article.article_type === articleType);
   if (loading) return <LoadingScreen label="正在汇集可发布文章" />;
   return (
     <>
-      <PageHeader eyebrow="发布" title="创建微信草稿" description="选择当前完整文章，顺序即公众号头条与次条顺序。" actions={<Button variant="primary" loading={submitting} disabled={!selected.length} onClick={() => void validate()}>核对并继续</Button>} />
+      <PageHeader eyebrow="发布" title="创建微信草稿" description="选择当前完整文章，顺序即公众号头条与次条顺序。" actions={<><select aria-label="文章类型" value={articleType} onChange={(event) => setArticleType(event.target.value as typeof articleType)}><option value="all">全部文章</option><option value="preview">前瞻</option><option value="report">战报</option></select><Button variant="primary" loading={submitting} disabled={!selected.length} onClick={() => void validate()}>核对并继续</Button></>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {result ? <Alert tone="success"><strong>{result.status === "reused" ? "已复用已有草稿" : "微信草稿创建成功"}</strong><span className="result-media">media_id：<code>{result.draft.media_id}</code></span><span>微信回执时间：{formatDateTime(result.draft.wechat_created_at)}</span></Alert> : null}
       <div className="draft-layout">
         <Panel>
           <SectionTitle title="可选文章" description="仅显示每个批次当前且完整的文章。" />
-          {!candidates.length ? <EmptyState title="暂时没有完整文章" description="请先完善批次并渲染文章。" /> : <div className="candidate-list">{candidates.map(({ batch, article }) => {
+          {!visibleCandidates.length ? <EmptyState title="暂时没有完整文章" description="请先完善批次并渲染文章。" /> : <div className="candidate-list">{visibleCandidates.map(({ batch, article }) => {
             const checked = selected.includes(article.id);
-            return <label className="candidate-card" key={article.id}><input type="checkbox" checked={checked} disabled={!checked && selected.length >= 8} onChange={() => toggle(article.id)} /><div><strong>{article.title}</strong><span>{formatDate(batch.preview_date)} · {competitionLabels[batch.competition]} · v{article.version_number}</span></div>{checked ? <Check size={18} /> : null}</label>;
+            return <label className="candidate-card" key={article.id}><input type="checkbox" checked={checked} disabled={!checked && selected.length >= 8} onChange={() => toggle(article.id)} /><div><strong>{article.title}</strong><span>{article.article_type === "preview" ? "前瞻" : "战报"} · {formatDate(batch.batch_date)} · {competitionLabels[batch.competition]} · v{article.version_number}</span></div>{checked ? <Check size={18} /> : null}</label>;
           })}</div>}
         </Panel>
         <Panel>

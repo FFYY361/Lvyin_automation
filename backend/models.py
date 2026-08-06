@@ -58,29 +58,29 @@ class User(Base):
     )
 
 
-class PreviewBatch(Base):
-    __tablename__ = "preview_batches"
+class Batch(Base):
+    __tablename__ = "batches"
     __table_args__ = (
         UniqueConstraint(
-            "preview_date", "competition", name="uq_preview_batches_date_competition"
+            "batch_date", "competition", name="uq_batches_date_competition"
         ),
         CheckConstraint(
             "competition IN ('male', 'female', 'futsal')",
-            name="ck_preview_batches_competition",
+            name="ck_batches_competition",
         ),
         CheckConstraint(
             "cover_kind IN ('file', 'media_id')",
-            name="ck_preview_batches_cover_kind",
+            name="ck_batches_cover_kind",
         ),
         CheckConstraint(
             "(cover_kind = 'file' AND cover_content_type IS NOT NULL) OR "
             "(cover_kind = 'media_id' AND cover_content_type IS NULL)",
-            name="ck_preview_batches_cover_shape",
+            name="ck_batches_cover_shape",
         ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    preview_date: Mapped[date] = mapped_column(Date, nullable=False)
+    batch_date: Mapped[date] = mapped_column(Date, nullable=False)
     competition: Mapped[str] = mapped_column(String(16), nullable=False)
     headline: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     editors: Mapped[list[str]] = mapped_column(
@@ -95,11 +95,19 @@ class PreviewBatch(Base):
     cover_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     cover_storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     cover_content_type: Mapped[str | None] = mapped_column(String(64))
-    current_article_id: Mapped[int | None] = mapped_column(
+    current_preview_article_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey(
             "articles.id",
-            name="fk_preview_batches_current_article",
+            name="fk_batches_current_preview_article",
+            use_alter=True,
+        ),
+    )
+    current_report_article_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "articles.id",
+            name="fk_batches_current_report_article",
             use_alter=True,
         ),
     )
@@ -114,24 +122,36 @@ class PreviewBatch(Base):
     )
 
 
-class PreviewMatch(Base):
-    __tablename__ = "preview_matches"
+
+class Match(Base):
+    __tablename__ = "matches"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('scheduled', 'started', 'finished', 'unknown')",
+            name="ck_matches_status",
+        ),
+        CheckConstraint(
+            "(report_input_sha256 IS NULL AND report_storage_key IS NULL "
+            "AND report_content_sha256 IS NULL AND report_rendered_at IS NULL) OR "
+            "(report_input_sha256 IS NOT NULL AND report_storage_key IS NOT NULL "
+            "AND report_content_sha256 IS NOT NULL AND report_rendered_at IS NOT NULL)",
+            name="ck_matches_report_shape",
+        ),
         Index(
-            "ix_preview_matches_batch_active_kickoff",
+            "ix_matches_batch_active_kickoff",
             "batch_id",
             "active",
             "kickoff",
             "game_id",
         ),
         Index(
-            "ix_preview_matches_open_tasks",
+            "ix_matches_open_tasks",
             "kickoff",
             "game_id",
             postgresql_where=text("active AND task_open"),
         ),
         Index(
-            "ix_preview_matches_claimed",
+            "ix_matches_claimed",
             "claimed_by_user_id",
             "kickoff",
             "game_id",
@@ -143,7 +163,7 @@ class PreviewMatch(Base):
         BigInteger, primary_key=True, autoincrement=False
     )
     batch_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("preview_batches.id"), nullable=False
+        BigInteger, ForeignKey("batches.id"), nullable=False
     )
     tournament_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tournament_name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -166,6 +186,13 @@ class PreviewMatch(Base):
     )
     body: Mapped[str] = mapped_column(Text, nullable=False, default="")
     body_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unknown", server_default="unknown"
+    )
+    report_input_sha256: Mapped[str | None] = mapped_column(CHAR(64))
+    report_storage_key: Mapped[str | None] = mapped_column(Text)
+    report_content_sha256: Mapped[str | None] = mapped_column(CHAR(64))
+    report_rendered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -219,16 +246,29 @@ class EditorialDefaults(Base):
 class ArticleRecord(Base):
     __tablename__ = "articles"
     __table_args__ = (
-        UniqueConstraint("batch_id", "version_number", name="uq_articles_version"),
+        UniqueConstraint(
+            "batch_id", "article_type", "version_number", name="uq_articles_version"
+        ),
+        CheckConstraint(
+            "article_type IN ('preview', 'report')", name="ck_articles_type"
+        ),
         CheckConstraint(
             "cover_kind IN ('file', 'media_id')", name="ck_articles_cover_kind"
         ),
-        Index("ix_articles_batch_version", "batch_id", text("version_number DESC")),
+        Index(
+            "ix_articles_batch_type_version",
+            "batch_id",
+            "article_type",
+            text("version_number DESC"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     batch_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("preview_batches.id"), nullable=False
+        BigInteger, ForeignKey("batches.id"), nullable=False
+    )
+    article_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="preview", server_default="preview"
     )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

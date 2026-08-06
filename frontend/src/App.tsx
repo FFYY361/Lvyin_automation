@@ -11,13 +11,16 @@ import { LoginPage } from "./pages/LoginPage";
 import { MatchPage } from "./pages/MatchPage";
 import { PreviewPage } from "./pages/PreviewPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { ReportMatchPage } from "./pages/ReportMatchPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TasksPage } from "./pages/TasksPage";
 import { UsersPage } from "./pages/UsersPage";
 import { WechatDraftPage } from "./pages/WechatDraftPage";
 
 const adminNavigation = [
-  { to: "/batches", label: "批次管理", icon: Layers3 },
+  { to: "/previews", label: "前瞻批次", icon: Layers3 },
+  { to: "/reports", label: "战报批次", icon: FileText },
   { to: "/create", label: "创建批次", icon: CalendarPlus },
   { to: "/tasks", label: "任务中心", icon: ClipboardList },
   { to: "/wechat-drafts", label: "微信草稿", icon: FileText },
@@ -26,7 +29,8 @@ const adminNavigation = [
 ];
 const userNavigation = [
   { to: "/tasks", label: "任务中心", icon: ClipboardList },
-  { to: "/batches", label: "前瞻批次", icon: Layers3 },
+  { to: "/previews", label: "前瞻批次", icon: Layers3 },
+  { to: "/reports", label: "战报批次", icon: FileText },
   { to: "/account", label: "个人设置", icon: UserRound },
 ];
 
@@ -42,7 +46,7 @@ function ProtectedLayout() {
   return (
     <div className="app-shell">
       <aside className={cx("sidebar", menuOpen && "sidebar--open")}>
-        <div className="brand"><div className="brand__mark">P</div><div><strong>绿茵前瞻</strong><span>Preview Workspace</span></div><button className="icon-button sidebar__close" onClick={() => setMenuOpen(false)} aria-label="关闭导航"><X size={18} /></button></div>
+        <div className="brand"><div className="brand__mark">绿</div><div><strong>绿茵内容</strong><span>Content Workspace</span></div><button className="icon-button sidebar__close" onClick={() => setMenuOpen(false)} aria-label="关闭导航"><X size={18} /></button></div>
         <nav className="nav" aria-label="主导航">{navigation.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} onClick={() => setMenuOpen(false)} className={({ isActive }) => cx("nav__item", isActive && "nav__item--active")}><Icon size={18} aria-hidden />{label}</NavLink>)}</nav>
         <div className="sidebar__footer">
           <NavLink to="/account" className="user-card"><span className="user-card__avatar">{user.display_name.slice(0, 1)}</span><div><strong>{user.display_name}</strong><span>@{user.username} · {user.role === "admin" ? "管理员" : "普通用户"}</span></div></NavLink>
@@ -57,7 +61,7 @@ function ProtectedLayout() {
 
 function RoleHome() {
   const { user } = useAuth();
-  return <Navigate to={user?.role === "admin" ? "/batches" : "/tasks"} replace />;
+  return <Navigate to={user?.role === "admin" ? "/previews" : "/tasks"} replace />;
 }
 function AdminOnly({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -72,10 +76,13 @@ export const router = createHashRouter([
       { index: true, element: <RoleHome /> },
       { path: "tasks", element: <TasksPage /> },
       { path: "account", element: <AccountPage /> },
-      { path: "batches", element: <BatchesPage /> },
-      { path: "batches/:batchId", element: <BatchDetailPage /> },
-      { path: "batches/:batchId/matches/:gameId", element: <MatchPage /> },
-      { path: "batches/:batchId/preview", element: <PreviewPage /> },
+      { path: "previews", element: <BatchesPage /> },
+      { path: "previews/:batchId", element: <BatchDetailPage /> },
+      { path: "previews/:batchId/matches/:gameId", element: <MatchPage /> },
+      { path: "previews/:batchId/article", element: <PreviewPage /> },
+      { path: "reports", element: <ReportsPage /> },
+      { path: "reports/:batchId/matches/:gameId", element: <ReportMatchPage /> },
+      { path: "reports/:batchId/article", element: <PreviewPage articleType="report" /> },
       { path: "create", element: <AdminOnly><DashboardPage /></AdminOnly> },
       { path: "wechat-drafts", element: <AdminOnly><WechatDraftPage /></AdminOnly> },
       { path: "users", element: <AdminOnly><UsersPage /></AdminOnly> },

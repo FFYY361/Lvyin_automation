@@ -41,7 +41,7 @@ export function DashboardPage() {
     setError(null);
     setResults([]);
     try {
-      const response = await api<{ results: CreateBatchResult[] }>("/api/preview-batches/create", {
+      const response = await api<{ results: CreateBatchResult[] }>("/api/batches/create", {
         method: "POST",
         ...jsonBody({ dates, competitions: selectedCompetitions }),
       });
@@ -108,7 +108,7 @@ export function DashboardPage() {
       </div>
       {results.length ? (
         <Panel className="results-panel">
-          <SectionTitle title="创建结果" actions={<Link className="text-link" to="/batches">查看全部批次 <ArrowRight size={15} /></Link>} />
+          <SectionTitle title="创建结果" actions={<Link className="text-link" to="/previews">查看全部批次 <ArrowRight size={15} /></Link>} />
           <div className="result-grid">
             {results.map((result) => (
               <article className="result-card" key={`${result.date}-${result.competition}`}>
@@ -116,7 +116,7 @@ export function DashboardPage() {
                 <Badge tone={result.status === "failed" ? "danger" : result.status === "created" ? "success" : result.status === "skipped" ? "warning" : "neutral"}>{result.status}</Badge>
                 {result.warning ? <p>{result.warning}</p> : null}
                 {result.error ? <p className="danger-text">{result.error.message}</p> : null}
-                {result.batch_id ? <Link to={`/batches/${result.batch_id}`}>打开批次 <ArrowRight size={14} /></Link> : null}
+                {result.batch_id ? <Link to={`/previews/${result.batch_id}`}>打开批次 <ArrowRight size={14} /></Link> : null}
               </article>
             ))}
           </div>

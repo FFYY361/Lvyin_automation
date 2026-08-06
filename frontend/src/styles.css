@@ -153,6 +153,10 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .filter-bar { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; padding: 16px; }
 .filter-bar label { display: flex; flex-direction: column; gap: 6px; }
 .filter-bar label span { color: var(--muted); font-size: 11px; font-weight: 650; }
+.batch-filter { grid-template-columns: repeat(3, minmax(150px, 1fr)) auto auto; }
+.filter-bar .filter-checkbox { min-height: 40px; flex-direction: row; align-items: center; cursor: pointer; white-space: nowrap; }
+.filter-bar .filter-checkbox span { color: var(--text); font-size: 13px; }
+.filter-checkbox input { width: 16px; min-height: 16px; margin: 0; }
 .table-panel { padding: 0; overflow: hidden; }
 .data-table-wrap { overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -161,6 +165,13 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .data-table td strong, .data-table td small { display: block; }
 .data-table td small { margin-top: 3px; color: var(--muted); }
 .error-summary { display: block; max-width: 220px; overflow: hidden; color: var(--danger); text-overflow: ellipsis; white-space: nowrap; }
+.report-batch-table th:last-child, .report-batch-table td:last-child { width: 96px; }
+.report-batch-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.report-batch-toggle > svg { flex: 0 0 auto; color: var(--muted); }
+.report-batch-toggle:hover strong { color: var(--primary); }
+.report-batch-table .report-expanded-row td { width: auto; height: auto; padding: 12px 16px 16px; background: var(--surface-subtle); }
+.report-expanded-row .loading-screen { min-height: 100px; }
+.report-expanded-row .empty-state { min-height: 100px; padding: 10px; }
 
 .batch-summary { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 16px; border: 1px solid var(--border); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
 .batch-summary > div { display: flex; min-height: 72px; flex-direction: column; justify-content: center; gap: 7px; border-right: 1px solid var(--border); padding: 14px 18px; }
@@ -375,6 +386,10 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
   .data-table td { display: grid; min-height: 0; height: auto; grid-template-columns: 90px minmax(0, 1fr); align-items: center; border: 0; padding: 7px 0; }
   .data-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; }
   .data-table td:last-child { border-top: 1px solid var(--border); margin-top: 5px; padding-top: 10px; }
+  .report-batch-table th:last-child, .report-batch-table td:last-child { width: auto; }
+  .report-expanded-row { margin-top: -12px; }
+  .report-expanded-row td, .report-expanded-row td:last-child { display: block; border: 0; margin: 0; padding: 12px 0 2px; background: transparent; }
+  .report-expanded-row td::before { display: none; }
   .error-summary { max-width: 100%; }
 }
 

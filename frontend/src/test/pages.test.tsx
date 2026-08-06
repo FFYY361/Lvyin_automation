@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { AuthProvider } from "../auth";
 import { BatchDetailPage } from "../pages/BatchDetailPage";
+import { BatchesPage } from "../pages/BatchesPage";
 import { MatchPage } from "../pages/MatchPage";
 import { PreviewPage } from "../pages/PreviewPage";
 import type { Article, PreviewBatch, User } from "../types";
@@ -11,16 +12,18 @@ const admin: User = { id: 99, username: "admin", display_name: "管理员", role
 
 const batch: PreviewBatch = {
   id: 1,
-  preview_date: "2026-08-08",
+  batch_date: "2026-08-08",
   competition: "male",
-  status: "incomplete",
+  preview_status: "incomplete",
   headline: "周末前瞻",
   editors: ["编辑"],
   reviewers: ["责编"],
   approvers: ["审核"],
   cover: { kind: "media_id", storage_key: "cover", content_type: null },
-  current_article_id: null,
-  latest_article_id: null,
+  current_preview_article_id: null,
+  latest_preview_article_id: null,
+  current_report_article_id: null,
+  latest_report_article_id: null,
   missing_fields: ["matches.11.body"],
   last_error: null,
   created_at: "2026-08-01T00:00:00Z",
@@ -56,6 +59,8 @@ const batch: PreviewBatch = {
     writers: ["作者"],
     body: "正文",
     body_version: 2,
+    status: "scheduled",
+    report: { available: false, kind: null, content_sha256: null, rendered_at: null },
     updated_at: "2026-08-01T00:00:00Z",
   }],
 };
@@ -72,9 +77,18 @@ function renderRoute(path: string, routePath: string, element: React.ReactNode) 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("batch and match pages", () => {
+  it("hides futsal batches until explicitly enabled", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ items: [batch, { ...batch, id: 2, competition: "futsal" }] })));
+    renderRoute("/previews", "/previews", <BatchesPage />);
+
+    expect(await screen.findAllByRole("link", { name: "打开批次" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("checkbox", { name: "显示五人制批次" }));
+    expect(screen.getAllByRole("link", { name: "打开批次" })).toHaveLength(2);
+  });
+
   it("uses compact match cards as links from the batch page", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(batch)));
-    renderRoute("/batches/1", "/batches/:batchId", <BatchDetailPage />);
+    renderRoute("/previews/1", "/previews/:batchId", <BatchDetailPage />);
     const matchHeading = await screen.findByRole("heading", { name: "比赛" });
     const completenessHeading = screen.getByRole("heading", { name: "完整性缺项" });
     const headlineHeading = screen.getByRole("heading", { name: "文章标题" });
@@ -90,14 +104,14 @@ describe("batch and match pages", () => {
     expect(headlineHeading.compareDocumentPosition(matchHeading) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(matchHeading.compareDocumentPosition(settingsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(screen.getByText("环境 vs 探微 · 正文")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /环境 vs 探微/ })).toHaveAttribute("href", "/batches/1/matches/11");
+    expect(screen.getByRole("link", { name: /环境 vs 探微/ })).toHaveAttribute("href", "/previews/1/matches/11");
     expect(screen.queryByLabelText("前瞻正文")).not.toBeInTheDocument();
   });
 
   it("saves the headline and personnel as separate batch patches", async () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => Promise.resolve(json(batch)));
     vi.stubGlobal("fetch", fetchMock);
-    renderRoute("/batches/1", "/batches/:batchId", <BatchDetailPage />);
+    renderRoute("/previews/1", "/previews/:batchId", <BatchDetailPage />);
 
     fireEvent.change(await screen.findByLabelText("标题内容"), { target: { value: "新的文章标题" } });
     fireEvent.click(screen.getByRole("button", { name: "保存标题" }));
@@ -122,7 +136,7 @@ describe("batch and match pages", () => {
 
   it("shows match history fallbacks and protects unsaved navigation", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(batch)));
-    renderRoute("/batches/1/matches/11", "/batches/:batchId/matches/:gameId", <MatchPage />);
+    renderRoute("/previews/1/matches/11", "/previews/:batchId/matches/:gameId", <MatchPage />);
     expect(await screen.findByRole("heading", { name: "环境 vs 探微" })).toBeInTheDocument();
     expect(screen.getByText("2024~2025 · 甲｜八强")).toBeInTheDocument();
     expect(screen.getByText("无")).toBeInTheDocument();
@@ -133,7 +147,7 @@ describe("batch and match pages", () => {
 
   it("reports an invalid match id reached by a direct URL", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(batch)));
-    renderRoute("/batches/1/matches/999", "/batches/:batchId/matches/:gameId", <MatchPage />);
+    renderRoute("/previews/1/matches/999", "/previews/:batchId/matches/:gameId", <MatchPage />);
     expect(await screen.findByRole("heading", { name: "比赛不存在" })).toBeInTheDocument();
     expect(screen.getByText(/不属于当前批次/)).toBeInTheDocument();
   });
@@ -141,10 +155,11 @@ describe("batch and match pages", () => {
 
 describe("article preview page", () => {
   it("loads the latest stale article and presents a warning", async () => {
-    const staleBatch = { ...batch, latest_article_id: 44 };
+    const staleBatch = { ...batch, latest_preview_article_id: 44 };
     const article: Article = {
       id: 44,
       batch_id: 1,
+      article_type: "preview",
       version_number: 1,
       title: "历史版本",
       body_html: "<p>历史版本</p>",
@@ -163,7 +178,7 @@ describe("article preview page", () => {
       is_current: null,
     };
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(json(String(input).includes("/api/articles/") ? article : staleBatch))));
-    renderRoute("/batches/1/preview", "/batches/:batchId/preview", <PreviewPage />);
+    renderRoute("/previews/1/article", "/previews/:batchId/article", <PreviewPage />);
     expect(await screen.findByText("当前数据已发生变化，文章已过期。")).toBeInTheDocument();
     expect(screen.getByText("已过期，仅供查看")).toBeInTheDocument();
     expect(screen.getByText("环境 vs 探微 · 作者")).toBeInTheDocument();

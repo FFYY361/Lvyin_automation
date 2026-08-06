@@ -85,7 +85,7 @@ copy(JSON.stringify({
 
 ### 创建和查看 Batch
 
-调用 `POST /api/preview-batches/create`：
+调用 `POST /api/batches/create`：
 
 ```json
 {
@@ -105,10 +105,10 @@ Batch；重新查询已有 Batch 必须使用 `refresh-data`。只对缺失组�
 都因 THUFootball 查询失败时返回 HTTP 502，原有 `results` 保留在
 `error.details.results` 中。
 
-使用 `GET /api/preview-batches` 查看列表，使用
-`GET /api/preview-batches/{id}` 查看天气、全部比赛、缺项和当前
-`current_article_id`。需要重新查询时调用
-`POST /api/preview-batches/{id}/refresh-data`。人工天气不会被普通 refresh 覆盖。
+使用 `GET /api/batches` 查看列表，使用
+`GET /api/batches/{id}` 查看天气、全部比赛、缺项和当前
+`current_preview_article_id`。需要重新查询时调用
+`POST /api/batches/{id}/refresh-data`。人工天气不会被普通 refresh 覆盖。
 
 ### 默认人员、标题、天气和任务
 
@@ -126,7 +126,7 @@ PUT /api/editorial-defaults
 修改已有 Batch：
 
 ```json
-PATCH /api/preview-batches/{id}
+PATCH /api/batches/{id}
 {
   "headline": "本周马杯前瞻",
   "editors": ["编辑甲"],
@@ -148,25 +148,25 @@ PUT /api/weather/2026-08-08
 }
 ```
 
-调用 `POST /api/preview-batches/{id}/open-tasks` 开放该 Batch 当前全部 active
-比赛，调用 `POST /api/preview-batches/{id}/close-tasks` 关闭当前全部 active 比赛。
+调用 `POST /api/batches/{id}/open-tasks` 开放该 Batch 当前全部 active
+比赛，调用 `POST /api/batches/{id}/close-tasks` 关闭当前全部 active 比赛。
 两个接口都不接收请求体，并返回实际处理的 `game_ids`；没有 active 比赛时返回
 空数组并保持 HTTP 200。任务开放状态变化不会让已渲染 Article 过期。
 
-调用 `GET /api/preview-matches` 可跨 Batch 查询当前全部已开放且有效的比赛，即
+调用 `GET /api/matches` 可跨 Batch 查询当前全部已开放且有效的比赛，即
 `active=true AND task_open=true`。结果按 `kickoff, game_id` 排序；每项除完整 match
-字段外，还包含所属 Batch 的 `batch_id`、`preview_date` 和 `competition`。
+字段外，还包含所属 Batch 的 `batch_id`、`batch_date` 和 `competition`。
 
-调用 `GET /api/preview-matches` 可跨 Batch 查询当前全部已开放且有效的比赛，即
+调用 `GET /api/matches` 可跨 Batch 查询当前全部已开放且有效的比赛，即
 `active=true AND task_open=true`。结果按 `kickoff, game_id` 排序；每项除完整 match
-字段外，还包含所属 Batch 的 `batch_id`、`preview_date` 和 `competition`。
+字段外，还包含所属 Batch 的 `batch_id`、`batch_date` 和 `competition`。
 
 ### 保存署名和正文
 
 从 Batch 详情读取每场 `body_version`，保存时作为 `expected_version`：
 
 ```json
-PATCH /api/preview-matches/123456
+PATCH /api/matches/123456
 {
   "expected_version": 0,
   "writers": ["作者甲", "作者乙"],
@@ -179,9 +179,9 @@ HTTP 409，并附当前版本、署名和正文，管理员应重新读取后决
 
 ### 替换封面
 
-- `POST /api/preview-batches/{id}/cover`：multipart 上传 JPEG、PNG 或 GIF，最大
+- `POST /api/batches/{id}/cover`：multipart 上传 JPEG、PNG 或 GIF，最大
   10 MiB；相同内容复用 `covers/<sha256>.<ext>`。
-- `PUT /api/preview-batches/{id}/cover-media-id`：请求体
+- `PUT /api/batches/{id}/cover-media-id`：请求体
   `{"media_id":"永久素材ID"}`，直接使用已有微信永久素材。
 
 数据库只支持 `file` 和 `media_id`，不支持 `default` 类型，也不提供清空封面。
@@ -189,12 +189,12 @@ Batch 不保存 SHA；render 时 Article 固化 SHA，创建草稿前再次校�
 
 ### 渲染和预览
 
-调用 `POST /api/preview-batches/{id}/render`。即使状态为 `incomplete` 也会生成
+调用 `POST /api/batches/{id}/render-preview`。即使状态为 `incomplete` 也会生成
 带占位提示的 Article，并返回 `missing_fields`；零活动比赛时会加入只用于预览
 的占位对阵。缺项 Article 不能创建微信草稿。
 
 没有内容变化时再次 render 返回相同 Article 且 `reused=true`。标题、人员、
-天气、封面、比赛数据、署名或正文变化后 `current_article_id` 被清空，下次 render
+天气、封面、比赛数据、署名或正文变化后 `current_preview_article_id` 被清空，下次 render
 插入版本号更大的新 Article；历史 Article 不修改。
 
 - `GET /api/articles/{id}`：读取输入快照、最终 HTML、封面指纹和完整性。
@@ -213,7 +213,7 @@ POST /api/wechat-drafts
 ```
 
 顺序就是微信公众号头条、次条顺序，仅允许 1–8 篇。服务会检查每个 Article
-仍是所属 Batch 的 `current_article_id`、内容完整且封面 SHA 未变化，并返回有序
+仍是所属 Batch 的 `current_preview_article_id`、内容完整且封面 SHA 未变化，并返回有序
 发布指纹。
 
 管理员核对无误并明确同意真实创建后，把同一请求改为 `confirm=true`。成功会
@@ -255,7 +255,7 @@ PostgreSQL 保存业务数据、不可变 Article 和微信回执；
 - 409 `article_incomplete`：根据 `missing_fields` 补齐业务内容后重新 render。
 - 502 `query_failed`、`weather_query_failed` 或 `wechat_failed`：检查对应凭据、
   网络、上游额度或微信 IP 白名单，然后明确重试。
-- 502 `preview_batch_queries_failed`：本次 create 的所有缺失组合都查询失败；逐项
+- 502 `batch_queries_failed`：本次 create 的所有缺失组合都查询失败；逐项
   错误位于 `error.details.results`。
 - 400 `invalid_thufootball_credentials`：重新从已登录的 TAFA 页面复制完整凭据。
 - 502 `thufootball_validation_failed`：THUFootball 验证请求超时或返回异常，稍后重试。

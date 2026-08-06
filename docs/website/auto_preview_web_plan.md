@@ -9,14 +9,16 @@
 → 管理员闭环后端
 → 管理员闭环前端
 → 完整用户与管理员后端
-→ 完整前端并投入使用
+→ 完整前端
+→ 战报功能
+→ PWA、试运行与生产部署
 ```
 
 总体原则：
 
 - 先通过 FastAPI `/docs` 和 HTTP 请求跑通后端，再开发对应前端。
-- PostgreSQL 是网站唯一业务数据源；`var/artifacts/` 只保存管理员上传的封面
-  文件，文章输入快照、HTML 和微信回执全部保存在 PostgreSQL。
+- PostgreSQL 是网站唯一业务数据源；`var/artifacts/` 保存管理员上传的封面和
+  内容寻址的单场战报，文章输入快照、HTML 和微信回执全部保存在 PostgreSQL。
 - 网站不与 `runs/auto_preview` 双向同步。现有 CLI 暂时继续使用 `runs/`，
   网站稳定后再评估是否迁移 CLI。
 - 网站代码使用与 `src/` 平级的 `backend/` 和 `frontend/`；`src/` 保留可复用
@@ -117,32 +119,32 @@
 用户名区分大小写，不自动 trim，长度 1–64，且不得包含任何空白字符。Stage 2 的
 `python -m backend init-admin` 只创建 admin。
 
-#### `preview_batches`
+#### `batches`
 
 | 列 | 类型与约束 |
 | --- | --- |
 | `id` | `BIGINT` PK identity |
-| `preview_date` | `DATE` NOT NULL |
+| `batch_date` | `DATE` NOT NULL |
 | `competition` | `VARCHAR(16)` NOT NULL |
 | `headline` | `VARCHAR(200)` NOT NULL DEFAULT `''` |
 | `editors`, `reviewers`, `approvers` | `JSONB` NOT NULL DEFAULT `[]` |
 | `cover_kind` | `VARCHAR(16)` NOT NULL，`file` 或 `media_id` |
 | `cover_storage_key` | `TEXT` NOT NULL，文件 key 或微信 media ID |
 | `cover_content_type` | `VARCHAR(64)` NULL |
-| `current_article_id` | `BIGINT` NULL FK → `articles.id` |
+| `current_preview_article_id` | `BIGINT` NULL FK → `articles.id` |
 | `last_error_code` | `VARCHAR(64)` NULL |
 | `last_error_message` | `TEXT` NULL |
 | `last_error_at` | `TIMESTAMPTZ` NULL |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` NOT NULL |
 
-`(preview_date, competition)` 唯一。文件封面 key 为
+`(batch_date, competition)` 唯一。文件封面 key 为
 `covers/<sha256>.<jpg|png|gif>` 且 MIME 非空；media ID 模式 MIME 为 NULL。Batch
 不保存封面 SHA、原文件名、文件大小、独立 `cover_media_id`，也不允许无封面。
 标题、人员、天气、封面、比赛自动数据、署名或正文实际变化时清空
-`current_article_id`；任务开放和错误信息变化不清空。render 成功后指向同 Batch
+`current_preview_article_id`；任务开放和错误信息变化不清空。render 成功后指向同 Batch
 的 Article，未被清空时重复 render 直接复用。
 
-#### `preview_matches`
+#### `matches`
 
 | 列 | 类型与约束 |
 | --- | --- |
@@ -204,7 +206,7 @@
 
 `(batch_id, version_number)` 唯一，并建相同字段的版本倒序索引。Article 创建后
 不可修改。Batch 的有效渲染过期后插入新行；当前有效版本通过
-`preview_batches.current_article_id` 查找，历史最新版本也可按版本倒序查询。
+`batches.current_preview_article_id` 查找，历史最新版本也可按版本倒序查询。
 media ID 封面的 SHA 为 media ID UTF-8 字节的 SHA-256。创建微信草稿前，文件
 封面重新读文件计算 SHA，media ID 重新计算字符串 SHA，防止渲染后封面被替换。
 
@@ -218,16 +220,18 @@ media ID 封面的 SHA 为 media ID UTF-8 字节的 SHA-256。创建微信草稿
 
 ### Artifact、状态和执行模型
 
-`var/artifacts/` 只保存管理员上传的文件封面：
+`var/artifacts/` 保存文件封面和 Stage 6 增加的单场战报：
 
 ```text
 var/artifacts/
-└── covers/
-    └── <sha256>.<jpg|png|gif>
+├── covers/
+│   └── <sha256>.<jpg|png|gif>
+└── reports/
+    └── <sha256>.<png|txt>
 ```
 
-相同内容复用相同 key，默认 media ID 不产生本地文件，Stage 2 不删除历史封面。
-PostgreSQL 和 covers 目录都必须备份。
+相同内容复用相同 key，默认 media ID 不产生本地文件，本阶段不删除历史 Artifact。
+PostgreSQL 和整个 `var/artifacts/` 必须联合备份。
 
 Batch 不保存状态列，动态计算为：`incomplete` 表示标题、天气、人员、活动比赛、
 署名或正文有缺项；`ready` 表示当前数据完整但当前 Article 未进入草稿；`drafted`
@@ -254,20 +258,19 @@ THUFootball 查询 Service 和 Client 不跨 HTTP 请求复用。管理员可在
   `GET /api/auth/me`、`python -m backend init-admin`。
 - 设置：`GET /api/settings/thufootball-credentials`、
   `PUT /api/settings/thufootball-credentials`；只返回配置状态和脱敏凭据。
-- 批次：`POST /api/preview-batches/create`、`GET /api/preview-batches`、
-  `GET /api/preview-batches/{id}`、
-  `POST /api/preview-batches/{id}/refresh-data`、
-  `PATCH /api/preview-batches/{id}`。
+- 批次：`POST /api/batches/create`、`GET /api/batches`、
+  `GET /api/batches/{id}`、`POST /api/batches/{id}/refresh-data`、
+  `PATCH /api/batches/{id}`。
 - 默认人员：`GET /api/editorial-defaults`、`PUT /api/editorial-defaults`。
-- 任务与内容：`POST /api/preview-batches/{id}/open-tasks`、
-  `POST /api/preview-batches/{id}/close-tasks`、
-  `GET /api/preview-matches`、`PATCH /api/preview-matches/{game_id}`、
+- 任务与内容：`POST /api/batches/{id}/open-tasks`、
+  `POST /api/batches/{id}/close-tasks`、
+  `GET /api/matches`、`PATCH /api/matches/{game_id}`、
   `PUT /api/weather/{date}`。
   open/close 不接收请求体，分别开放或关闭该 Batch 当前全部 active 比赛。
   match 列表只返回 `active AND task_open` 的比赛，并附所属 Batch 的日期和赛事。
-- 封面：`POST /api/preview-batches/{id}/cover`、
-  `PUT /api/preview-batches/{id}/cover-media-id`。
-- 文章：`POST /api/preview-batches/{id}/render`、`GET /api/articles/{id}`、
+- 封面：`POST /api/batches/{id}/cover`、
+  `PUT /api/batches/{id}/cover-media-id`。
+- 文章：`POST /api/batches/{id}/render-preview`、`GET /api/articles/{id}`、
   `GET /api/articles/{id}/preview`。
 - 微信草稿：`POST /api/wechat-drafts`、`GET /api/wechat-drafts/{id}`。
 
@@ -340,10 +343,10 @@ Stage 2 的全部操作。
 
 ### 数据库
 
-- 不新增表；任务继续使用 `preview_matches`。
+- 不新增表；任务继续使用 `matches`。
 - `users` 新增非负的 `auth_version INTEGER NOT NULL DEFAULT 0`，角色约束改为
   `role IN ('user', 'admin')`。当前数据库没有普通用户数据，迁移不转换角色值。
-- `preview_matches` 已有 `claimed_by_user_id`、`writers`、`body` 和
+- `matches` 已有 `claimed_by_user_id`、`writers`、`body` 和
   `body_version`，不新增列或索引。
 
 ### 账号与权限
@@ -359,7 +362,7 @@ Stage 2 的全部操作。
   会话版本。
 - `GET /api/admin/users/{id}` 对所有有效用户开放，只返回 `id` 和
   `display_name`，用于按认领人 ID 获取展示名称。
-- `GET /api/preview-batches`、`GET /api/preview-batches/{id}`、文章 JSON 和 HTML
+- `GET /api/batches`、`GET /api/batches/{id}`、文章 JSON 和 HTML
   预览对所有有效用户只读开放；批次写操作、渲染和微信草稿仍只限管理员。
 
 ### 任务 API
@@ -369,14 +372,14 @@ Stage 2 的全部操作。
   `active AND task_open AND claimed_by_user_id IS NULL` 比赛。
 - `GET /api/me/tasks` 返回本人全部认领，包括已关闭或失效的比赛。
 - 新任务列表复用比赛 payload，只额外返回 Batch 的稳定 `competition` 值；不返回
-  `preview_date`、`current_article_id` 或重复的认领人对象。
-- `POST /api/preview-matches/{game_id}/claim` 原子认领；成功时署名替换为当前用户
+  `batch_date`、文章指针或重复的认领人对象。
+- `POST /api/matches/{game_id}/claim` 原子认领；成功时署名替换为当前用户
   显示名称，正文保留，版本递增并使 Article 过期。
-- `POST /api/preview-matches/{game_id}/release` 普通用户只能释放本人任务，管理员
+- `POST /api/matches/{game_id}/release` 普通用户只能释放本人任务，管理员
   可释放任意任务；释放清空认领人和署名，保留正文并递增版本。
-- `POST /api/preview-matches/{game_id}/assign` 由管理员转交给任意启用账号或释放；
+- `POST /api/matches/{game_id}/assign` 由管理员转交给任意启用账号或释放；
   自动更新署名、保留正文并递增版本。
-- `PATCH /api/preview-matches/{game_id}/body` 由认领人或管理员保存正文并携带
+- `PATCH /api/matches/{game_id}/body` 由认领人或管理员保存正文并携带
   `expected_version`；认领人保存时不要求比赛仍有效或开放。
 
 ### 认领规则
@@ -451,7 +454,62 @@ Stage 2 的全部操作。
 具体启动、页面流程和验收步骤见
 [Stage 5 协作前端操作手册](stages/collaboration_frontend.md)。
 
-## Stage 6：PWA、试运行与生产部署
+## Stage 6：战报功能
+
+### 统一批次、比赛和文章
+
+- 把 `preview_batches` 原地重命名为 `batches`，`preview_date` 改为
+  `batch_date`，`current_article_id` 改为 `current_preview_article_id`，并新增
+  `current_report_article_id`。同一日期赛事批次同时服务前瞻与战报。
+- 把 `preview_matches` 原地重命名为 `matches`，保留现有前瞻协作字段；新增
+  `status` 以及成组可空的 `report_input_sha256`、`report_storage_key`、
+  `report_content_sha256`、`report_rendered_at`。不保存比分、弃赛标记或事件 JSON。
+- `articles` 新增 `article_type=preview|report`，版本唯一约束改为
+  `(batch_id, article_type, version_number)`；既有文章迁移为 `preview`。
+- 战报 PNG 和弃赛说明分别按内容 SHA 保存到
+  `var/artifacts/reports/<sha256>.png|txt`。数据库只保存 key、输入 SHA、内容 SHA
+  和渲染时间，读取时限制路径并重新校验哈希；本阶段不清理旧 Artifact。
+
+### 查询和渲染
+
+- 创建批次时同步保存比赛状态。管理员通过唯一的
+  `POST /api/batches/{id}/refresh-data` 手动更新天气、比赛列表、赛程、球队信息和
+  比赛状态；战报页面展开只读数据库，不自动刷新。
+- 所有已登录用户都可重新渲染单场战报。每次点击都重新查询当前 GameDetail 和事件；
+  实时未完赛返回 409。规范化输入 SHA 未变且 Artifact 完整时复用，否则生成新 PNG
+  或弃赛文本，并使当前战报文章过期。
+- 管理员渲染批次战报文章时只使用数据库中 active 且 status=finished 的比赛，逐场
+  实时查询并复用或重建，按开球时间和 game ID 排序。该操作不隐式 refresh；状态已
+  过期时提示先手动刷新。标题、摘要和封面沿用现有 `auto_report`。
+- report Article 的输入快照是有序的
+  `{game_id, report_input_sha256, report_content_sha256}`；输入不变复用，变化时创建新的
+  不可变版本。
+
+### API 和前端
+
+- 后端批次接口统一为 `/api/batches`，比赛接口统一为 `/api/matches`，不保留旧
+  `/api/preview-*` 别名。前瞻、任务、封面和认领接口随之整体迁移；两个文章入口为
+  `POST /api/batches/{id}/render-preview` 和 `render-report`。
+- 单场战报接口为 `GET /api/matches/{game_id}/report`、
+  `GET /api/matches/{game_id}/report/content`、
+  `POST /api/matches/{game_id}/render-report`。
+- 文章候选接口为
+  `GET /api/articles/candidates?article_type=all|preview|report`；微信草稿保持原请求结构、
+  1–8 篇限制、排序、二次确认和发布指纹，允许两类文章混合。
+- 前端前瞻路由统一位于 `/previews`，战报路由与其并列位于 `/reports`。战报批次原地
+  展开，默认只显示已完赛比赛，可勾选显示未完赛；卡片不显示比分。管理员可手动刷新和
+  渲染文章，所有用户可进入单场详情重新渲染。
+- 微信草稿页保留现有布局，增加“全部文章 / 前瞻 / 战报”筛选和类型标识。
+
+### 验收
+
+- 原地迁移后既有批次、比赛、任务、正文、文章和草稿数据及外键完整。
+- 创建和手动刷新正确保存比赛状态，展开战报批次不会访问 THUFootball。
+- 单场战报相同输入复用，事件或比分变化重新渲染；Artifact 缺失或损坏可重建。
+- 前瞻和战报文章独立维护版本，可混合创建微信草稿；现有 CLI 行为保持不变。
+- 后端测试、前端 typecheck/测试/构建和 CLI 回归测试全部通过。
+
+## Stage 7：PWA、试运行与生产部署
 
 ### PWA
 
@@ -468,8 +526,7 @@ Stage 2 的全部操作。
 ### 生产部署和运维
 
 - 使用 PostgreSQL、HTTPS、持久化 Artifact Volume 和固定进程托管方式部署。
-- PostgreSQL 与 `var/artifacts/covers` 每日一起备份，并定期验证恢复。
-- 为微信 API 配置固定出口 IP 白名单。
+- PostgreSQL 与整个 `var/artifacts/` 每日一起备份，并定期验证恢复。
 - 所有凭据仅保存在服务器环境变量或受控凭据文件中，不进入浏览器、数据库业务内容或日志。
 - 配置最小化健康检查、日志轮转、证书续期和故障恢复说明。
 
@@ -479,7 +536,7 @@ Stage 2 的全部操作。
 - 多位普通用户可以自行注册、领取不同比赛并安全保存正文。
 - 并发认领、越权访问和正文版本冲突均得到明确处理。
 - 网站可从手机主屏幕启动，网络异常不会导致未确认的数据覆盖。
-- PostgreSQL 和不可重建的上传封面可从备份恢复，现有 Auto Preview CLI 继续可用。
+- PostgreSQL 和 Artifact 可从联合备份恢复，现有 Auto Preview CLI 继续可用。
 
 ## 阶段推进规则
 

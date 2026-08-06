@@ -16,6 +16,7 @@ const task: TaskMatch = {
   home: { team_id: 1, name: "环境学院", short_name: "环境", previous_outcomes: [], current_results: [] },
   away: { team_id: 2, name: "探微书院", short_name: "探微", previous_outcomes: [], current_results: [] },
   head_to_head: [], active: true, task_open: true, claimed_by_user_id: 2, writers: ["成员甲"], body: "已经填写", body_version: 3, updated_at: "2026-08-01T00:00:00Z",
+  status: "scheduled", report: { available: false, kind: null, content_sha256: null, rendered_at: null },
 };
 
 function namedTask(gameId: number, name: string, kickoff: string, overrides: Partial<TaskMatch> = {}): TaskMatch {
@@ -123,8 +124,8 @@ describe("stage 5 user management", () => {
 describe("stage 5 match permissions", () => {
   it("uses the body-only endpoint for an owning normal user", async () => {
     const batch: PreviewBatch = {
-      id: 5, preview_date: "2026-08-08", competition: "male", status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
-      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_article_id: null, latest_article_id: null, missing_fields: [], last_error: null,
+      id: 5, batch_date: "2026-08-08", competition: "male", preview_status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
+      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_preview_article_id: null, latest_preview_article_id: null, current_report_article_id: null, latest_report_article_id: null, missing_fields: [], last_error: null,
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z", matches: [task],
     };
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -132,17 +133,17 @@ describe("stage 5 match permissions", () => {
       return Promise.resolve(json(batch));
     });
     vi.stubGlobal("fetch", fetchMock);
-    renderPage(<MatchPage />, member, "/batches/5/matches/11", "/batches/:batchId/matches/:gameId");
+    renderPage(<MatchPage />, member, "/previews/5/matches/11", "/previews/:batchId/matches/:gameId");
     fireEvent.change(await screen.findByLabelText("前瞻正文"), { target: { value: "新正文" } });
     fireEvent.click(screen.getByRole("button", { name: "保存正文" }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === "/api/preview-matches/11/body" && init?.method === "PATCH")).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input) === "/api/matches/11/body" && init?.method === "PATCH")).toBe(true));
     expect(screen.getByLabelText("署名")).toHaveAttribute("readonly");
   });
 
   it("blocks a normal user from opening another member's match", async () => {
     const batch = { id: 5, matches: [{ ...task, claimed_by_user_id: 9 }] } as unknown as PreviewBatch;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(batch)));
-    renderPage(<MatchPage />, member, "/batches/5/matches/11", "/batches/:batchId/matches/:gameId");
+    renderPage(<MatchPage />, member, "/previews/5/matches/11", "/previews/:batchId/matches/:gameId");
     expect(await screen.findByRole("heading", { name: "无法进入比赛" })).toBeInTheDocument();
     expect(screen.queryByLabelText("前瞻正文")).not.toBeInTheDocument();
   });
@@ -152,15 +153,15 @@ describe("stage 5 batch permissions", () => {
   it("shows claimant names but only links a normal user to their own match", async () => {
     const other = { ...task, game_id: 12, claimed_by_user_id: 9 };
     const batch = {
-      id: 5, preview_date: "2026-08-08", competition: "male", status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
-      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_article_id: null, latest_article_id: null, missing_fields: [], last_error: null,
+      id: 5, batch_date: "2026-08-08", competition: "male", preview_status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
+      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_preview_article_id: null, latest_preview_article_id: null, current_report_article_id: null, latest_report_article_id: null, missing_fields: [], last_error: null,
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z", matches: [task, other],
     } satisfies PreviewBatch;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(json(String(input).includes("/api/admin/users/9") ? { id: 9, display_name: "成员乙" } : batch))));
-    renderPage(<BatchDetailPage />, member, "/batches/5", "/batches/:batchId");
+    renderPage(<BatchDetailPage />, member, "/previews/5", "/previews/:batchId");
     expect((await screen.findAllByText("认领人：", { selector: ".match-card__meta span" }))).toHaveLength(2);
     expect(await screen.findByText("成员乙")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /环境 vs 探微/ })).toHaveAttribute("href", "/batches/5/matches/11");
+    expect(screen.getByRole("link", { name: /环境 vs 探微/ })).toHaveAttribute("href", "/previews/5/matches/11");
     expect(screen.getAllByRole("link", { name: /环境 vs 探微/ })).toHaveLength(1);
   });
 });

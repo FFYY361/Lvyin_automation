@@ -21,6 +21,7 @@ from .errors import ConfigurationError, InvalidResponse, QueryValidationError
 from .models import (
     GameDetail,
     GameEvent,
+    GameEventIssue,
     GameReportFile,
     GameSummary,
     ReportSettings,
@@ -1229,6 +1230,42 @@ class THUFootballReportService:
     def __init__(self, client: THUFootballClient) -> None:
         self._client = client
 
+    async def get_game_detail(
+        self, game_id: int
+    ) -> tuple[GameDetail, tuple[GameEventIssue, ...]]:
+        """Read and validate the current report input without rendering it."""
+
+        game_id = _positive_game_id(game_id)
+        detail = await self._client.get_game_info(game_id)
+        return validate_game_events(detail)
+
+    async def render_game_detail(
+        self,
+        detail: GameDetail,
+        *,
+        settings: ReportSettings = ReportSettings(),
+    ) -> tuple[bytes, int, int]:
+        """Render a previously loaded detail to PNG without querying it again."""
+
+        settings = _validate_settings(settings)
+        game_id = detail.game.game_id
+        qr_code = (
+            await self._client.get_game_page_code(game_id)
+            if settings.include_qr_code
+            else None
+        )
+        asset_payloads = await asyncio.gather(
+            *(self._client.get_report_asset(name) for name in _WEBSITE_ASSET_NAMES)
+        )
+        assets = dict(zip(_WEBSITE_ASSET_NAMES, asset_payloads, strict=True))
+        return await asyncio.to_thread(
+            render_game_report,
+            detail,
+            settings=settings,
+            assets=assets,
+            qr_code=qr_code,
+        )
+
     async def download_game_report(
         self,
         game_id: int,
@@ -1257,29 +1294,8 @@ class THUFootballReportService:
             # SECURITY: OnReStatGameData uses GET but changes server-side match
             # statistics. Keep this behind the explicit refresh_stats opt-in.
             await self._client.refresh_game_stats(game_id)
-        detail = await self._client.get_game_info(game_id)
-        detail, warnings = validate_game_events(detail)
-        qr_code = (
-            await self._client.get_game_page_code(game_id)
-            if settings.include_qr_code
-            else None
-        )
-        asset_payloads = await asyncio.gather(
-            *(
-                self._client.get_report_asset(name)
-                for name in _WEBSITE_ASSET_NAMES
-            )
-        )
-        assets = dict(
-            zip(_WEBSITE_ASSET_NAMES, asset_payloads, strict=True)
-        )
-        png, width, height = await asyncio.to_thread(
-            render_game_report,
-            detail,
-            settings=settings,
-            assets=assets,
-            qr_code=qr_code,
-        )
+        detail, warnings = await self.get_game_detail(game_id)
+        png, width, height = await self.render_game_detail(detail, settings=settings)
 
         target = _output_path(output, detail).resolve()
         if target.exists() and not overwrite:

@@ -51,7 +51,7 @@ function TaskCard({
         {onClaim ? <Button variant="primary" loading={claiming} onClick={onClaim}><Hand size={15} />领取任务</Button> : null}
         {onAssign ? <Button onClick={onAssign}><UserRoundCog size={15} />转交</Button> : null}
         {onRelease ? <Button variant="quiet" onClick={onRelease}>释放</Button> : null}
-        {canEnter ? <Link className="button button--quiet" to={`/batches/${match.batch_id}/matches/${match.game_id}`}>进入比赛<ArrowRight size={15} /></Link> : null}
+        {canEnter ? <Link className="button button--quiet" to={`/previews/${match.batch_id}/matches/${match.game_id}`}>进入比赛<ArrowRight size={15} /></Link> : null}
       </div>
     </article>
   );
@@ -136,7 +136,7 @@ export function TasksPage() {
   const claim = async (match: TaskMatch) => {
     setWorking(match.game_id); setError(null); setSuccess(null);
     try {
-      await api(`/api/preview-matches/${match.game_id}/claim`, { method: "POST" });
+      await api(`/api/matches/${match.game_id}/claim`, { method: "POST" });
       setSuccess(`已领取 ${teamName(match.home)} vs ${teamName(match.away)}`);
       await load(true);
     } catch (value) {
@@ -150,7 +150,7 @@ export function TasksPage() {
     if (!releaseTarget) return;
     setWorking(releaseTarget.game_id); setError(null); setSuccess(null);
     try {
-      await api(`/api/preview-matches/${releaseTarget.game_id}/release`, { method: "POST" });
+      await api(`/api/matches/${releaseTarget.game_id}/release`, { method: "POST" });
       setSuccess("任务已释放，署名已清空，正文仍然保留。");
       setReleaseTarget(null); await load(true);
     } catch (value) { setError(errorMessage(value)); } finally { setWorking(null); }
@@ -159,7 +159,7 @@ export function TasksPage() {
     if (!assignTarget || !assignedUserId) return;
     setWorking(assignTarget.game_id); setError(null); setSuccess(null);
     try {
-      await api(`/api/preview-matches/${assignTarget.game_id}/assign`, { method: "POST", ...jsonBody({ user_id: Number(assignedUserId) }) });
+      await api(`/api/matches/${assignTarget.game_id}/assign`, { method: "POST", ...jsonBody({ user_id: Number(assignedUserId) }) });
       setSuccess("任务已转交，正文保持不变。");
       setAssignTarget(null); setAssignedUserId(""); await load(true);
     } catch (value) { setError(errorMessage(value)); } finally { setWorking(null); }

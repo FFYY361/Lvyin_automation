@@ -95,7 +95,7 @@ GET /api/admin/users/123
 
 ## 4. 批次和文章只读访问
 
-`GET /api/preview-batches`、`GET /api/preview-batches/{id}`、
+`GET /api/batches`、`GET /api/batches/{id}`、
 `GET /api/articles/{id}` 和 `GET /api/articles/{id}/preview` 对全部有效用户开放。
 普通用户可查看所有批次和当前或历史文章，但不能创建、刷新或编辑批次，不能修改
 天气、封面和人员，也不能渲染文章或创建微信草稿。
@@ -129,7 +129,7 @@ GET /api/me/tasks
 普通用户和管理员都可以原子认领有效开放比赛：
 
 ```text
-POST /api/preview-matches/{game_id}/claim
+POST /api/matches/{game_id}/claim
 ```
 
 成功后认领人改为当前用户、署名替换为当前显示名称、正文保留、版本递增，已渲染
@@ -138,7 +138,7 @@ Article 过期。同一用户重复请求按幂等成功；其他并发请求返
 释放接口不要求比赛仍有效或开放：
 
 ```text
-POST /api/preview-matches/{game_id}/release
+POST /api/matches/{game_id}/release
 ```
 
 普通用户只能释放本人任务，管理员可以释放任意任务。释放清空认领人和署名，保留
@@ -147,7 +147,7 @@ POST /api/preview-matches/{game_id}/release
 管理员转交或释放：
 
 ```json
-POST /api/preview-matches/{game_id}/assign
+POST /api/matches/{game_id}/assign
 {
   "user_id": 123
 }
@@ -159,7 +159,7 @@ POST /api/preview-matches/{game_id}/assign
 ## 7. 保存正文
 
 ```json
-PATCH /api/preview-matches/{game_id}/body
+PATCH /api/matches/{game_id}/body
 {
   "expected_version": 2,
   "body": "第一段。\n\n第二段。"

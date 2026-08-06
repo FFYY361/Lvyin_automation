@@ -24,7 +24,11 @@ from sqlalchemy.orm import Session, sessionmaker
 import backend.api as backend_api
 import backend.credentials as backend_credentials
 from backend.api import create_app
-from backend.artifacts import resolve_storage_key
+from backend.artifacts import (
+    resolve_report_storage_key,
+    resolve_storage_key,
+    save_report,
+)
 from backend.auth import hash_password
 from backend.config import WebsiteSettings, load_env_file
 from backend.credentials import (
@@ -37,8 +41,8 @@ from backend.credentials import (
 )
 from backend.models import (
     Base,
-    PreviewBatch,
-    PreviewMatch,
+    Batch,
+    Match,
     User,
     Weather,
     WechatDraft,
@@ -57,7 +61,13 @@ from backend.workflow import (
     set_manual_weather,
     upsert_source,
 )
-from thufootball import AuthenticationError, UserProbe
+from thufootball import (
+    AuthenticationError,
+    GameDetail,
+    GameStatus,
+    GameSummary,
+    UserProbe,
+)
 from wechat_official import CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -67,6 +77,23 @@ SHANGHAI = timezone(timedelta(hours=8))
 def clear_tafa_credentials(monkeypatch) -> None:
     monkeypatch.delenv("TAFA_USERNAME", raising=False)
     monkeypatch.delenv("TAFA_PASSWORD", raising=False)
+
+
+def test_report_artifacts_are_content_addressed_and_path_limited(tmp_path: Path) -> None:
+    stream = BytesIO()
+    Image.new("RGB", (12, 8), "green").save(stream, format="PNG")
+    content = stream.getvalue()
+
+    first_key, first_sha = save_report(tmp_path, content, extension="png")
+    second_key, second_sha = save_report(tmp_path, content, extension="png")
+
+    assert first_key == second_key == f"reports/{first_sha}.png"
+    assert first_sha == second_sha == hashlib.sha256(content).hexdigest()
+    assert resolve_report_storage_key(tmp_path, first_key).read_bytes() == content
+    with pytest.raises(ValueError):
+        resolve_report_storage_key(tmp_path, "covers/report.png")
+    with pytest.raises(ValueError):
+        resolve_report_storage_key(tmp_path, "reports/../report.png")
 
 
 @pytest.fixture(scope="session")
@@ -133,9 +160,9 @@ def _batch(
     competition: str = "female",
     complete: bool,
     game_id: int = 9001,
-) -> PreviewBatch:
-    batch = PreviewBatch(
-        preview_date=target_date,
+) -> Batch:
+    batch = Batch(
+        batch_date=target_date,
         competition=competition,
         headline="周末前瞻" if complete else "",
         editors=["编辑"] if complete else [],
@@ -164,7 +191,7 @@ def _batch(
         )
     )
     session.add(
-        PreviewMatch(
+        Match(
             game_id=game_id,
             batch_id=batch.id,
             tournament_id=123,
@@ -200,6 +227,70 @@ def _batch(
     return batch
 
 
+def _finished_detail(game_id: int, *, home_score: int = 2) -> GameDetail:
+    kickoff = datetime(2026, 8, 8, 7, tzinfo=UTC)
+    return GameDetail(
+        game=GameSummary(
+            game_id=game_id,
+            tournament_id=123,
+            tournament_name="2026 马杯女足",
+            kickoff_utc=kickoff,
+            kickoff_local=kickoff.astimezone(SHANGHAI),
+            status=GameStatus.FINISHED,
+            record_active=True,
+            valid=True,
+            stage="小组赛",
+            group_name=None,
+            round=None,
+            home_tournament_team_id=1,
+            home_team_id=10,
+            home_team_name="主队",
+            away_tournament_team_id=2,
+            away_team_id=20,
+            away_team_name="客队",
+            home_score=home_score,
+            away_score=1,
+            result_text=f"{home_score}:1",
+            penalty_shootout=False,
+            home_penalty=None,
+            away_penalty=None,
+            home_abandon=False,
+            away_abandon=False,
+            field_name="紫荆操场",
+        ),
+        events=(),
+        referees=(),
+        players_per_side=11,
+    )
+
+
+class _FakeWebsiteReports:
+    def __init__(self, detail: GameDetail) -> None:
+        self.detail = detail
+        self.query_calls = 0
+        self.render_calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def get_game_detail(self, game_id: int):
+        assert game_id == self.detail.game.game_id
+        self.query_calls += 1
+        return self.detail, ()
+
+    async def render_game_detail(self, detail: GameDetail, **_: object):
+        assert detail == self.detail
+        self.render_calls += 1
+        stream = BytesIO()
+        Image.new("RGB", (16, 10), (self.render_calls, 80, 30)).save(
+            stream, format="PNG"
+        )
+        return stream.getvalue(), 16, 10
+
+
 def test_required_default_cover_and_username_contract(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("WEBSITE_DATABASE_URL", "postgresql+psycopg://example")
     monkeypatch.setenv("WEBSITE_COOKIE_SECRET", "x" * 32)
@@ -228,22 +319,28 @@ def test_website_env_loader_replaces_empty_process_credentials(
 
 def test_database_columns_and_indexes_match_plan(postgres_engine) -> None:
     database = inspect(postgres_engine)
+    table_names = set(database.get_table_names())
+    assert {"batches", "matches", "articles", "wechat_drafts"} <= table_names
+    assert {"preview_batches", "preview_matches"}.isdisjoint(table_names)
     expected = {
         "users": {
             "id", "username", "display_name", "password_hash", "role",
             "is_active", "auth_version", "created_at", "updated_at",
         },
-        "preview_batches": {
-            "id", "preview_date", "competition", "headline", "editors",
+        "batches": {
+            "id", "batch_date", "competition", "headline", "editors",
             "reviewers", "approvers", "cover_kind", "cover_storage_key",
-            "cover_content_type", "current_article_id", "last_error_code",
+            "cover_content_type", "current_preview_article_id",
+            "current_report_article_id", "last_error_code",
             "last_error_message", "last_error_at", "created_at", "updated_at",
         },
-        "preview_matches": {
+        "matches": {
             "game_id", "batch_id", "tournament_id", "tournament_name",
             "competition_name", "stage", "kickoff", "venue", "home_snapshot",
             "away_snapshot", "head_to_head_snapshot", "active", "task_open",
             "claimed_by_user_id", "writers", "body", "body_version",
+            "status", "report_input_sha256", "report_storage_key",
+            "report_content_sha256", "report_rendered_at",
             "created_at", "updated_at",
         },
         "weather": {
@@ -254,7 +351,7 @@ def test_database_columns_and_indexes_match_plan(postgres_engine) -> None:
             "id", "editors", "reviewers", "approvers", "updated_at",
         },
         "articles": {
-            "id", "batch_id", "version_number", "input_snapshot", "title",
+            "id", "batch_id", "article_type", "version_number", "input_snapshot", "title",
             "body_html", "author", "digest", "source_url", "template_version",
             "content_fingerprint", "cover_kind", "cover_storage_key",
             "cover_sha256", "is_complete", "missing_fields", "created_at",
@@ -276,13 +373,23 @@ def test_database_columns_and_indexes_match_plan(postgres_engine) -> None:
     assert isinstance(
         typed_columns["wechat_drafts"]["publication_fingerprint"], CHAR
     )
-    assert "preview_matches_game_id_seq" not in database.get_sequence_names()
-    match_indexes = {item["name"] for item in database.get_indexes("preview_matches")}
+    assert "matches_game_id_seq" not in database.get_sequence_names()
+    match_indexes = {item["name"] for item in database.get_indexes("matches")}
     assert {
-        "ix_preview_matches_batch_active_kickoff",
-        "ix_preview_matches_open_tasks",
-        "ix_preview_matches_claimed",
+        "ix_matches_batch_active_kickoff",
+        "ix_matches_open_tasks",
+        "ix_matches_claimed",
     } <= match_indexes
+    article_versions = next(
+        item
+        for item in database.get_unique_constraints("articles")
+        if item["name"] == "uq_articles_version"
+    )
+    assert article_versions["column_names"] == [
+        "batch_id",
+        "article_type",
+        "version_number",
+    ]
 
 
 def test_username_is_case_sensitive_and_database_rejects_whitespace(
@@ -336,7 +443,7 @@ def test_incomplete_render_uses_placeholder_and_reuses_current_article(
         assert reused is True
         assert second.id == first.id
         set_batch_cover_media_id(batch, "another-cover")
-        assert batch.current_article_id is None
+        assert batch.current_preview_article_id is None
 
 
 class _FakeWechat:
@@ -464,15 +571,15 @@ def test_batch_exposes_latest_stale_article_and_preview_omits_referrer(
             json={"username": "PreviewAdmin", "password": "password-123"},
         ).raise_for_status()
 
-        stale = client.get(f"/api/preview-batches/{batch_id}")
+        stale = client.get(f"/api/batches/{batch_id}")
         stale.raise_for_status()
-        assert stale.json()["current_article_id"] is None
-        assert stale.json()["latest_article_id"] == article_id
+        assert stale.json()["current_preview_article_id"] is None
+        assert stale.json()["latest_preview_article_id"] == article_id
 
-        empty = client.get(f"/api/preview-batches/{never_rendered_id}")
+        empty = client.get(f"/api/batches/{never_rendered_id}")
         empty.raise_for_status()
-        assert empty.json()["current_article_id"] is None
-        assert empty.json()["latest_article_id"] is None
+        assert empty.json()["current_preview_article_id"] is None
+        assert empty.json()["latest_preview_article_id"] is None
 
         preview = client.get(f"/api/articles/{article_id}/preview")
         preview.raise_for_status()
@@ -491,7 +598,7 @@ def test_match_payload_fills_legacy_result_text_without_mutating_snapshot(
 ) -> None:
     with session_factory.begin() as session:
         _batch(session, complete=True, game_id=9221)
-        match = session.get(PreviewMatch, 9221)
+        match = session.get(Match, 9221)
         assert match is not None
         legacy_result = {
             "game_id": 8001,
@@ -526,7 +633,7 @@ def test_uploaded_cover_is_content_addressed_and_checked(
         assert batch.cover_storage_key.startswith("covers/")
         batch_id = batch.id
     with session_factory.begin() as session:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         assert batch is not None
         article, _ = render_batch(session, settings, batch)
         assert article_domain(settings, article).cover.path.is_file()
@@ -538,6 +645,106 @@ def test_uploaded_cover_is_content_addressed_and_checked(
             article_domain(settings, article)
 
 
+def test_stage6_single_and_batch_report_rendering(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    game_id = 9252
+    with session_factory.begin() as session:
+        session.add_all(
+            [
+                User(
+                    username="ReportAdmin",
+                    display_name="战报管理员",
+                    password_hash=hash_password("password-123"),
+                    role="admin",
+                ),
+                User(
+                    username="ReportUser",
+                    display_name="战报用户",
+                    password_hash=hash_password("password-123"),
+                    role="user",
+                ),
+            ]
+        )
+        batch = _batch(session, complete=True, game_id=game_id)
+        batch_id = batch.id
+        match = session.get(Match, game_id)
+        assert match is not None
+        match.status = "scheduled"
+
+    reports = _FakeWebsiteReports(_finished_detail(game_id))
+    app = create_app(
+        settings=settings,
+        session_factory=session_factory,
+        external_factories=ExternalFactories(reports=lambda: reports),
+    )
+    with TestClient(app) as user_client, TestClient(app) as admin_client:
+        user_client.post(
+            "/api/auth/login",
+            json={"username": "ReportUser", "password": "password-123"},
+        ).raise_for_status()
+        admin_client.post(
+            "/api/auth/login",
+            json={"username": "ReportAdmin", "password": "password-123"},
+        ).raise_for_status()
+
+        assert user_client.post(
+            f"/api/batches/{batch_id}/refresh-data"
+        ).status_code == 403
+        first = user_client.post(f"/api/matches/{game_id}/render-report")
+        first.raise_for_status()
+        assert first.json()["reused"] is False
+        assert first.json()["match"]["status"] == "scheduled"
+        assert first.json()["match"]["report"]["kind"] == "image"
+        assert "report_storage_key" not in first.text
+        assert reports.query_calls == 1
+        assert reports.render_calls == 1
+
+        reused = user_client.post(f"/api/matches/{game_id}/render-report")
+        reused.raise_for_status()
+        assert reused.json()["reused"] is True
+        assert reports.query_calls == 2
+        assert reports.render_calls == 1
+        content = user_client.get(f"/api/matches/{game_id}/report/content")
+        content.raise_for_status()
+        assert content.headers["content-type"].startswith("image/png")
+
+        reports.detail = replace(
+            reports.detail,
+            game=replace(reports.detail.game, home_score=3, result_text="3:1"),
+        )
+        changed = user_client.post(f"/api/matches/{game_id}/render-report")
+        changed.raise_for_status()
+        assert changed.json()["reused"] is False
+        assert reports.query_calls == 3
+        assert reports.render_calls == 2
+
+        assert user_client.post(
+            f"/api/batches/{batch_id}/render-report"
+        ).status_code == 403
+        no_finished = admin_client.post(
+            f"/api/batches/{batch_id}/render-report"
+        )
+        assert no_finished.status_code == 409
+        assert no_finished.json()["error"]["code"] == "no_finished_matches"
+
+        with session_factory.begin() as session:
+            match = session.get(Match, game_id)
+            assert match is not None
+            match.status = "finished"
+        article = admin_client.post(f"/api/batches/{batch_id}/render-report")
+        article.raise_for_status()
+        assert article.json()["article"]["article_type"] == "report"
+        candidates = admin_client.get(
+            "/api/articles/candidates?article_type=report"
+        )
+        candidates.raise_for_status()
+        assert [
+            item["article"]["id"] for item in candidates.json()["items"]
+        ] == [article.json()["article"]["id"]]
+
+
 def test_identical_weather_keeps_render_and_actual_change_invalidates(
     session_factory,
     settings: WebsiteSettings,
@@ -547,17 +754,17 @@ def test_identical_weather_keeps_render_and_actual_change_invalidates(
         article, _ = render_batch(session, settings, batch)
         set_manual_weather(
             session,
-            batch.preview_date,
+            batch.batch_date,
             condition="晴",
             low_c=20,
             high_c=30,
             wind_direction="南风",
             wind_level="2级",
         )
-        assert batch.current_article_id == article.id
+        assert batch.current_preview_article_id == article.id
         set_manual_weather(
             session,
-            batch.preview_date,
+            batch.batch_date,
             condition="多云",
             low_c=20,
             high_c=30,
@@ -565,7 +772,7 @@ def test_identical_weather_keeps_render_and_actual_change_invalidates(
             wind_level="2级",
         )
         session.refresh(batch)
-        assert batch.current_article_id is None
+        assert batch.current_preview_article_id is None
 
 
 def test_match_move_and_recovery_preserve_manual_content_and_claim(
@@ -580,8 +787,8 @@ def test_match_move_and_recovery_preserve_manual_content_and_claim(
         )
         session.add(writer)
         source_batch = _batch(session, complete=True, game_id=9271)
-        target_batch = PreviewBatch(
-            preview_date=date(2026, 8, 10),
+        target_batch = Batch(
+            batch_date=date(2026, 8, 10),
             competition="female",
             cover_kind="media_id",
             cover_storage_key="website-default-cover",
@@ -589,7 +796,7 @@ def test_match_move_and_recovery_preserve_manual_content_and_claim(
         )
         session.add(target_batch)
         session.flush()
-        record = session.get(PreviewMatch, 9271)
+        record = session.get(Match, 9271)
         assert record is not None
         record.task_open = True
         record.claimed_by_user_id = writer.id
@@ -600,13 +807,14 @@ def test_match_move_and_recovery_preserve_manual_content_and_claim(
         )
         moved_source = replace(
             source,
-            preview_date=target_batch.preview_date,
+            preview_date=target_batch.batch_date,
             matches=(moved_match,),
         )
         game = SimpleNamespace(
             tournament_id=record.tournament_id,
             tournament_name=record.tournament_name,
             kickoff_local=moved_match.kickoff,
+            status=GameStatus.SCHEDULED,
         )
         upsert_source(session, target_batch, moved_source, {9271: game})
         assert record.batch_id == target_batch.id
@@ -648,13 +856,13 @@ def test_login_case_sensitivity_and_body_version_conflict(
             json={"username": "Admin", "password": "password-123"},
         ).status_code == 200
         updated = client.patch(
-            "/api/preview-matches/9301",
+            "/api/matches/9301",
             json={"expected_version": 0, "body": "新正文"},
         )
         assert updated.status_code == 200
         assert updated.json()["body_version"] == 1
         conflict = client.patch(
-            "/api/preview-matches/9301",
+            "/api/matches/9301",
             json={"expected_version": 0, "body": "覆盖正文"},
         )
         assert conflict.status_code == 409
@@ -682,8 +890,8 @@ def test_batch_list_uses_descending_dates_and_business_competition_order(
         for target_date in (date(2026, 8, 19), date(2026, 8, 20)):
             for competition in ("futsal", "female", "male"):
                 session.add(
-                    PreviewBatch(
-                        preview_date=target_date,
+                    Batch(
+                        batch_date=target_date,
                         competition=competition,
                         cover_kind="media_id",
                         cover_storage_key="website-default-cover",
@@ -696,10 +904,10 @@ def test_batch_list_uses_descending_dates_and_business_competition_order(
             "/api/auth/login",
             json={"username": "OrderAdmin", "password": "password-123"},
         ).raise_for_status()
-        response = client.get("/api/preview-batches")
+        response = client.get("/api/batches")
         response.raise_for_status()
         assert [
-            (item["preview_date"], item["competition"])
+            (item["batch_date"], item["competition"])
             for item in response.json()["items"]
         ] == [
             ("2026-08-20", "male"),
@@ -1109,7 +1317,7 @@ def test_create_reuses_without_query_and_only_all_query_failures_return_502(
         ).raise_for_status()
 
         reused = client.post(
-            "/api/preview-batches/create",
+            "/api/batches/create",
             json={
                 "dates": [existing_date.isoformat()],
                 "competitions": ["female"],
@@ -1129,7 +1337,7 @@ def test_create_reuses_without_query_and_only_all_query_failures_return_502(
         assert calls == []
 
         partial = client.post(
-            "/api/preview-batches/create",
+            "/api/batches/create",
             json={
                 "dates": [existing_date.isoformat()],
                 "competitions": ["male", "female"],
@@ -1142,7 +1350,7 @@ def test_create_reuses_without_query_and_only_all_query_failures_return_502(
         ]
 
         failed = client.post(
-            "/api/preview-batches/create",
+            "/api/batches/create",
             json={
                 "dates": [failed_date.isoformat()],
                 "competitions": ["male"],
@@ -1150,7 +1358,7 @@ def test_create_reuses_without_query_and_only_all_query_failures_return_502(
         )
         assert failed.status_code == 502
         error = failed.json()["error"]
-        assert error["code"] == "preview_batch_queries_failed"
+        assert error["code"] == "batch_queries_failed"
         assert error["details"]["results"][0]["status"] == "failed"
         assert error["details"]["results"][0]["error"]["code"] == "query_failed"
 
@@ -1183,28 +1391,28 @@ def test_task_endpoints_toggle_all_active_matches_without_request_body(
             "/api/auth/login",
             json={"username": "TaskAdmin", "password": "password-123"},
         ).raise_for_status()
-        opened = client.post(f"/api/preview-batches/{batch_id}/open-tasks")
+        opened = client.post(f"/api/batches/{batch_id}/open-tasks")
         opened.raise_for_status()
         assert opened.json() == {"game_ids": [9401], "task_open": True}
 
-        listed = client.get("/api/preview-matches")
+        listed = client.get("/api/matches")
         listed.raise_for_status()
         assert len(listed.json()["items"]) == 1
         item = listed.json()["items"][0]
         assert item["game_id"] == 9401
         assert item["batch_id"] == batch_id
-        assert item["preview_date"] == "2026-09-03"
+        assert item["batch_date"] == "2026-09-03"
         assert item["competition"] == "male"
         assert item["active"] is True
         assert item["task_open"] is True
 
-        closed = client.post(f"/api/preview-batches/{batch_id}/close-tasks")
+        closed = client.post(f"/api/batches/{batch_id}/close-tasks")
         closed.raise_for_status()
         assert closed.json() == {"game_ids": [9401], "task_open": False}
-        assert client.get("/api/preview-matches").json() == {"items": []}
+        assert client.get("/api/matches").json() == {"items": []}
 
     with session_factory() as session:
-        match = session.get(PreviewMatch, 9401)
+        match = session.get(Match, 9401)
         assert match is not None
         assert match.task_open is False
 
@@ -1348,16 +1556,16 @@ def test_stage4_task_claim_content_release_assign_and_read_permissions(
             json={"username": "CollabUser2", "password": "second-password"},
         ).raise_for_status()
 
-        rendered = admin_client.post(f"/api/preview-batches/{batch_id}/render")
+        rendered = admin_client.post(f"/api/batches/{batch_id}/render-preview")
         rendered.raise_for_status()
         article_id = rendered.json()["article"]["id"]
-        assert first_client.get("/api/preview-batches").status_code == 200
-        assert first_client.get(f"/api/preview-batches/{batch_id}").status_code == 200
+        assert first_client.get("/api/batches").status_code == 200
+        assert first_client.get(f"/api/batches/{batch_id}").status_code == 200
         assert first_client.get(f"/api/articles/{article_id}").status_code == 200
         assert first_client.get(f"/api/articles/{article_id}/preview").status_code == 200
-        assert first_client.post(f"/api/preview-batches/{batch_id}/render").status_code == 403
+        assert first_client.post(f"/api/batches/{batch_id}/render-preview").status_code == 403
 
-        admin_client.post(f"/api/preview-batches/{batch_id}/open-tasks").raise_for_status()
+        admin_client.post(f"/api/batches/{batch_id}/open-tasks").raise_for_status()
         waiting = first_client.get("/api/tasks/wait_claim")
         waiting.raise_for_status()
         waiting_item = waiting.json()["items"][0]
@@ -1368,40 +1576,40 @@ def test_stage4_task_claim_content_release_assign_and_read_permissions(
         assert second_client.get("/api/tasks/open").status_code == 403
         assert len(admin_client.get("/api/tasks/open").json()["items"]) == 1
 
-        claimed = first_client.post("/api/preview-matches/9501/claim")
+        claimed = first_client.post("/api/matches/9501/claim")
         claimed.raise_for_status()
         assert claimed.json()["reused"] is False
         assert claimed.json()["match"]["claimed_by_user_id"] == first_id
         assert claimed.json()["match"]["writers"] == ["用户甲"]
         assert first_client.get("/api/tasks/wait_claim").json() == {"items": []}
         assert len(first_client.get("/api/me/tasks").json()["items"]) == 1
-        assert second_client.post("/api/preview-matches/9501/claim").status_code == 409
+        assert second_client.post("/api/matches/9501/claim").status_code == 409
 
         version = claimed.json()["match"]["body_version"]
         assert second_client.patch(
-            "/api/preview-matches/9501/body",
+            "/api/matches/9501/body",
             json={"expected_version": version, "body": "越权正文"},
         ).status_code == 403
         with session_factory.begin() as session:
-            match = session.get(PreviewMatch, 9501)
+            match = session.get(Match, 9501)
             match.active = False
             match.task_open = False
         saved = first_client.patch(
-            "/api/preview-matches/9501/body",
+            "/api/matches/9501/body",
             json={"expected_version": version, "body": "失效后仍可保存"},
         )
         saved.raise_for_status()
         assert saved.json()["body"] == "失效后仍可保存"
         assert len(first_client.get("/api/me/tasks").json()["items"]) == 1
-        assert second_client.post("/api/preview-matches/9501/release").status_code == 403
+        assert second_client.post("/api/matches/9501/release").status_code == 403
 
-        released = admin_client.post("/api/preview-matches/9501/release")
+        released = admin_client.post("/api/matches/9501/release")
         released.raise_for_status()
         assert released.json()["claimed_by_user_id"] is None
         assert released.json()["writers"] == []
         assert released.json()["body"] == "失效后仍可保存"
         assigned = admin_client.post(
-            "/api/preview-matches/9501/assign", json={"user_id": second_id}
+            "/api/matches/9501/assign", json={"user_id": second_id}
         )
         assigned.raise_for_status()
         assert assigned.json()["claimed_by_user_id"] == second_id
@@ -1411,8 +1619,8 @@ def test_stage4_task_claim_content_release_assign_and_read_permissions(
         users = admin_client.get("/api/admin/users").json()["items"]
         managed = next(item for item in users if item["id"] == second_id)
         assert managed["claimed_task_count"] == 1
-        detail = first_client.get(f"/api/preview-batches/{batch_id}").json()
-        assert detail["current_article_id"] is None
+        detail = first_client.get(f"/api/batches/{batch_id}").json()
+        assert detail["current_preview_article_id"] is None
 
 
 def test_stage4_concurrent_claim_has_one_winner(
@@ -1447,7 +1655,7 @@ def test_stage4_concurrent_claim_has_one_winner(
             game_id=game_id,
         )
         batch_id = batch.id
-        match = session.get(PreviewMatch, game_id)
+        match = session.get(Match, game_id)
         match.task_open = True
         match.writers = []
         match.body = ""
@@ -1473,7 +1681,7 @@ def test_stage4_concurrent_claim_has_one_winner(
 
             def claim(client: TestClient):
                 gate.wait()
-                return client.post(f"/api/preview-matches/{game_id}/claim")
+                return client.post(f"/api/matches/{game_id}/claim")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 responses = list(
@@ -1481,14 +1689,14 @@ def test_stage4_concurrent_claim_has_one_winner(
                 )
             assert sorted(response.status_code for response in responses) == [200, 409]
         with direct_factory() as session:
-            match = session.get(PreviewMatch, game_id)
+            match = session.get(Match, game_id)
             assert match.claimed_by_user_id in user_ids
             assert match.writers in (["并发甲"], ["并发乙"])
             assert match.body_version == 1
     finally:
         with direct_factory.begin() as session:
-            session.execute(delete(PreviewMatch).where(PreviewMatch.game_id == game_id))
-            session.execute(delete(PreviewBatch).where(PreviewBatch.id == batch_id))
+            session.execute(delete(Match).where(Match.game_id == game_id))
+            session.execute(delete(Batch).where(Batch.id == batch_id))
             session.execute(delete(Weather).where(Weather.date == target_date))
             session.execute(delete(User).where(User.id.in_(user_ids)))
 

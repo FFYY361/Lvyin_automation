@@ -32,7 +32,6 @@ from .models import (
     TeamTournamentOutcome,
     TournamentRef,
     TournamentSnapshot,
-    TournamentTeam,
     UserProbe,
 )
 from .policy import BLACKLISTED_TOURNAMENT_IDS
@@ -76,7 +75,6 @@ __all__ = [
     "Timeout",
     "TournamentRef",
     "TournamentSnapshot",
-    "TournamentTeam",
     "UserProbe",
     "render_game_report",
     "resolve_report_team_name",

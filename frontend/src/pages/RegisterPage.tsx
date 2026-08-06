@@ -17,7 +17,7 @@ export function RegisterPage() {
 
   useEffect(() => { document.title = "注册 · 前瞻协作"; }, []);
   if (loading) return <LoadingScreen label="正在检查登录状态" />;
-  if (user) return <Navigate to={user.role === "admin" ? "/batches" : "/tasks"} replace />;
+  if (user) return <Navigate to={user.role === "admin" ? "/previews" : "/tasks"} replace />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import html
+import json
 import logging
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from sqlalchemy import func, select, text, update
@@ -23,6 +27,23 @@ from auto_preview.source import (
     PreviewSourceBuilder,
     preview_data_to_dict,
 )
+from auto_report.models import Competition as ReportCompetition
+from auto_report.service import (
+    ARTICLE_AUTHOR as REPORT_ARTICLE_AUTHOR,
+)
+from auto_report.service import (
+    ARTICLE_DIGEST as REPORT_ARTICLE_DIGEST,
+)
+from auto_report.service import (
+    ARTICLE_TEMPLATE_VERSION as REPORT_ARTICLE_TEMPLATE_VERSION,
+)
+from auto_report.service import (
+    ARTICLE_TITLES as REPORT_ARTICLE_TITLES,
+)
+from auto_report.service import (
+    DEFAULT_REPORT_COVER_MEDIA_ID,
+    build_abandon_text,
+)
 from preview import (
     PlayedMatch,
     PreviewColumnConfig,
@@ -38,7 +59,14 @@ from preview import (
     parse_preview_paragraphs,
     validate_preview_source,
 )
-from thufootball import THUFootballQueryService
+from thufootball import (
+    GameDetail,
+    GameStatus,
+    ReportSettings,
+    THUFootballClient,
+    THUFootballQueryService,
+    THUFootballReportService,
+)
 from weather import DailyWeather, WeatherQueryService
 from wechat_official import (
     Article,
@@ -48,21 +76,29 @@ from wechat_official import (
     publication_fingerprint,
 )
 
-from .artifacts import resolve_storage_key, save_cover, sha256_bytes, sha256_file
+from .artifacts import (
+    resolve_report_storage_key,
+    resolve_storage_key,
+    save_cover,
+    save_report,
+    sha256_bytes,
+    sha256_file,
+)
 from .config import PROJECT_ROOT, WebsiteSettings
 from .models import (
     ArticleRecord,
+    Batch,
     EditorialDefaults,
-    PreviewBatch,
+    Match,
     Weather,
     WechatDraft,
 )
-from .models import PreviewMatch as PreviewMatchRecord
 
 AUTO_PREVIEW_DIGEST = "马杯前瞻"
 HAIDIAN_ADCODE = "110108"
 COMPETITION_ORDER = {"male": 0, "female": 1, "futsal": 2}
 SHANGHAI = timezone(timedelta(hours=8))
+MATCH_REPORT_TEMPLATE_VERSION = "thufootball-report-canvas-v1"
 
 
 class WorkflowError(RuntimeError):
@@ -89,6 +125,30 @@ class ExternalFactories:
     queries: ServiceFactory = THUFootballQueryService.from_environment
     weather: ServiceFactory = WeatherQueryService.from_environment
     wechat: ServiceFactory = WechatOfficialService.from_environment
+    reports: ServiceFactory = lambda: WebsiteReportSession()
+
+
+class WebsiteReportSession:
+    """Share one authenticated THUFootball client while rendering reports."""
+
+    def __init__(self) -> None:
+        self._client = THUFootballClient()
+        self._reports = THUFootballReportService(self._client)
+
+    async def __aenter__(self) -> "WebsiteReportSession":
+        await self._client.__aenter__()
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self._client.aclose()
+
+    async def get_game_detail(self, game_id: int) -> tuple[Any, tuple[Any, ...]]:
+        return await self._reports.get_game_detail(game_id)
+
+    async def render_game_detail(
+        self, detail: GameDetail, *, settings: ReportSettings
+    ) -> tuple[bytes, int, int]:
+        return await self._reports.render_game_detail(detail, settings=settings)
 
 
 def _now() -> datetime:
@@ -108,25 +168,25 @@ def _advisory_lock(session: Session, namespace: str, value: str) -> None:
         )
 
 
-def _invalidate_batch(batch: PreviewBatch) -> None:
-    batch.current_article_id = None
+def _invalidate_batch(batch: Batch) -> None:
+    batch.current_preview_article_id = None
     batch.updated_at = _now()
 
 
 def _invalidate_date(session: Session, target_date: date) -> None:
     session.execute(
-        update(PreviewBatch)
-        .where(PreviewBatch.preview_date == target_date)
-        .values(current_article_id=None, updated_at=_now())
+        update(Batch)
+        .where(Batch.batch_date == target_date)
+        .values(current_preview_article_id=None, updated_at=_now())
     )
 
 
-def _deactivate_active_matches(session: Session, batch: PreviewBatch) -> bool:
+def _deactivate_active_matches(session: Session, batch: Batch) -> bool:
     matches = list(
         session.scalars(
-            select(PreviewMatchRecord).where(
-                PreviewMatchRecord.batch_id == batch.id,
-                PreviewMatchRecord.active.is_(True),
+            select(Match).where(
+                Match.batch_id == batch.id,
+                Match.active.is_(True),
             )
         )
     )
@@ -138,6 +198,7 @@ def _deactivate_active_matches(session: Session, batch: PreviewBatch) -> bool:
         match.task_open = False
         match.updated_at = changed_at
     _invalidate_batch(batch)
+    batch.current_report_article_id = None
     return True
 
 
@@ -240,7 +301,7 @@ def _source_match_payload(source: PreviewSourceData) -> dict[int, dict[str, Any]
 
 def upsert_source(
     session: Session,
-    batch: PreviewBatch,
+    batch: Batch,
     source: PreviewSourceData,
     games_by_id: dict[int, Any],
 ) -> bool:
@@ -249,8 +310,13 @@ def upsert_source(
     changed = False
     current = list(
         session.scalars(
-            select(PreviewMatchRecord).where(PreviewMatchRecord.batch_id == batch.id)
+            select(Match).where(Match.batch_id == batch.id)
         )
+    )
+    report_order_before = sorted(
+        (record.kickoff, record.game_id)
+        for record in current
+        if record.active and record.status == "finished"
     )
     for record in current:
         if record.game_id not in incoming_ids and record.active:
@@ -274,14 +340,14 @@ def upsert_source(
             "head_to_head_snapshot": payload["head_to_head"],
             "active": True,
         }
-        record = session.get(PreviewMatchRecord, game_id)
+        record = session.get(Match, game_id)
         if record is None:
-            session.add(PreviewMatchRecord(game_id=game_id, **values))
+            session.add(Match(game_id=game_id, status=game.status.value, **values))
             changed = True
             continue
         record_changed = any(getattr(record, name) != item for name, item in values.items())
         if record.batch_id != batch.id:
-            old_batch = session.get(PreviewBatch, record.batch_id)
+            old_batch = session.get(Batch, record.batch_id)
             if old_batch is not None:
                 _invalidate_batch(old_batch)
             record.task_open = False
@@ -291,8 +357,27 @@ def upsert_source(
                 setattr(record, name, item)
             record.updated_at = _now()
             changed = True
+        if record.status != game.status.value:
+            record.status = game.status.value
+            record.updated_at = _now()
     if changed:
         _invalidate_batch(batch)
+    session.flush()
+    report_order_after = [
+        tuple(row)
+        for row in session.execute(
+            select(Match.kickoff, Match.game_id)
+            .where(
+                Match.batch_id == batch.id,
+                Match.active.is_(True),
+                Match.status == "finished",
+            )
+            .order_by(Match.kickoff, Match.game_id)
+        )
+    ]
+    if report_order_before != report_order_after:
+        batch.current_report_article_id = None
+        batch.updated_at = _now()
     batch.last_error_code = None
     batch.last_error_message = None
     batch.last_error_at = None
@@ -305,11 +390,11 @@ def _get_or_create_batch(
     settings: WebsiteSettings,
     preview_date: date,
     competition: str,
-) -> tuple[PreviewBatch, bool]:
+) -> tuple[Batch, bool]:
     batch = session.scalar(
-        select(PreviewBatch).where(
-            PreviewBatch.preview_date == preview_date,
-            PreviewBatch.competition == competition,
+        select(Batch).where(
+            Batch.batch_date == preview_date,
+            Batch.competition == competition,
         )
     )
     if batch is not None:
@@ -319,8 +404,8 @@ def _get_or_create_batch(
         defaults = EditorialDefaults(id=1)
         session.add(defaults)
         session.flush()
-    batch = PreviewBatch(
-        preview_date=preview_date,
+    batch = Batch(
+        batch_date=preview_date,
         competition=competition,
         editors=list(defaults.editors),
         reviewers=list(defaults.reviewers),
@@ -368,14 +453,14 @@ async def create_batches(
     with factory() as session:
         existing_batches = list(
             session.scalars(
-                select(PreviewBatch).where(
-                    PreviewBatch.preview_date.in_(resolved_dates),
-                    PreviewBatch.competition.in_(resolved_competitions),
+                select(Batch).where(
+                    Batch.batch_date.in_(resolved_dates),
+                    Batch.competition.in_(resolved_competitions),
                 )
             )
         )
     existing = {
-        (batch.preview_date, batch.competition): batch.id
+        (batch.batch_date, batch.competition): batch.id
         for batch in existing_batches
     }
     results: list[dict[str, Any]] = [
@@ -454,9 +539,9 @@ async def create_batches(
                     with session.begin():
                         _advisory_lock(session, "preview-batch", lock_value)
                         current_batch = session.scalar(
-                            select(PreviewBatch).where(
-                                PreviewBatch.preview_date == target_date,
-                                PreviewBatch.competition == competition_value,
+                            select(Batch).where(
+                                Batch.batch_date == target_date,
+                                Batch.competition == competition_value,
                             )
                         )
                         if current_batch is not None:
@@ -519,7 +604,7 @@ async def create_batches(
 
 async def refresh_batch(
     session: Session,
-    batch: PreviewBatch,
+    batch: Batch,
     factories: ExternalFactories,
 ) -> None:
     config = competition_config(Competition(batch.competition))
@@ -531,13 +616,13 @@ async def refresh_batch(
             games = await builder.query_current_games()
             games_by_id = {game.game_id: game for game in games}
             try:
-                source = await builder.build(batch.preview_date, games=games)
+                source = await builder.build(batch.batch_date, games=games)
             except NoGamesForDate:
                 source = None
         _advisory_lock(
             session,
             "preview-batch",
-            f"{batch.preview_date.isoformat()}:{batch.competition}",
+            f"{batch.batch_date.isoformat()}:{batch.competition}",
         )
         if source is None:
             _deactivate_active_matches(session, batch)
@@ -546,11 +631,11 @@ async def refresh_batch(
             batch.last_error_at = None
         else:
             upsert_source(session, batch, source, games_by_id)
-        current_weather = session.get(Weather, batch.preview_date)
+        current_weather = session.get(Weather, batch.batch_date)
         if current_weather is None or current_weather.source != "manual":
             try:
                 async with factories.weather() as service:
-                    value = await service.get_weather(HAIDIAN_ADCODE, batch.preview_date)
+                    value = await service.get_weather(HAIDIAN_ADCODE, batch.batch_date)
                 upsert_automatic_weather(session, value)
             except Exception as exc:
                 batch.last_error_code = "weather_query_failed"
@@ -565,11 +650,11 @@ async def refresh_batch(
     session.commit()
 
 
-def completeness(session: Session, batch: PreviewBatch) -> list[str]:
+def completeness(session: Session, batch: Batch) -> list[str]:
     missing: list[str] = []
     if not batch.headline.strip():
         missing.append("headline")
-    weather = session.get(Weather, batch.preview_date)
+    weather = session.get(Weather, batch.batch_date)
     if weather is None:
         missing.append("weather")
     for field in ("editors", "reviewers", "approvers"):
@@ -577,12 +662,12 @@ def completeness(session: Session, batch: PreviewBatch) -> list[str]:
             missing.append(field)
     matches = list(
         session.scalars(
-            select(PreviewMatchRecord)
+            select(Match)
             .where(
-                PreviewMatchRecord.batch_id == batch.id,
-                PreviewMatchRecord.active.is_(True),
+                Match.batch_id == batch.id,
+                Match.active.is_(True),
             )
-            .order_by(PreviewMatchRecord.kickoff, PreviewMatchRecord.game_id)
+            .order_by(Match.kickoff, Match.game_id)
         )
     )
     if not matches:
@@ -595,13 +680,13 @@ def completeness(session: Session, batch: PreviewBatch) -> list[str]:
     return missing
 
 
-def batch_status(session: Session, batch: PreviewBatch) -> str:
+def batch_status(session: Session, batch: Batch) -> str:
     if completeness(session, batch):
         return "incomplete"
-    if batch.current_article_id is not None:
+    if batch.current_preview_article_id is not None:
         for draft in session.scalars(select(WechatDraft)):
             if any(
-                item.get("article_id") == batch.current_article_id
+                item.get("article_id") == batch.current_preview_article_id
                 for item in draft.articles
                 if isinstance(item, dict)
             ):
@@ -652,9 +737,9 @@ def _team(value: dict[str, Any]) -> PreviewTeam:
     )
 
 
-def assemble_source(session: Session, batch: PreviewBatch) -> PreviewSourceData:
+def assemble_source(session: Session, batch: Batch) -> PreviewSourceData:
     config = competition_config(Competition(batch.competition))
-    weather_record = session.get(Weather, batch.preview_date)
+    weather_record = session.get(Weather, batch.batch_date)
     weather = (
         None
         if weather_record is None
@@ -668,12 +753,12 @@ def assemble_source(session: Session, batch: PreviewBatch) -> PreviewSourceData:
     )
     matches: list[PreviewMatch] = []
     for record in session.scalars(
-        select(PreviewMatchRecord)
+        select(Match)
         .where(
-            PreviewMatchRecord.batch_id == batch.id,
-            PreviewMatchRecord.active.is_(True),
+            Match.batch_id == batch.id,
+            Match.active.is_(True),
         )
-        .order_by(PreviewMatchRecord.kickoff, PreviewMatchRecord.game_id)
+        .order_by(Match.kickoff, Match.game_id)
     ):
         paragraphs = (
             parse_preview_paragraphs(record.body)
@@ -706,7 +791,7 @@ def assemble_source(session: Session, batch: PreviewBatch) -> PreviewSourceData:
                 competition_name=config.full_name,
                 stage="赛程待补充",
                 kickoff=datetime.combine(
-                    batch.preview_date,
+                    batch.batch_date,
                     time(hour=12),
                     tzinfo=SHANGHAI,
                 ),
@@ -723,7 +808,7 @@ def assemble_source(session: Session, batch: PreviewBatch) -> PreviewSourceData:
             competition_full_name=config.full_name,
             competition_short_name=config.short_name,
         ),
-        preview_date=batch.preview_date,
+        preview_date=batch.batch_date,
         headline=batch.headline.strip() or HEADLINE_PLACEHOLDER,
         weather=weather,
         matches=tuple(matches),
@@ -738,7 +823,7 @@ def assemble_source(session: Session, batch: PreviewBatch) -> PreviewSourceData:
 
 
 def _cover_for_batch(
-    settings: WebsiteSettings, batch: PreviewBatch
+    settings: WebsiteSettings, batch: Batch
 ) -> tuple[CoverFile | CoverMediaId, str]:
     if batch.cover_kind == "media_id":
         value = batch.cover_storage_key.strip()
@@ -752,12 +837,12 @@ def _cover_for_batch(
 def render_batch(
     session: Session,
     settings: WebsiteSettings,
-    batch: PreviewBatch,
+    batch: Batch,
 ) -> tuple[ArticleRecord, bool]:
     _advisory_lock(session, "preview-batch", str(batch.id))
     session.refresh(batch)
-    if batch.current_article_id is not None:
-        existing = session.get(ArticleRecord, batch.current_article_id)
+    if batch.current_preview_article_id is not None:
+        existing = session.get(ArticleRecord, batch.current_preview_article_id)
         if existing is None or existing.batch_id != batch.id:
             raise WorkflowError(409, "article_pointer_invalid", "current article is invalid")
         return existing, True
@@ -774,12 +859,14 @@ def render_batch(
     )
     latest_version = session.scalar(
         select(func.max(ArticleRecord.version_number)).where(
-            ArticleRecord.batch_id == batch.id
+            ArticleRecord.batch_id == batch.id,
+            ArticleRecord.article_type == "preview",
         )
     )
     missing = completeness(session, batch)
     record = ArticleRecord(
         batch_id=batch.id,
+        article_type="preview",
         version_number=(latest_version or 0) + 1,
         input_snapshot=preview_data_to_dict(source),
         title=article.title,
@@ -797,7 +884,234 @@ def render_batch(
     )
     session.add(record)
     session.flush()
-    batch.current_article_id = record.id
+    batch.current_preview_article_id = record.id
+    batch.updated_at = _now()
+    session.flush()
+    return record, False
+
+
+def _report_input_sha256(detail: GameDetail) -> str:
+    def default(value: Any) -> str:
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        raise TypeError(f"unsupported report input value: {type(value).__name__}")
+
+    payload = {
+        "detail": asdict(detail),
+        "settings": asdict(ReportSettings()),
+        "template_version": MATCH_REPORT_TEMPLATE_VERSION,
+    }
+    return sha256_bytes(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=default,
+        ).encode("utf-8")
+    )
+
+
+def report_content_path(settings: WebsiteSettings, match: Match) -> Path:
+    if match.report_storage_key is None or match.report_content_sha256 is None:
+        raise WorkflowError(404, "report_not_found", "match report has not been rendered")
+    try:
+        path = resolve_report_storage_key(settings.artifact_root, match.report_storage_key)
+    except ValueError as exc:
+        raise WorkflowError(409, "report_path_invalid", str(exc)) from exc
+    if not path.is_file():
+        raise WorkflowError(409, "report_missing", "match report artifact is missing")
+    if sha256_file(path) != match.report_content_sha256:
+        raise WorkflowError(409, "report_changed", "match report artifact changed")
+    return path
+
+
+async def _render_match_with_service(
+    session: Session,
+    settings: WebsiteSettings,
+    match: Match,
+    reports: Any,
+) -> bool:
+    detail, _warnings = await reports.get_game_detail(match.game_id)
+    if detail.game.status is not GameStatus.FINISHED:
+        raise WorkflowError(
+            409,
+            "match_not_finished",
+            f"match {match.game_id} is not finished; refresh the batch first",
+        )
+    input_sha256 = _report_input_sha256(detail)
+    if match.report_input_sha256 == input_sha256:
+        try:
+            report_content_path(settings, match)
+        except WorkflowError:
+            pass
+        else:
+            return True
+
+    if detail.game.home_abandon is True or detail.game.away_abandon is True:
+        batch = session.get(Batch, match.batch_id)
+        if batch is None:
+            raise WorkflowError(409, "batch_missing", "match batch is missing")
+        content = build_abandon_text(
+            detail.game, ReportCompetition(batch.competition)
+        ).encode("utf-8")
+        extension = "txt"
+    else:
+        content, _width, _height = await reports.render_game_detail(
+            detail, settings=ReportSettings()
+        )
+        extension = "png"
+    try:
+        storage_key, content_sha256 = save_report(
+            settings.artifact_root, content, extension=extension
+        )
+    except ValueError as exc:
+        raise WorkflowError(500, "report_artifact_invalid", str(exc)) from exc
+    match.report_input_sha256 = input_sha256
+    match.report_storage_key = storage_key
+    match.report_content_sha256 = content_sha256
+    match.report_rendered_at = _now()
+    match.updated_at = _now()
+    batch = session.get(Batch, match.batch_id)
+    if batch is None:
+        raise WorkflowError(409, "batch_missing", "match batch is missing")
+    batch.current_report_article_id = None
+    batch.updated_at = _now()
+    session.flush()
+    return False
+
+
+async def render_match_report(
+    session: Session,
+    settings: WebsiteSettings,
+    factories: ExternalFactories,
+    match: Match,
+) -> bool:
+    _advisory_lock(session, "match-report", str(match.game_id))
+    session.refresh(match)
+    try:
+        async with factories.reports() as reports:
+            return await _render_match_with_service(
+                session, settings, match, reports
+            )
+    except WorkflowError:
+        raise
+    except Exception as exc:
+        raise WorkflowError(502, "report_query_failed", str(exc)) from exc
+
+
+def _report_body(settings: WebsiteSettings, matches: list[Match]) -> str:
+    fragments: list[str] = []
+    for match in matches:
+        path = report_content_path(settings, match)
+        if path.suffix == ".png":
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            fragments.append(
+                '<section style="margin:0;padding:0;">'
+                '<img src="data:image/png;base64,'
+                + encoded
+                + '" style="display:block;width:100%;height:auto;" />'
+                "</section>"
+            )
+        else:
+            fragments.append(
+                '<p style="margin:16px 0;line-height:1.75;">'
+                + html.escape(path.read_text(encoding="utf-8"))
+                + "</p>"
+            )
+    return "".join(fragments)
+
+
+async def render_report_batch(
+    session: Session,
+    settings: WebsiteSettings,
+    factories: ExternalFactories,
+    batch: Batch,
+) -> tuple[ArticleRecord, bool]:
+    _advisory_lock(session, "report-batch", str(batch.id))
+    session.refresh(batch)
+    matches = list(
+        session.scalars(
+            select(Match)
+            .where(
+                Match.batch_id == batch.id,
+                Match.active.is_(True),
+                Match.status == "finished",
+            )
+            .order_by(Match.kickoff, Match.game_id)
+        )
+    )
+    if not matches:
+        raise WorkflowError(
+            409, "no_finished_matches", "batch has no saved finished matches"
+        )
+    try:
+        async with factories.reports() as reports:
+            for match in matches:
+                await _render_match_with_service(session, settings, match, reports)
+    except WorkflowError:
+        raise
+    except Exception as exc:
+        raise WorkflowError(502, "report_query_failed", str(exc)) from exc
+
+    snapshot = {
+        "matches": [
+            {
+                "game_id": match.game_id,
+                "report_input_sha256": match.report_input_sha256,
+                "report_content_sha256": match.report_content_sha256,
+            }
+            for match in matches
+        ]
+    }
+    if batch.current_report_article_id is not None:
+        existing = session.get(ArticleRecord, batch.current_report_article_id)
+        if (
+            existing is None
+            or existing.batch_id != batch.id
+            or existing.article_type != "report"
+        ):
+            raise WorkflowError(409, "article_pointer_invalid", "current report article is invalid")
+        if existing.input_snapshot == snapshot:
+            return existing, True
+
+    cover = CoverMediaId(DEFAULT_REPORT_COVER_MEDIA_ID)
+    body_html = _report_body(settings, matches)
+    article = Article(
+        title=REPORT_ARTICLE_TITLES[ReportCompetition(batch.competition)],
+        body_html=body_html,
+        cover=cover,
+        author=REPORT_ARTICLE_AUTHOR,
+        digest=REPORT_ARTICLE_DIGEST,
+    )
+    latest_version = session.scalar(
+        select(func.max(ArticleRecord.version_number)).where(
+            ArticleRecord.batch_id == batch.id,
+            ArticleRecord.article_type == "report",
+        )
+    )
+    cover_sha256 = sha256_bytes(DEFAULT_REPORT_COVER_MEDIA_ID.encode("utf-8"))
+    record = ArticleRecord(
+        batch_id=batch.id,
+        article_type="report",
+        version_number=(latest_version or 0) + 1,
+        input_snapshot=snapshot,
+        title=article.title,
+        body_html=article.body_html,
+        author=article.author,
+        digest=article.digest,
+        source_url=article.source_url,
+        template_version=REPORT_ARTICLE_TEMPLATE_VERSION,
+        content_fingerprint=article.content_fingerprint,
+        cover_kind="media_id",
+        cover_storage_key=DEFAULT_REPORT_COVER_MEDIA_ID,
+        cover_sha256=cover_sha256,
+        is_complete=True,
+        missing_fields=[],
+    )
+    session.add(record)
+    session.flush()
+    batch.current_report_article_id = record.id
     batch.updated_at = _now()
     session.flush()
     return record, False
@@ -840,8 +1154,15 @@ async def create_wechat_draft(
         record = session.get(ArticleRecord, article_id)
         if record is None:
             raise WorkflowError(404, "article_not_found", f"article {article_id} not found")
-        batch = session.get(PreviewBatch, record.batch_id)
-        if batch is None or batch.current_article_id != record.id:
+        batch = session.get(Batch, record.batch_id)
+        current_id = (
+            batch.current_preview_article_id
+            if batch is not None and record.article_type == "preview"
+            else batch.current_report_article_id
+            if batch is not None
+            else None
+        )
+        if batch is None or current_id != record.id:
             raise WorkflowError(409, "article_stale", f"article {article_id} is not current")
         if not record.is_complete:
             raise WorkflowError(
@@ -894,7 +1215,7 @@ async def create_wechat_draft(
 def save_batch_cover(
     session: Session,
     settings: WebsiteSettings,
-    batch: PreviewBatch,
+    batch: Batch,
     content: bytes,
 ) -> None:
     try:
@@ -913,7 +1234,7 @@ def save_batch_cover(
 
 
 def set_batch_cover_media_id(
-    batch: PreviewBatch,
+    batch: Batch,
     media_id: str,
 ) -> None:
     if batch.cover_kind != "media_id" or batch.cover_storage_key != media_id:
@@ -927,6 +1248,7 @@ def article_payload(record: ArticleRecord, current_id: int | None = None) -> dic
     return {
         "id": record.id,
         "batch_id": record.batch_id,
+        "article_type": record.article_type,
         "version_number": record.version_number,
         "title": record.title,
         "body_html": record.body_html,
@@ -974,7 +1296,7 @@ def weather_payload(value: Weather | None) -> dict[str, Any] | None:
     }
 
 
-def match_payload(value: PreviewMatchRecord) -> dict[str, Any]:
+def match_payload(value: Match) -> dict[str, Any]:
     def played_payload(item: dict[str, Any]) -> dict[str, Any]:
         payload = dict(item)
         payload["result_text"] = format_result_text(
@@ -1012,23 +1334,52 @@ def match_payload(value: PreviewMatchRecord) -> dict[str, Any]:
         "writers": value.writers,
         "body": value.body,
         "body_version": value.body_version,
+        "status": value.status,
+        "report": {
+            "available": value.report_storage_key is not None,
+            "kind": (
+                None
+                if value.report_storage_key is None
+                else "text"
+                if value.report_storage_key.endswith(".txt")
+                else "image"
+            ),
+            "content_sha256": value.report_content_sha256,
+            "rendered_at": (
+                value.report_rendered_at.isoformat()
+                if value.report_rendered_at is not None
+                else None
+            ),
+        },
         "updated_at": value.updated_at.isoformat(),
     }
 
 
-def batch_payload(session: Session, batch: PreviewBatch, *, detail: bool) -> dict[str, Any]:
+def batch_payload(session: Session, batch: Batch, *, detail: bool) -> dict[str, Any]:
     missing = completeness(session, batch)
-    latest_article_id = session.scalar(
+    latest_preview_article_id = session.scalar(
         select(ArticleRecord.id)
-        .where(ArticleRecord.batch_id == batch.id)
+        .where(
+            ArticleRecord.batch_id == batch.id,
+            ArticleRecord.article_type == "preview",
+        )
+        .order_by(ArticleRecord.version_number.desc(), ArticleRecord.id.desc())
+        .limit(1)
+    )
+    latest_report_article_id = session.scalar(
+        select(ArticleRecord.id)
+        .where(
+            ArticleRecord.batch_id == batch.id,
+            ArticleRecord.article_type == "report",
+        )
         .order_by(ArticleRecord.version_number.desc(), ArticleRecord.id.desc())
         .limit(1)
     )
     payload: dict[str, Any] = {
         "id": batch.id,
-        "preview_date": batch.preview_date.isoformat(),
+        "batch_date": batch.batch_date.isoformat(),
         "competition": batch.competition,
-        "status": batch_status(session, batch),
+        "preview_status": batch_status(session, batch),
         "headline": batch.headline,
         "editors": batch.editors,
         "reviewers": batch.reviewers,
@@ -1038,8 +1389,10 @@ def batch_payload(session: Session, batch: PreviewBatch, *, detail: bool) -> dic
             "storage_key": batch.cover_storage_key,
             "content_type": batch.cover_content_type,
         },
-        "current_article_id": batch.current_article_id,
-        "latest_article_id": latest_article_id,
+        "current_preview_article_id": batch.current_preview_article_id,
+        "latest_preview_article_id": latest_preview_article_id,
+        "current_report_article_id": batch.current_report_article_id,
+        "latest_report_article_id": latest_report_article_id,
         "missing_fields": missing,
         "last_error": (
             None
@@ -1054,16 +1407,16 @@ def batch_payload(session: Session, batch: PreviewBatch, *, detail: bool) -> dic
         "updated_at": batch.updated_at.isoformat(),
     }
     if detail:
-        payload["weather"] = weather_payload(session.get(Weather, batch.preview_date))
+        payload["weather"] = weather_payload(session.get(Weather, batch.batch_date))
         payload["matches"] = [
             match_payload(match)
             for match in session.scalars(
-                select(PreviewMatchRecord)
-                .where(PreviewMatchRecord.batch_id == batch.id)
+                select(Match)
+                .where(Match.batch_id == batch.id)
                 .order_by(
-                    PreviewMatchRecord.active.desc(),
-                    PreviewMatchRecord.kickoff,
-                    PreviewMatchRecord.game_id,
+                    Match.active.desc(),
+                    Match.kickoff,
+                    Match.game_id,
                 )
             )
         ]
