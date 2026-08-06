@@ -16,7 +16,7 @@ export function LoginPage() {
 
   useEffect(() => { document.title = "登录 · 前瞻管理"; }, []);
   if (loading) return <LoadingScreen label="正在检查登录状态" />;
-  if (user) return <Navigate to={user.role === "admin" ? "/batches" : "/tasks"} replace />;
+  if (user) return <Navigate to={user.role === "admin" ? "/previews" : "/tasks"} replace />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -28,7 +28,7 @@ export function LoginPage() {
       const adminOnly = from ? /^\/(create|users|settings|wechat-drafts)(\/|$)/.test(from) : false;
       const destination = from && (result.role === "admin" || !adminOnly)
         ? from
-        : result.role === "admin" ? "/batches" : "/tasks";
+        : result.role === "admin" ? "/previews" : "/tasks";
       navigate(destination, { replace: true });
     } catch (value) {
       setError(errorMessage(value));

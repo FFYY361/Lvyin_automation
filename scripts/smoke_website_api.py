@@ -1,4 +1,4 @@
-"""Repeatable Stage 4 API smoke test against real PostgreSQL."""
+"""Repeatable Stage 6 API smoke test against real PostgreSQL."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from backend.api import create_app
 from backend.auth import hash_password
 from backend.config import WebsiteSettings
 from backend.database import create_session_factory
-from backend.models import Base, PreviewBatch, PreviewMatch, User, Weather
+from backend.models import Base, Batch, Match, User, Weather
 from backend.workflow import ExternalFactories
 from wechat_official import CoverMediaId, DraftReceipt
 
@@ -59,8 +59,8 @@ def _seed(factory, default_cover_media_id: str) -> tuple[int, int]:
             role="admin",
         )
         session.add(user)
-        batch = PreviewBatch(
-            preview_date=target_date,
+        batch = Batch(
+            batch_date=target_date,
             competition="female",
             headline="API smoke test",
             editors=["Editor"],
@@ -87,7 +87,7 @@ def _seed(factory, default_cover_media_id: str) -> tuple[int, int]:
             )
         )
         session.add(
-            PreviewMatch(
+            Match(
                 game_id=990000001,
                 batch_id=batch.id,
                 tournament_id=123,
@@ -164,29 +164,29 @@ def main() -> int:
                 )
                 registered.raise_for_status()
                 client.post(
-                    f"/api/preview-batches/{batch_id}/open-tasks"
+                    f"/api/batches/{batch_id}/open-tasks"
                 ).raise_for_status()
                 waiting = user_client.get("/api/tasks/wait_claim")
                 waiting.raise_for_status()
                 assert len(waiting.json()["items"]) == 1
-                claim = user_client.post("/api/preview-matches/990000001/claim")
+                claim = user_client.post("/api/matches/990000001/claim")
                 claim.raise_for_status()
                 version = claim.json()["match"]["body_version"]
                 saved = user_client.patch(
-                    "/api/preview-matches/990000001/body",
+                    "/api/matches/990000001/body",
                     json={
                         "expected_version": version,
-                        "body": "Stage 4 smoke body.",
+                        "body": "Stage 6 smoke body.",
                     },
                 )
                 saved.raise_for_status()
                 assert len(user_client.get("/api/me/tasks").json()["items"]) == 1
-                assert user_client.get("/api/preview-batches").status_code == 200
+                assert user_client.get("/api/batches").status_code == 200
                 assert (
-                    user_client.get(f"/api/preview-batches/{batch_id}").status_code
+                    user_client.get(f"/api/batches/{batch_id}").status_code
                     == 200
                 )
-                rendered = client.post(f"/api/preview-batches/{batch_id}/render")
+                rendered = client.post(f"/api/batches/{batch_id}/render-preview")
                 rendered.raise_for_status()
                 article_id = rendered.json()["article"]["id"]
                 preview = user_client.get(f"/api/articles/{article_id}/preview")
@@ -204,10 +204,10 @@ def main() -> int:
                 confirmed.raise_for_status()
                 assert confirmed.json()["status"] == "created"
                 assert fake_wechat.calls == 1
-                batch = client.get(f"/api/preview-batches/{batch_id}")
+                batch = client.get(f"/api/batches/{batch_id}")
                 batch.raise_for_status()
-                assert batch.json()["status"] == "drafted"
-            print("Stage 4 PostgreSQL API smoke test passed")
+                assert batch.json()["preview_status"] == "drafted"
+            print("Stage 6 PostgreSQL API smoke test passed")
             return 0
         finally:
             if "engine" in locals():

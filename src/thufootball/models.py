@@ -101,31 +101,9 @@ class GameSummary:
 
 
 @dataclass(frozen=True)
-class TournamentTeam:
-    tournament_team_id: int
-    team_id: int
-    name: str
-    brief_name: str
-    group_place: str | None
-    wins: int
-    draws: int
-    losses: int
-    goals_for: int
-    goals_against: int
-    points: int
-    reported_rank: int | None
-
-
-@dataclass(frozen=True)
 class TournamentSnapshot:
     tournament_id: int
-    name: str
-    season: str
-    begin_date: date
-    end_date: date
     players_per_side: int
-    season_ids: Mapping[str, int]
-    teams: tuple[TournamentTeam, ...]
     games: tuple[GameSummary, ...]
 
 

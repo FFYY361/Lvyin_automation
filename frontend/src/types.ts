@@ -98,6 +98,13 @@ export interface PreviewMatch {
   writers: string[];
   body: string;
   body_version: number;
+  status: "scheduled" | "started" | "finished" | "unknown";
+  report: {
+    available: boolean;
+    kind: "image" | "text" | null;
+    content_sha256: string | null;
+    rendered_at: string | null;
+  };
   updated_at: string;
 }
 
@@ -105,18 +112,20 @@ export interface TaskMatch extends PreviewMatch {
   competition: Competition;
 }
 
-export interface PreviewBatch {
+export interface Batch {
   id: number;
-  preview_date: string;
+  batch_date: string;
   competition: Competition;
-  status: BatchStatus;
+  preview_status: BatchStatus;
   headline: string;
   editors: string[];
   reviewers: string[];
   approvers: string[];
   cover: Cover;
-  current_article_id: number | null;
-  latest_article_id: number | null;
+  current_preview_article_id: number | null;
+  latest_preview_article_id: number | null;
+  current_report_article_id: number | null;
+  latest_report_article_id: number | null;
   missing_fields: string[];
   last_error: BatchError | null;
   created_at: string;
@@ -125,9 +134,12 @@ export interface PreviewBatch {
   matches?: PreviewMatch[];
 }
 
+export type PreviewBatch = Batch;
+
 export interface Article {
   id: number;
   batch_id: number;
+  article_type: "preview" | "report";
   version_number: number;
   title: string;
   body_html: string;

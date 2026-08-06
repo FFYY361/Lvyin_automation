@@ -26,7 +26,7 @@ function MatchCard({ batchId, match, claimantName, canEnter }: { batchId: number
     </>
   );
   return canEnter
-    ? <Link className="match-card" to={`/batches/${batchId}/matches/${match.game_id}`}>{content}</Link>
+    ? <Link className="match-card" to={`/previews/${batchId}/matches/${match.game_id}`}>{content}</Link>
     : <article className="match-card match-card--readonly">{content}</article>;
 }
 
@@ -69,7 +69,7 @@ export function BatchDetailPage() {
     if (!quiet) setLoading(true);
     setError(null);
     try {
-      applyBatch(await api<PreviewBatch>(`/api/preview-batches/${batchId}`));
+      applyBatch(await api<PreviewBatch>(`/api/batches/${batchId}`));
     } catch (value) {
       setError(errorMessage(value));
     } finally {
@@ -91,25 +91,25 @@ export function BatchDetailPage() {
   };
   const saveHeadline = (event: FormEvent) => {
     event.preventDefault();
-    void run("headline", () => api(`/api/preview-batches/${batchId}`, { method: "PATCH", ...jsonBody({ headline }) }), "文章标题已保存");
+    void run("headline", () => api(`/api/batches/${batchId}`, { method: "PATCH", ...jsonBody({ headline }) }), "文章标题已保存");
   };
   const savePersonnel = (event: FormEvent) => {
     event.preventDefault();
-    void run("personnel", () => api(`/api/preview-batches/${batchId}`, { method: "PATCH", ...jsonBody({ editors: parseNames(editors), reviewers: parseNames(reviewers), approvers: parseNames(approvers) }) }), "人员设置已保存");
+    void run("personnel", () => api(`/api/batches/${batchId}`, { method: "PATCH", ...jsonBody({ editors: parseNames(editors), reviewers: parseNames(reviewers), approvers: parseNames(approvers) }) }), "人员设置已保存");
   };
   const saveWeather = (event: FormEvent) => {
     event.preventDefault();
-    void run("weather", () => api<Weather>(`/api/weather/${batch?.preview_date}`, { method: "PUT", ...jsonBody({ condition: weather.condition, low_c: Number(weather.low_c), high_c: Number(weather.high_c), wind_direction: weather.wind_direction, wind_level: weather.wind_level }) }), "天气已保存为人工数据");
+    void run("weather", () => api<Weather>(`/api/weather/${batch?.batch_date}`, { method: "PUT", ...jsonBody({ condition: weather.condition, low_c: Number(weather.low_c), high_c: Number(weather.high_c), wind_direction: weather.wind_direction, wind_level: weather.wind_level }) }), "天气已保存为人工数据");
   };
   const uploadCover = (event: FormEvent) => {
     event.preventDefault();
     if (!coverFile) return;
     const data = new FormData(); data.append("file", coverFile);
-    void run("cover-file", () => api(`/api/preview-batches/${batchId}/cover`, { method: "POST", body: data }), "封面文件已更新");
+    void run("cover-file", () => api(`/api/batches/${batchId}/cover`, { method: "POST", body: data }), "封面文件已更新");
   };
   const saveMediaId = (event: FormEvent) => {
     event.preventDefault();
-    void run("cover-media", () => api(`/api/preview-batches/${batchId}/cover-media-id`, { method: "PUT", ...jsonBody({ media_id: mediaId }) }), "永久素材封面已更新");
+    void run("cover-media", () => api(`/api/batches/${batchId}/cover-media-id`, { method: "PUT", ...jsonBody({ media_id: mediaId }) }), "永久素材封面已更新");
   };
 
   const claimantNames = useClaimantNames((batch?.matches ?? []).map((match) => match.claimed_by_user_id));
@@ -121,11 +121,11 @@ export function BatchDetailPage() {
   const openCount = activeMatches.filter((match) => match.task_open).length;
   return (
     <>
-      <PageHeader eyebrow={`批次 #${batch.id}`} title={`${batch.preview_date} · ${competitionLabels[batch.competition]}`} description={batch.headline || "尚未填写文章标题"} actions={<><Link className="button button--quiet" to="/batches"><ArrowLeft size={16} />返回列表</Link><Link className="button button--primary" to={`/batches/${batch.id}/preview`}><FileText size={16} />文章预览</Link></>} />
+      <PageHeader eyebrow={`批次 #${batch.id}`} title={`${batch.batch_date} · ${competitionLabels[batch.competition]}`} description={batch.headline || "尚未填写文章标题"} actions={<><Link className="button button--quiet" to="/previews"><ArrowLeft size={16} />返回列表</Link><Link className="button button--primary" to={`/previews/${batch.id}/article`}><FileText size={16} />文章预览</Link></>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
       <div className="batch-summary">
-        <div><span>当前状态</span><Badge tone={batch.status === "ready" ? "success" : batch.status === "drafted" ? "info" : "warning"}>{statusLabels[batch.status]}</Badge></div>
+        <div><span>当前状态</span><Badge tone={batch.preview_status === "ready" ? "success" : batch.preview_status === "drafted" ? "info" : "warning"}>{statusLabels[batch.preview_status]}</Badge></div>
         <div><span>有效比赛</span><strong>{activeMatches.length}</strong></div>
         <div><span>开放任务</span><strong>{openCount}/{activeMatches.length}</strong></div>
       </div>
@@ -143,7 +143,7 @@ export function BatchDetailPage() {
       <Panel className="matches-overview-panel">
         <SectionTitle title="比赛" description={`${matches.length} 场比赛，当前开放 ${openCount}/${activeMatches.length} 场有效比赛。`} actions={<Send size={20} />} />
         {!matches.length ? <EmptyState title="当前没有比赛" description={isAdmin ? "可以返回批次列表重新查询数据。" : "该批次暂时没有比赛。"} /> : <div className="match-card-list">{matches.map((match) => <MatchCard key={match.game_id} batchId={batch.id} match={match} claimantName={match.claimed_by_user_id === null ? "未认领" : match.claimed_by_user_id === user?.id ? user.display_name : claimantNames[match.claimed_by_user_id] ?? "读取中…"} canEnter={isAdmin || match.claimed_by_user_id === user?.id} />)}</div>}
-        {isAdmin ? <><p className="panel-copy">开放或关闭操作会一次作用于当前批次的全部有效比赛，不影响已填写的正文。</p><div className="button-row"><Button variant="primary" loading={action === "open"} onClick={() => void run("open", () => api(`/api/preview-batches/${batch.id}/open-tasks`, { method: "POST" }), "已开放全部有效比赛")}>开放全部任务</Button><Button loading={action === "close"} onClick={() => void run("close", () => api(`/api/preview-batches/${batch.id}/close-tasks`, { method: "POST" }), "已关闭全部有效比赛")}>关闭全部任务</Button></div></> : <p className="panel-copy">只有本人已认领的比赛可以进入编辑。</p>}
+        {isAdmin ? <><p className="panel-copy">开放或关闭操作会一次作用于当前批次的全部有效比赛，不影响已填写的正文。</p><div className="button-row"><Button variant="primary" loading={action === "open"} onClick={() => void run("open", () => api(`/api/batches/${batch.id}/open-tasks`, { method: "POST" }), "已开放全部有效比赛")}>开放全部任务</Button><Button loading={action === "close"} onClick={() => void run("close", () => api(`/api/batches/${batch.id}/close-tasks`, { method: "POST" }), "已关闭全部有效比赛")}>关闭全部任务</Button></div></> : <p className="panel-copy">只有本人已认领的比赛可以进入编辑。</p>}
       </Panel>
 
       {isAdmin ? <section className="admin-settings" aria-labelledby="admin-settings-title">

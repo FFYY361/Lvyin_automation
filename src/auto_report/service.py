@@ -196,6 +196,33 @@ def _report_warning_message(
     )
 
 
+def build_abandon_text(game: GameSummary, competition: Competition) -> str:
+    """Build the shared website/CLI explanation for an awarded match."""
+
+    home_name = resolve_report_team_name(game, "home")
+    away_name = resolve_report_team_name(game, "away")
+    awarded = 5 if competition is Competition.FUTSAL else 3
+    if game.home_abandon is True and game.away_abandon is True:
+        raise PipelineError(
+            f"比赛 {game.game_id} 的双方均被标记为弃赛，无法生成说明",
+            stage="report",
+        )
+    if game.home_abandon is True:
+        return (
+            f"{home_name}vs{away_name}的比赛，由于{home_name}弃赛，"
+            f"记为{home_name} 0:{awarded} {away_name}。"
+        )
+    if game.away_abandon is True:
+        return (
+            f"{home_name}vs{away_name}的比赛，由于{away_name}弃赛，"
+            f"记为{home_name} {awarded}:0 {away_name}。"
+        )
+    raise PipelineError(
+        f"比赛 {game.game_id} 未被标记为弃赛",
+        stage="report",
+    )
+
+
 class AutoReportPipeline:
     def __init__(
         self,
@@ -413,28 +440,7 @@ class AutoReportPipeline:
 
     @staticmethod
     def _abandon_text(game: GameSummary, competition: Competition) -> str:
-        home_name = resolve_report_team_name(game, "home")
-        away_name = resolve_report_team_name(game, "away")
-        awarded = 5 if competition is Competition.FUTSAL else 3
-        if game.home_abandon is True and game.away_abandon is True:
-            raise PipelineError(
-                f"比赛 {game.game_id} 的双方均被标记为弃赛，无法生成说明",
-                stage="report",
-            )
-        if game.home_abandon is True:
-            return (
-                f"{home_name}vs{away_name}的比赛，由于{home_name}弃赛，"
-                f"记为{home_name} 0:{awarded} {away_name}。"
-            )
-        if game.away_abandon is True:
-            return (
-                f"{home_name}vs{away_name}的比赛，由于{away_name}弃赛，"
-                f"记为{home_name} {awarded}:0 {away_name}。"
-            )
-        raise PipelineError(
-            f"比赛 {game.game_id} 未被标记为弃赛",
-            stage="report",
-        )
+        return build_abandon_text(game, competition)
 
     async def _build_report_manifest(
         self,

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -46,9 +46,9 @@ from .credentials import (
 from .database import create_database_engine, create_session_factory
 from .models import (
     ArticleRecord,
+    Batch,
     EditorialDefaults,
-    PreviewBatch,
-    PreviewMatch,
+    Match,
     User,
     WechatDraft,
 )
@@ -83,6 +83,9 @@ from .workflow import (
     match_payload,
     refresh_batch,
     render_batch,
+    render_match_report,
+    render_report_batch,
+    report_content_path,
     save_batch_cover,
     set_batch_cover_media_id,
     set_manual_weather,
@@ -125,22 +128,22 @@ def _set_login_session(request: Request, user: User) -> None:
     request.session["auth_version"] = user.auth_version
 
 
-def _task_rows(session: Session, *conditions: Any) -> list[tuple[PreviewMatch, PreviewBatch]]:
+def _task_rows(session: Session, *conditions: Any) -> list[tuple[Match, Batch]]:
     return list(
         session.execute(
-            select(PreviewMatch, PreviewBatch)
-            .join(PreviewBatch, PreviewBatch.id == PreviewMatch.batch_id)
+            select(Match, Batch)
+            .join(Batch, Batch.id == Match.batch_id)
             .where(*conditions)
-            .order_by(PreviewMatch.kickoff, PreviewMatch.game_id)
+            .order_by(Match.kickoff, Match.game_id)
         )
     )
 
 
-def _task_payload(match: PreviewMatch, batch: PreviewBatch) -> dict[str, Any]:
+def _task_payload(match: Match, batch: Batch) -> dict[str, Any]:
     return {**match_payload(match), "competition": batch.competition}
 
 
-def _match_content_payload(match: PreviewMatch) -> dict[str, Any]:
+def _match_content_payload(match: Match) -> dict[str, Any]:
     return {
         "game_id": match.game_id,
         "writers": match.writers,
@@ -149,11 +152,11 @@ def _match_content_payload(match: PreviewMatch) -> dict[str, Any]:
     }
 
 
-def _body_version_conflict(match: PreviewMatch | None) -> WorkflowError:
+def _body_version_conflict(match: Match | None) -> WorkflowError:
     return WorkflowError(
         409,
         "body_version_conflict",
-        "preview match was updated",
+        "match was updated",
         details={
             "body_version": match.body_version if match else None,
             "writers": match.writers if match else [],
@@ -162,16 +165,16 @@ def _body_version_conflict(match: PreviewMatch | None) -> WorkflowError:
     )
 
 
-def _invalidate_match_batch(session: Session, match: PreviewMatch) -> None:
-    batch = session.get(PreviewBatch, match.batch_id)
+def _invalidate_match_batch(session: Session, match: Match) -> None:
+    batch = session.get(Batch, match.batch_id)
     if batch is not None:
-        batch.current_article_id = None
+        batch.current_preview_article_id = None
         batch.updated_at = datetime.now(UTC)
 
 
 def _save_match_content(
     session: Session,
-    match: PreviewMatch,
+    match: Match,
     *,
     expected_version: int,
     writers: list[str],
@@ -183,22 +186,22 @@ def _save_match_content(
     if writers == match.writers and normalized_body == match.body:
         return _match_content_payload(match)
     result = session.execute(
-        update(PreviewMatch)
+        update(Match)
         .where(
-            PreviewMatch.game_id == match.game_id,
-            PreviewMatch.body_version == expected_version,
+            Match.game_id == match.game_id,
+            Match.body_version == expected_version,
         )
         .values(
             writers=writers,
             body=normalized_body,
-            body_version=PreviewMatch.body_version + 1,
+            body_version=Match.body_version + 1,
             updated_at=datetime.now(UTC),
         )
         .execution_options(synchronize_session=False)
     )
     if result.rowcount != 1:
         session.rollback()
-        raise _body_version_conflict(session.get(PreviewMatch, match.game_id))
+        raise _body_version_conflict(session.get(Match, match.game_id))
     _invalidate_match_batch(session, match)
     session.commit()
     session.refresh(match)
@@ -251,7 +254,17 @@ def create_app(
             async with base_factories.queries() as service:
                 yield service
 
-    resolved_factories = replace(base_factories, queries=locked_queries)
+    @asynccontextmanager
+    async def locked_reports():
+        async with thufootball_lock:
+            async with base_factories.reports() as service:
+                yield service
+
+    resolved_factories = replace(
+        base_factories,
+        queries=locked_queries,
+        reports=locked_reports,
+    )
     resolved_settings.artifact_root.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
@@ -270,8 +283,8 @@ def create_app(
             engine.dispose()
 
     app = FastAPI(
-        title="清华绿茵前瞻管理 API",
-        version="0.3.0",
+        title="清华绿茵内容管理 API",
+        version="0.4.0",
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings
@@ -394,11 +407,11 @@ def create_app(
             user_id: count
             for user_id, count in session.execute(
                 select(
-                    PreviewMatch.claimed_by_user_id,
-                    func.count(PreviewMatch.game_id),
+                    Match.claimed_by_user_id,
+                    func.count(Match.game_id),
                 )
-                .where(PreviewMatch.claimed_by_user_id.is_not(None))
-                .group_by(PreviewMatch.claimed_by_user_id)
+                .where(Match.claimed_by_user_id.is_not(None))
+                .group_by(Match.claimed_by_user_id)
             )
         }
         users = session.scalars(select(User).order_by(User.created_at, User.id))
@@ -454,8 +467,8 @@ def create_app(
             session.commit()
             session.refresh(user)
         claimed_task_count = session.scalar(
-            select(func.count(PreviewMatch.game_id)).where(
-                PreviewMatch.claimed_by_user_id == user.id
+            select(func.count(Match.game_id)).where(
+                Match.claimed_by_user_id == user.id
             )
         )
         return _admin_user_payload(user, claimed_task_count or 0)
@@ -539,8 +552,8 @@ def create_app(
                 "updated_at": datetime.now(UTC).isoformat(),
             }
 
-    @app.post("/api/preview-batches/create")
-    async def create_preview_batches(
+    @app.post("/api/batches/create")
+    async def create_batch_records(
         payload: CreateBatchesRequest,
         _: User = Depends(require_admin),
     ) -> dict[str, Any]:
@@ -558,71 +571,74 @@ def create_app(
         ):
             raise WorkflowError(
                 502,
-                "preview_batch_queries_failed",
-                "all preview batch queries failed",
+                "batch_queries_failed",
+                "all batch queries failed",
                 details={"results": results},
             )
         return {"results": results}
 
-    @app.get("/api/preview-batches")
-    def list_preview_batches(
-        preview_date: date | None = None,
+    @app.get("/api/batches")
+    def list_batches(
+        batch_date: date | None = None,
         competition: CompetitionValue | None = None,
-        status: BatchStatus | None = None,
+        preview_status: BatchStatus | None = None,
         _: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        statement = select(PreviewBatch).order_by(
-            PreviewBatch.preview_date.desc(),
+        statement = select(Batch).order_by(
+            Batch.batch_date.desc(),
             case(
-                (PreviewBatch.competition == "male", 0),
-                (PreviewBatch.competition == "female", 1),
+                (Batch.competition == "male", 0),
+                (Batch.competition == "female", 1),
                 else_=2,
             ),
         )
-        if preview_date is not None:
-            statement = statement.where(PreviewBatch.preview_date == preview_date)
+        if batch_date is not None:
+            statement = statement.where(Batch.batch_date == batch_date)
         if competition is not None:
-            statement = statement.where(PreviewBatch.competition == competition.value)
+            statement = statement.where(Batch.competition == competition.value)
         items = [batch_payload(session, batch, detail=False) for batch in session.scalars(statement)]
-        if status is not None:
-            items = [item for item in items if item["status"] == status.value]
+        if preview_status is not None:
+            items = [
+                item for item in items
+                if item["preview_status"] == preview_status.value
+            ]
         return {"items": items}
 
-    @app.get("/api/preview-batches/{batch_id}")
-    def get_preview_batch(
+    @app.get("/api/batches/{batch_id}")
+    def get_batch(
         batch_id: int,
         _: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         if batch is None:
-            raise _not_found("preview batch")
+            raise _not_found("batch")
         return batch_payload(session, batch, detail=True)
 
-    @app.post("/api/preview-batches/{batch_id}/refresh-data")
-    async def refresh_preview_batch(
+    @app.post("/api/batches/{batch_id}/refresh-data")
+    async def refresh_batch_data(
         batch_id: int,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         if batch is None:
-            raise _not_found("preview batch")
+            raise _not_found("batch")
         await refresh_batch(session, batch, resolved_factories)
         session.refresh(batch)
         return batch_payload(session, batch, detail=True)
 
-    @app.patch("/api/preview-batches/{batch_id}")
-    def update_preview_batch(
+    @app.patch("/api/batches/{batch_id}")
+    def update_batch(
         batch_id: int,
         payload: UpdateBatchRequest,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         if batch is None:
-            raise _not_found("preview batch")
+            raise _not_found("batch")
         changed = False
         for name in ("headline", "editors", "reviewers", "approvers"):
             if name not in payload.model_fields_set:
@@ -634,7 +650,7 @@ def create_app(
                 setattr(batch, name, value)
                 changed = True
         if changed:
-            batch.current_article_id = None
+            batch.current_preview_article_id = None
             batch.updated_at = datetime.now(UTC)
         session.commit()
         session.refresh(batch)
@@ -680,19 +696,19 @@ def create_app(
             "updated_at": value.updated_at.isoformat(),
         }
 
-    @app.post("/api/preview-batches/{batch_id}/open-tasks")
+    @app.post("/api/batches/{batch_id}/open-tasks")
     def open_tasks(
         batch_id: int,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        if session.get(PreviewBatch, batch_id) is None:
-            raise _not_found("preview batch")
+        if session.get(Batch, batch_id) is None:
+            raise _not_found("batch")
         matches = list(
             session.scalars(
-                select(PreviewMatch).where(
-                    PreviewMatch.batch_id == batch_id,
-                    PreviewMatch.active.is_(True),
+                select(Match).where(
+                    Match.batch_id == batch_id,
+                    Match.active.is_(True),
                 )
             )
         )
@@ -701,19 +717,19 @@ def create_app(
         session.commit()
         return {"game_ids": [match.game_id for match in matches], "task_open": True}
 
-    @app.post("/api/preview-batches/{batch_id}/close-tasks")
+    @app.post("/api/batches/{batch_id}/close-tasks")
     def close_tasks(
         batch_id: int,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        if session.get(PreviewBatch, batch_id) is None:
-            raise _not_found("preview batch")
+        if session.get(Batch, batch_id) is None:
+            raise _not_found("batch")
         matches = list(
             session.scalars(
-                select(PreviewMatch).where(
-                    PreviewMatch.batch_id == batch_id,
-                    PreviewMatch.active.is_(True),
+                select(Match).where(
+                    Match.batch_id == batch_id,
+                    Match.active.is_(True),
                 )
             )
         )
@@ -722,21 +738,21 @@ def create_app(
         session.commit()
         return {"game_ids": [match.game_id for match in matches], "task_open": False}
 
-    @app.get("/api/preview-matches")
-    def list_open_preview_matches(
+    @app.get("/api/matches")
+    def list_open_matches(
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            PreviewMatch.active.is_(True),
-            PreviewMatch.task_open.is_(True),
+            Match.active.is_(True),
+            Match.task_open.is_(True),
         )
         return {
             "items": [
                 {
                     **_task_payload(match, batch),
-                    "preview_date": batch.preview_date.isoformat(),
+                    "batch_date": batch.batch_date.isoformat(),
                 }
                 for match, batch in rows
             ]
@@ -749,8 +765,8 @@ def create_app(
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            PreviewMatch.active.is_(True),
-            PreviewMatch.task_open.is_(True),
+            Match.active.is_(True),
+            Match.task_open.is_(True),
         )
         return {"items": [_task_payload(match, batch) for match, batch in rows]}
 
@@ -761,9 +777,9 @@ def create_app(
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            PreviewMatch.active.is_(True),
-            PreviewMatch.task_open.is_(True),
-            PreviewMatch.claimed_by_user_id.is_(None),
+            Match.active.is_(True),
+            Match.task_open.is_(True),
+            Match.claimed_by_user_id.is_(None),
         )
         return {"items": [_task_payload(match, batch) for match, batch in rows]}
 
@@ -774,21 +790,21 @@ def create_app(
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            PreviewMatch.claimed_by_user_id == user.id,
+            Match.claimed_by_user_id == user.id,
         )
         return {"items": [_task_payload(match, batch) for match, batch in rows]}
 
-    @app.post("/api/preview-matches/{game_id}/claim")
-    def claim_preview_match(
+    @app.post("/api/matches/{game_id}/claim")
+    def claim_match(
         game_id: int,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        current = session.get(PreviewMatch, game_id)
+        current = session.get(Match, game_id)
         if current is None:
-            raise _not_found("preview match")
+            raise _not_found("match")
         if current.claimed_by_user_id == user.id:
-            batch = session.get(PreviewBatch, current.batch_id)
+            batch = session.get(Batch, current.batch_id)
             return {
                 "reused": True,
                 "match": _task_payload(current, batch),
@@ -797,101 +813,101 @@ def create_app(
             raise WorkflowError(
                 409,
                 "task_unavailable",
-                "preview match is not available for claiming",
+                "match is not available for claiming",
             )
         result = session.execute(
-            update(PreviewMatch)
+            update(Match)
             .where(
-                PreviewMatch.game_id == game_id,
-                PreviewMatch.active.is_(True),
-                PreviewMatch.task_open.is_(True),
-                PreviewMatch.claimed_by_user_id.is_(None),
+                Match.game_id == game_id,
+                Match.active.is_(True),
+                Match.task_open.is_(True),
+                Match.claimed_by_user_id.is_(None),
             )
             .values(
                 claimed_by_user_id=user.id,
                 writers=[user.display_name],
-                body_version=PreviewMatch.body_version + 1,
+                body_version=Match.body_version + 1,
                 updated_at=datetime.now(UTC),
             )
             .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
             session.rollback()
-            latest = session.get(PreviewMatch, game_id)
+            latest = session.get(Match, game_id)
             if latest is not None and latest.claimed_by_user_id == user.id:
-                batch = session.get(PreviewBatch, latest.batch_id)
+                batch = session.get(Batch, latest.batch_id)
                 return {"reused": True, "match": _task_payload(latest, batch)}
             if latest is None:
-                raise _not_found("preview match")
+                raise _not_found("match")
             if latest.claimed_by_user_id is not None:
                 raise WorkflowError(
                     409,
                     "task_claimed",
-                    "preview match has already been claimed",
+                    "match has already been claimed",
                     details={"claimed_by_user_id": latest.claimed_by_user_id},
                 )
             raise WorkflowError(
                 409,
                 "task_unavailable",
-                "preview match is not available for claiming",
+                "match is not available for claiming",
             )
         _invalidate_match_batch(session, current)
         session.commit()
         session.refresh(current)
-        batch = session.get(PreviewBatch, current.batch_id)
+        batch = session.get(Batch, current.batch_id)
         return {"reused": False, "match": _task_payload(current, batch)}
 
-    @app.post("/api/preview-matches/{game_id}/release")
-    def release_preview_match(
+    @app.post("/api/matches/{game_id}/release")
+    def release_match(
         game_id: int,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        current = session.get(PreviewMatch, game_id)
+        current = session.get(Match, game_id)
         if current is None:
-            raise _not_found("preview match")
+            raise _not_found("match")
         claimed_by_user_id = current.claimed_by_user_id
         if claimed_by_user_id is None:
-            raise WorkflowError(409, "task_not_claimed", "preview match is not claimed")
+            raise WorkflowError(409, "task_not_claimed", "match is not claimed")
         if user.role != "admin" and claimed_by_user_id != user.id:
             raise WorkflowError(
                 403,
                 "not_claim_owner",
-                "preview match is claimed by another user",
+                "match is claimed by another user",
             )
         result = session.execute(
-            update(PreviewMatch)
+            update(Match)
             .where(
-                PreviewMatch.game_id == game_id,
-                PreviewMatch.claimed_by_user_id == claimed_by_user_id,
+                Match.game_id == game_id,
+                Match.claimed_by_user_id == claimed_by_user_id,
             )
             .values(
                 claimed_by_user_id=None,
                 writers=[],
-                body_version=PreviewMatch.body_version + 1,
+                body_version=Match.body_version + 1,
                 updated_at=datetime.now(UTC),
             )
             .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
             session.rollback()
-            raise WorkflowError(409, "task_changed", "preview match claim changed")
+            raise WorkflowError(409, "task_changed", "match claim changed")
         _invalidate_match_batch(session, current)
         session.commit()
         session.refresh(current)
-        batch = session.get(PreviewBatch, current.batch_id)
+        batch = session.get(Batch, current.batch_id)
         return _task_payload(current, batch)
 
-    @app.post("/api/preview-matches/{game_id}/assign")
-    def assign_preview_match(
+    @app.post("/api/matches/{game_id}/assign")
+    def assign_match(
         game_id: int,
         payload: AssignMatchRequest,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        current = session.get(PreviewMatch, game_id)
+        current = session.get(Match, game_id)
         if current is None:
-            raise _not_found("preview match")
+            raise _not_found("match")
         target = None if payload.user_id is None else session.get(User, payload.user_id)
         if payload.user_id is not None and (
             target is None
@@ -906,15 +922,15 @@ def create_app(
         target_id = target.id if target is not None else None
         writers = [target.display_name] if target is not None else []
         if current.claimed_by_user_id == target_id and current.writers == writers:
-            batch = session.get(PreviewBatch, current.batch_id)
+            batch = session.get(Batch, current.batch_id)
             return _task_payload(current, batch)
         session.execute(
-            update(PreviewMatch)
-            .where(PreviewMatch.game_id == game_id)
+            update(Match)
+            .where(Match.game_id == game_id)
             .values(
                 claimed_by_user_id=target_id,
                 writers=writers,
-                body_version=PreviewMatch.body_version + 1,
+                body_version=Match.body_version + 1,
                 updated_at=datetime.now(UTC),
             )
             .execution_options(synchronize_session=False)
@@ -922,19 +938,19 @@ def create_app(
         _invalidate_match_batch(session, current)
         session.commit()
         session.refresh(current)
-        batch = session.get(PreviewBatch, current.batch_id)
+        batch = session.get(Batch, current.batch_id)
         return _task_payload(current, batch)
 
-    @app.patch("/api/preview-matches/{game_id}")
-    def update_preview_match(
+    @app.patch("/api/matches/{game_id}")
+    def update_match(
         game_id: int,
         payload: UpdateMatchRequest,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        current = session.get(PreviewMatch, game_id)
+        current = session.get(Match, game_id)
         if current is None:
-            raise _not_found("preview match")
+            raise _not_found("match")
         writers = current.writers if payload.writers is None else payload.writers
         body = current.body if payload.body is None else payload.body
         return _save_match_content(
@@ -945,21 +961,21 @@ def create_app(
             body=body,
         )
 
-    @app.patch("/api/preview-matches/{game_id}/body")
-    def update_preview_match_body(
+    @app.patch("/api/matches/{game_id}/body")
+    def update_match_body(
         game_id: int,
         payload: UpdateBodyRequest,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        current = session.get(PreviewMatch, game_id)
+        current = session.get(Match, game_id)
         if current is None:
-            raise _not_found("preview match")
+            raise _not_found("match")
         if user.role != "admin" and current.claimed_by_user_id != user.id:
             raise WorkflowError(
                 403,
                 "not_claim_owner",
-                "preview match is claimed by another user",
+                "match is claimed by another user",
             )
         return _save_match_content(
             session,
@@ -988,48 +1004,156 @@ def create_app(
         session.commit()
         return weather_payload(value) or {}
 
-    @app.post("/api/preview-batches/{batch_id}/cover")
+    @app.post("/api/batches/{batch_id}/cover")
     async def upload_cover(
         batch_id: int,
         file: UploadFile = File(...),
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         if batch is None:
-            raise _not_found("preview batch")
+            raise _not_found("batch")
         content = await file.read(10 * 1024 * 1024 + 1)
         save_batch_cover(session, resolved_settings, batch, content)
         session.commit()
         return batch_payload(session, batch, detail=False)
 
-    @app.put("/api/preview-batches/{batch_id}/cover-media-id")
+    @app.put("/api/batches/{batch_id}/cover-media-id")
     def put_cover_media_id(
         batch_id: int,
         payload: CoverMediaIdRequest,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         if batch is None:
-            raise _not_found("preview batch")
+            raise _not_found("batch")
         set_batch_cover_media_id(batch, payload.media_id)
         session.commit()
         return batch_payload(session, batch, detail=False)
 
-    @app.post("/api/preview-batches/{batch_id}/render")
+    @app.post("/api/batches/{batch_id}/render-preview")
     def render_preview_batch(
         batch_id: int,
         _: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        batch = session.get(PreviewBatch, batch_id)
+        batch = session.get(Batch, batch_id)
         if batch is None:
-            raise _not_found("preview batch")
+            raise _not_found("batch")
         record, reused = render_batch(session, resolved_settings, batch)
         session.commit()
         session.refresh(record)
-        return {"reused": reused, "article": article_payload(record, batch.current_article_id)}
+        return {
+            "reused": reused,
+            "article": article_payload(record, batch.current_preview_article_id),
+        }
+
+    @app.post("/api/batches/{batch_id}/render-report")
+    async def render_batch_report_article(
+        batch_id: int,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        batch = session.get(Batch, batch_id)
+        if batch is None:
+            raise _not_found("batch")
+        record, reused = await render_report_batch(
+            session, resolved_settings, resolved_factories, batch
+        )
+        session.commit()
+        session.refresh(record)
+        return {
+            "reused": reused,
+            "article": article_payload(record, batch.current_report_article_id),
+        }
+
+    @app.get("/api/matches/{game_id}/report")
+    def get_match_report(
+        game_id: int,
+        _: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        match = session.get(Match, game_id)
+        if match is None:
+            raise _not_found("match")
+        return match_payload(match)
+
+    @app.get("/api/matches/{game_id}/report/content")
+    def get_match_report_content(
+        game_id: int,
+        _: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> FileResponse:
+        match = session.get(Match, game_id)
+        if match is None:
+            raise _not_found("match")
+        path = report_content_path(resolved_settings, match)
+        return FileResponse(
+            path,
+            media_type="image/png" if path.suffix == ".png" else "text/plain",
+            headers={"Cache-Control": "private, no-cache"},
+        )
+
+    @app.post("/api/matches/{game_id}/render-report")
+    async def render_single_match_report(
+        game_id: int,
+        _: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        match = session.get(Match, game_id)
+        if match is None:
+            raise _not_found("match")
+        reused = await render_match_report(
+            session, resolved_settings, resolved_factories, match
+        )
+        session.commit()
+        session.refresh(match)
+        return {"reused": reused, "match": match_payload(match)}
+
+    @app.get("/api/articles/candidates")
+    def list_article_candidates(
+        article_type: str = "all",
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        if article_type not in {"all", "preview", "report"}:
+            raise WorkflowError(
+                422,
+                "invalid_article_type",
+                "article_type must be all, preview or report",
+            )
+        rows: list[tuple[ArticleRecord, Batch]] = []
+        for batch in session.scalars(
+            select(Batch).order_by(
+                Batch.batch_date.desc(), Batch.id.desc()
+            )
+        ):
+            pointers = []
+            if article_type in {"all", "preview"}:
+                pointers.append(batch.current_preview_article_id)
+            if article_type in {"all", "report"}:
+                pointers.append(batch.current_report_article_id)
+            for article_id in pointers:
+                if article_id is None:
+                    continue
+                record = session.get(ArticleRecord, article_id)
+                if record is not None and record.is_complete:
+                    rows.append((record, batch))
+        return {
+            "items": [
+                {
+                    "batch": {
+                        "id": batch.id,
+                        "batch_date": batch.batch_date.isoformat(),
+                        "competition": batch.competition,
+                    },
+                    "article": article_payload(record, record.id),
+                }
+                for record, batch in rows
+            ]
+        }
 
     @app.get("/api/articles/{article_id}")
     def get_article(
@@ -1040,8 +1164,15 @@ def create_app(
         record = session.get(ArticleRecord, article_id)
         if record is None:
             raise _not_found("article")
-        batch = session.get(PreviewBatch, record.batch_id)
-        return article_payload(record, batch.current_article_id if batch else None)
+        batch = session.get(Batch, record.batch_id)
+        current_id = (
+            batch.current_preview_article_id
+            if batch is not None and record.article_type == "preview"
+            else batch.current_report_article_id
+            if batch is not None
+            else None
+        )
+        return article_payload(record, current_id)
 
     @app.get("/api/articles/{article_id}/preview", response_class=HTMLResponse)
     def preview_article(

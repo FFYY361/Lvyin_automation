@@ -531,31 +531,36 @@ class MapperTests(unittest.TestCase):
         self.assertTrue(decided_on_penalties.penalty_shootout)
         self.assertTrue(decided_on_penalties.decided_by_penalty_shootout)
 
-    def test_legacy_tournament_shapes_fail_strictly(self) -> None:
-        cases = ("missing_team", "blank_season", "negative_counter")
-        for scenario in cases:
-            with self.subTest(scenario=scenario):
-                game = _game(
-                    1,
-                    10,
-                    home_tournament_team_id=1001,
-                    away_tournament_team_id=1002,
-                    home_team_id=101,
-                    away_team_id=102,
-                )
-                payload = _tournament_payload(10, [game])
-                if scenario == "missing_team":
-                    game["home_tourn_team_info"] = None
-                    expected = "games[0].home_tourn_team_info"
-                elif scenario == "blank_season":
-                    payload["season_ids"] = {"": 10}
-                    expected = "season_ids.<key>"
-                else:
-                    payload["registered_teams"][0]["draw"] = -1
-                    expected = "registered_teams[0].draw"
-                with self.assertRaises(SchemaError) as caught:
-                    map_tournament_snapshot(payload)
-                self.assertEqual(caught.exception.field_path, expected)
+    def test_used_tournament_game_team_still_fails_strictly(self) -> None:
+        game = _game(
+            1,
+            10,
+            home_tournament_team_id=1001,
+            away_tournament_team_id=1002,
+            home_team_id=101,
+            away_team_id=102,
+        )
+        game["home_tourn_team_info"] = None
+
+        with self.assertRaises(SchemaError) as caught:
+            map_tournament_snapshot(_tournament_payload(10, [game]))
+
+        self.assertEqual(
+            caught.exception.field_path,
+            "games[0].home_tourn_team_info",
+        )
+
+    def test_unused_tournament_fields_are_ignored(self) -> None:
+        payload = _tournament_payload(10)
+        payload["season_ids"] = {"": "invalid"}
+        payload["registered_teams"][0]["draw"] = -1
+        payload["registered_teams"][0]["win"] = None
+        payload["registered_teams"][0]["lose"] = "invalid"
+
+        snapshot = map_tournament_snapshot(payload)
+
+        self.assertEqual(snapshot.tournament_id, 10)
+        self.assertEqual(snapshot.games, ())
 
     def test_game_detail_is_a_sensitive_field_whitelist(self) -> None:
         detail = map_game_detail(_detail_payload(), expected_game_id=1001)
@@ -669,8 +674,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refs[0].season, "")
         self.assertFalse(refs[0].visible)
         self.assertEqual(snapshot.players_per_side, 11)
-        self.assertIsNone(snapshot.teams[0].reported_rank)
-        self.assertEqual(snapshot.teams[1].reported_rank, 2)
         self.assertEqual(snapshot.games[0].home_team_id, 101)
         self.assertEqual(snapshot.games[0].tournament_name, "赛事10")
 

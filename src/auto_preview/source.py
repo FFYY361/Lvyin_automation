@@ -313,7 +313,10 @@ class PreviewSourceBuilder:
             history = await self._queries.query_team_to_team_matches(
                 key[0],
                 key[1],
-                self._config.historical_tournament_ids,
+                (
+                    self._config.current_tournament_ids
+                    + self._config.historical_tournament_ids
+                ),
                 include_unfinished=False,
             )
             matches = history.matches

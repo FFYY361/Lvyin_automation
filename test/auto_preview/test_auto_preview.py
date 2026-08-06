@@ -220,7 +220,7 @@ class _FakeQueries:
         self.history = HeadToHeadHistory(
             team_a_id=1,
             team_b_id=2,
-            tournament_ids=(102, 90, 74),
+            tournament_ids=(123, 102, 90, 74),
             matches=history_games,
             summary=HeadToHeadSummary(0, 4, 0),
             by_tournament=MappingProxyType({}),
@@ -336,7 +336,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
             queries.outcome_calls,
             [(1, (102, 90)), (2, (102, 90))],
         )
-        self.assertEqual(queries.h2h_calls, [(1, 2, (102, 90, 74))])
+        self.assertEqual(queries.h2h_calls, [(1, 2, (123, 102, 90, 74))])
         self.assertEqual(len(source.matches), 2)
         self.assertEqual(source.matches[0].competition_name, "女足")
         self.assertEqual(len(source.matches[0].home.previous_outcomes), 3)
