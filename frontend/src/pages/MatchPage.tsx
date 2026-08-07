@@ -68,7 +68,7 @@ export function MatchPage() {
     }
   }, [applyMatch, batchId, gameId, isAdmin, user?.id]);
 
-  useEffect(() => { document.title = "比赛写作 · 前瞻管理"; void load(); }, [load]);
+  useEffect(() => { document.title = "比赛写作 · 绿茵宣传部"; void load(); }, [load]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
     window.addEventListener("beforeunload", guard);

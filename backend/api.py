@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -85,7 +86,7 @@ from .workflow import (
     render_batch,
     render_match_report,
     render_report_batch,
-    report_content_path,
+    report_content_paths,
     save_batch_cover,
     set_batch_cover_media_id,
     set_manual_weather,
@@ -1059,7 +1060,7 @@ def create_app(
         batch = session.get(Batch, batch_id)
         if batch is None:
             raise _not_found("batch")
-        record, reused = await render_report_batch(
+        record, reused, diagnostics = await render_report_batch(
             session, resolved_settings, resolved_factories, batch
         )
         session.commit()
@@ -1067,6 +1068,7 @@ def create_app(
         return {
             "reused": reused,
             "article": article_payload(record, batch.current_report_article_id),
+            "diagnostics": diagnostics,
         }
 
     @app.get("/api/matches/{game_id}/report")
@@ -1085,14 +1087,33 @@ def create_app(
         game_id: int,
         _: User = Depends(require_user),
         session: Session = Depends(get_session),
-    ) -> FileResponse:
+    ) -> JSONResponse:
         match = session.get(Match, game_id)
         if match is None:
             raise _not_found("match")
-        path = report_content_path(resolved_settings, match)
-        return FileResponse(
-            path,
-            media_type="image/png" if path.suffix == ".png" else "text/plain",
+        paths = report_content_paths(resolved_settings, match)
+        image = paths.get("image")
+        text = paths.get("text")
+        content = {
+            "image": (
+                None
+                if image is None
+                else {
+                    "media_type": "image/png",
+                    "base64": base64.b64encode(image.read_bytes()).decode("ascii"),
+                }
+            ),
+            "text": (
+                None
+                if text is None
+                else {
+                    "media_type": "text/plain; charset=utf-8",
+                    "content": text.read_text(encoding="utf-8"),
+                }
+            ),
+        }
+        return JSONResponse(
+            content=content,
             headers={"Cache-Control": "private, no-cache"},
         )
 
@@ -1105,12 +1126,16 @@ def create_app(
         match = session.get(Match, game_id)
         if match is None:
             raise _not_found("match")
-        reused = await render_match_report(
+        reused, diagnostics = await render_match_report(
             session, resolved_settings, resolved_factories, match
         )
         session.commit()
         session.refresh(match)
-        return {"reused": reused, "match": match_payload(match)}
+        return {
+            "reused": reused,
+            "match": match_payload(match),
+            "diagnostics": diagnostics,
+        }
 
     @app.get("/api/articles/candidates")
     def list_article_candidates(

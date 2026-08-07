@@ -24,6 +24,30 @@ export interface ApiErrorDetails {
   [key: string]: unknown;
 }
 
+export interface ReportIssue {
+  severity: "warning" | "error";
+  code: string;
+  message: string;
+  event_ids: number[];
+  player_id: number | null;
+  side: "home" | "away" | null;
+  minute: number | null;
+  stoppage_minute: number | null;
+}
+
+export interface ReportRenderDiagnostic {
+  game_id: number;
+  status: "success" | "failed";
+  reused: boolean | null;
+  issues: ReportIssue[];
+  error: { code: string; message: string } | null;
+}
+
+export interface ReportContent {
+  image: { media_type: "image/png"; base64: string } | null;
+  text: { media_type: "text/plain; charset=utf-8"; content: string } | null;
+}
+
 export interface BatchError {
   code: string;
   message: string | null;
@@ -101,7 +125,6 @@ export interface PreviewMatch {
   status: "scheduled" | "started" | "finished" | "unknown";
   report: {
     available: boolean;
-    kind: "image" | "text" | null;
     content_sha256: string | null;
     rendered_at: string | null;
   };

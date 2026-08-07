@@ -16,7 +16,7 @@ const task: TaskMatch = {
   home: { team_id: 1, name: "环境学院", short_name: "环境", previous_outcomes: [], current_results: [] },
   away: { team_id: 2, name: "探微书院", short_name: "探微", previous_outcomes: [], current_results: [] },
   head_to_head: [], active: true, task_open: true, claimed_by_user_id: 2, writers: ["成员甲"], body: "已经填写", body_version: 3, updated_at: "2026-08-01T00:00:00Z",
-  status: "scheduled", report: { available: false, kind: null, content_sha256: null, rendered_at: null },
+  status: "scheduled", report: { available: false, content_sha256: null, rendered_at: null },
 };
 
 function namedTask(gameId: number, name: string, kickoff: string, overrides: Partial<TaskMatch> = {}): TaskMatch {

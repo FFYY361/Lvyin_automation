@@ -46,7 +46,7 @@ function ProtectedLayout() {
   return (
     <div className="app-shell">
       <aside className={cx("sidebar", menuOpen && "sidebar--open")}>
-        <div className="brand"><div className="brand__mark">绿</div><div><strong>绿茵内容</strong><span>Content Workspace</span></div><button className="icon-button sidebar__close" onClick={() => setMenuOpen(false)} aria-label="关闭导航"><X size={18} /></button></div>
+        <div className="brand"><div className="brand__mark">绿</div><div><strong>绿茵宣传部</strong><span>Media Department</span></div><button className="icon-button sidebar__close" onClick={() => setMenuOpen(false)} aria-label="关闭导航"><X size={18} /></button></div>
         <nav className="nav" aria-label="主导航">{navigation.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} onClick={() => setMenuOpen(false)} className={({ isActive }) => cx("nav__item", isActive && "nav__item--active")}><Icon size={18} aria-hidden />{label}</NavLink>)}</nav>
         <div className="sidebar__footer">
           <NavLink to="/account" className="user-card"><span className="user-card__avatar">{user.display_name.slice(0, 1)}</span><div><strong>{user.display_name}</strong><span>@{user.username} · {user.role === "admin" ? "管理员" : "普通用户"}</span></div></NavLink>

@@ -196,6 +196,15 @@ class GameDetail:
 
 
 @dataclass(frozen=True)
+class PreparedGameReport:
+    source_detail: GameDetail
+    detail: GameDetail
+    warnings: tuple[GameEventIssue, ...]
+    render_image: bool
+    text: str | None
+
+
+@dataclass(frozen=True)
 class ReportSettings:
     include_qr_code: bool = True
     include_time: bool = True

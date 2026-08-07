@@ -19,7 +19,7 @@ export function WechatDraftPage() {
   const [articleType, setArticleType] = useState<"all" | "preview" | "report">("all");
 
   useEffect(() => {
-    document.title = "微信草稿 · 前瞻管理";
+    document.title = "微信草稿 · 绿茵宣传部";
     setLoading(true);
     api<{ items: Candidate[] }>("/api/articles/candidates?article_type=all")
       .then(({ items }) => setCandidates(items))

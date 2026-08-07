@@ -10,6 +10,7 @@ import os
 import shlex
 import shutil
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -23,6 +24,7 @@ from thufootball import (
     GameQuery,
     GameStatus,
     GameSummary,
+    PreparedGameReport,
     ReportSettings,
     THUFootballClient,
     THUFootballQueryService,
@@ -141,6 +143,14 @@ class _DefaultFootballSession:
             overwrite=overwrite,
         )
 
+    async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
+        return await self._reports.get_prepared_game_report(game_id)
+
+    async def render_game_detail(
+        self, detail: Any, *, settings: ReportSettings
+    ) -> tuple[bytes, int, int]:
+        return await self._reports.render_game_detail(detail, settings=settings)
+
 
 def _quoted_command(arguments: list[str]) -> str:
     if sys.platform == "win32":
@@ -161,6 +171,25 @@ def _query_scope_sha256(tournament_ids: tuple[int, ...]) -> str:
 
 def _game_key(game: GameSummary) -> tuple[datetime, int, int]:
     return (game.kickoff_local, game.tournament_id, game.game_id)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            stream.write(content)
+            temporary_path = Path(stream.name)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _report_warning_message(
@@ -193,33 +222,6 @@ def _report_warning_message(
     return (
         f"{subject}存在需要检查的战报事件"
         f"（{issue.code}），请核对原始比赛记录"
-    )
-
-
-def build_abandon_text(game: GameSummary, competition: Competition) -> str:
-    """Build the shared website/CLI explanation for an awarded match."""
-
-    home_name = resolve_report_team_name(game, "home")
-    away_name = resolve_report_team_name(game, "away")
-    awarded = 5 if competition is Competition.FUTSAL else 3
-    if game.home_abandon is True and game.away_abandon is True:
-        raise PipelineError(
-            f"比赛 {game.game_id} 的双方均被标记为弃赛，无法生成说明",
-            stage="report",
-        )
-    if game.home_abandon is True:
-        return (
-            f"{home_name}vs{away_name}的比赛，由于{home_name}弃赛，"
-            f"记为{home_name} 0:{awarded} {away_name}。"
-        )
-    if game.away_abandon is True:
-        return (
-            f"{home_name}vs{away_name}的比赛，由于{away_name}弃赛，"
-            f"记为{home_name} {awarded}:0 {away_name}。"
-        )
-    raise PipelineError(
-        f"比赛 {game.game_id} 未被标记为弃赛",
-        stage="report",
     )
 
 
@@ -344,51 +346,55 @@ class AutoReportPipeline:
             )
         return value
 
-    def _image_path(self, paths: _RunPaths, reference: str) -> Path:
+    def _artifact_path(
+        self, paths: _RunPaths, reference: str, *, kind: str
+    ) -> Path:
         relative = Path(reference)
+        expected_suffix = ".png" if kind == "image" else ".txt"
         if (
             relative.is_absolute()
             or len(relative.parts) != 2
             or relative.parts[0] != "reports"
-            or relative.suffix.casefold() != ".png"
+            or relative.suffix.casefold() != expected_suffix
             or any(part in {"", ".", ".."} for part in relative.parts)
         ):
             raise ArtifactValidationError(
-                f"report.json 中存在不安全的图片路径：{reference}",
+                f"report.json 中存在不安全的战报路径：{reference}",
                 stage="report-validation",
             )
         resolved = (paths.directory / relative).resolve()
         if resolved.parent != paths.reports.resolve():
             raise ArtifactValidationError(
-                f"report.json 图片路径越出 reports 目录：{reference}",
+                f"report.json 战报路径越出 reports 目录：{reference}",
                 stage="report-validation",
             )
         return resolved
 
-    def _validate_manifest_images(
+    def _validate_manifest_artifacts(
         self,
         context: _CombinationContext,
         manifest: dict[str, Any],
     ) -> tuple[Path, ...]:
-        images: list[Path] = []
+        files: list[Path] = []
         for item in manifest["items"]:
-            if item["kind"] != "image":
-                continue
-            path = self._image_path(context.paths, item["path"])
-            if not path.is_file():
-                raise ArtifactValidationError(
-                    f"战报图片缺失：{self._display_path(path)}；"
-                    "请使用 --override 重建",
-                    stage="report-validation",
+            for artifact in item["artifacts"]:
+                path = self._artifact_path(
+                    context.paths, artifact["path"], kind=artifact["kind"]
                 )
-            if sha256_file(path) != item["sha256"]:
-                raise ArtifactValidationError(
-                    f"战报图片哈希不匹配：{self._display_path(path)}；"
-                    "请使用 --override 重建",
-                    stage="report-validation",
-                )
-            images.append(path)
-        return tuple(images)
+                if not path.is_file():
+                    raise ArtifactValidationError(
+                        f"战报文件缺失：{self._display_path(path)}；"
+                        "请使用 --override 重建",
+                        stage="report-validation",
+                    )
+                if sha256_file(path) != artifact["sha256"]:
+                    raise ArtifactValidationError(
+                        f"战报文件哈希不匹配：{self._display_path(path)}；"
+                        "请使用 --override 重建",
+                        stage="report-validation",
+                    )
+                files.append(path)
+        return tuple(files)
 
     def _load_reusable_report(self, context: _CombinationContext) -> bool:
         if context.request.override:
@@ -430,17 +436,13 @@ class AutoReportPipeline:
                 "report.json 状态与 run.json 不一致；请使用 --override 重建",
                 stage="report-validation",
             )
-        self._validate_manifest_images(context, manifest)
+        self._validate_manifest_artifacts(context, manifest)
         context.manifest = manifest
         context.logger.info(
             "↪ [1/3] report 复用缓存：%s",
             self._display_path(context.paths.report),
         )
         return True
-
-    @staticmethod
-    def _abandon_text(game: GameSummary, competition: Competition) -> str:
-        return build_abandon_text(game, competition)
 
     async def _build_report_manifest(
         self,
@@ -473,7 +475,7 @@ class AutoReportPipeline:
             )
         items: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
-        expected_images: set[Path] = set()
+        expected_files: set[Path] = set()
 
         for game in selected:
             if game.status is not GameStatus.FINISHED:
@@ -501,45 +503,47 @@ class AutoReportPipeline:
                 "home_name": home_name,
                 "away_name": away_name,
             }
-            if game.home_abandon is True or game.away_abandon is True:
-                items.append(
-                    {
-                        "kind": "abandon",
-                        **common,
-                        "text": self._abandon_text(
-                            game,
-                            context.request.competition,
-                        ),
-                    }
-                )
-                continue
-
             filename = (
                 f"{game.kickoff_local:%H%M}_{game.game_id}.png"
             )
             output = (context.paths.reports / filename).resolve()
-            expected_images.add(output)
+            expected_files.add(output)
             context.logger.info(
                 "→ report 比赛 %s：%s vs %s",
                 game.game_id,
                 home_name,
                 away_name,
             )
-            report_file = await football.download_game_report(
-                game.game_id,
-                output,
-                settings=ReportSettings(),
-                refresh_stats=False,
-                overwrite=True,
-            )
-            actual = Path(report_file.path).resolve()
-            if actual != output or not output.is_file():
-                raise PipelineError(
-                    f"比赛 {game.game_id} 的战报服务未写入预期文件",
-                    stage="report",
+            prepared = await football.get_prepared_game_report(game.game_id)
+            artifacts: list[dict[str, str]] = []
+            if prepared.render_image:
+                image, _width, _height = await football.render_game_detail(
+                    prepared.detail, settings=ReportSettings()
                 )
-            warnings = [asdict(warning) for warning in report_file.warnings]
-            for warning in report_file.warnings:
+                _atomic_write_bytes(output, image)
+                artifacts.append(
+                    {
+                        "kind": "image",
+                        "path": f"reports/{filename}",
+                        "sha256": sha256_file(output),
+                    }
+                )
+            else:
+                expected_files.remove(output)
+            if prepared.text is not None:
+                text_filename = f"{game.kickoff_local:%H%M}_{game.game_id}.txt"
+                text_output = (context.paths.reports / text_filename).resolve()
+                _atomic_write_bytes(text_output, prepared.text.encode("utf-8"))
+                expected_files.add(text_output)
+                artifacts.append(
+                    {
+                        "kind": "text",
+                        "path": f"reports/{text_filename}",
+                        "sha256": sha256_file(text_output),
+                    }
+                )
+            warnings = [asdict(warning) for warning in prepared.warnings]
+            for warning in prepared.warnings:
                 context.logger.warning(
                     "⚠ %s",
                     _report_warning_message(
@@ -551,10 +555,8 @@ class AutoReportPipeline:
                 )
             items.append(
                 {
-                    "kind": "image",
                     **common,
-                    "path": f"reports/{filename}",
-                    "sha256": sha256_file(output),
+                    "artifacts": artifacts,
                     "warnings": warnings,
                 }
             )
@@ -580,8 +582,11 @@ class AutoReportPipeline:
         }
         write_json(context.paths.report, manifest)
         if context.paths.reports.exists():
-            for path in context.paths.reports.glob("*.png"):
-                if path.resolve() not in expected_images:
+            for path in context.paths.reports.iterdir():
+                if (
+                    path.suffix.casefold() in {".png", ".txt"}
+                    and path.resolve() not in expected_files
+                ):
                     path.unlink()
         if context.paths.article.exists():
             article_path = context.paths.article.resolve()
@@ -630,23 +635,25 @@ class AutoReportPipeline:
         assert context.manifest is not None
         fragments: list[str] = []
         for item in context.manifest["items"]:
-            if item["kind"] == "image":
-                image_path = self._image_path(context.paths, item["path"])
-                content = image_path.read_bytes()
-                encoded = base64.b64encode(content).decode("ascii")
-                fragments.append(
-                    '<section style="margin:0;padding:0;">'
-                    '<img src="data:image/png;base64,'
-                    + encoded
-                    + '" style="display:block;width:100%;height:auto;" />'
-                    "</section>"
+            for artifact in item["artifacts"]:
+                path = self._artifact_path(
+                    context.paths, artifact["path"], kind=artifact["kind"]
                 )
-            else:
-                fragments.append(
-                    '<p style="margin:16px 0;line-height:1.75;">'
-                    + html.escape(item["text"])
-                    + "</p>"
-                )
+                if artifact["kind"] == "image":
+                    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                    fragments.append(
+                        '<section style="margin:0;padding:0;">'
+                        '<img src="data:image/png;base64,'
+                        + encoded
+                        + '" style="display:block;width:100%;height:auto;" />'
+                        "</section>"
+                    )
+                else:
+                    fragments.append(
+                        '<p style="margin:16px 0;line-height:1.75;">'
+                        + html.escape(path.read_text(encoding="utf-8"))
+                        + "</p>"
+                    )
         return "".join(fragments)
 
     def _article_input_sha256(
@@ -683,7 +690,7 @@ class AutoReportPipeline:
 
     def _prepare_article(self, context: _CombinationContext) -> Article:
         assert context.manifest is not None
-        self._validate_manifest_images(context, context.manifest)
+        self._validate_manifest_artifacts(context, context.manifest)
         desired_cover = context.request.cover or self._default_cover()
         input_sha256 = self._article_input_sha256(context, desired_cover)
         desired_cover_state = cover_descriptor(desired_cover)
@@ -849,7 +856,7 @@ class AutoReportPipeline:
         assert context.manifest is not None
         status = context.manifest["status"]
         skipped = status != "ready"
-        files = self._validate_manifest_images(context, context.manifest)
+        files = self._validate_manifest_artifacts(context, context.manifest)
         return CombinationResult(
             report_date=context.request.report_date,
             competition=context.request.competition,

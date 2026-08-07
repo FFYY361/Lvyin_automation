@@ -40,6 +40,22 @@ export function cartesianPairs<T, U>(left: T[], right: U[]): Array<{ left: T; ri
   return left.flatMap((leftValue) => right.map((rightValue) => ({ left: leftValue, right: rightValue })));
 }
 
+export function futureMatchDates(weekCount: number, from = new Date()): string[] {
+  if (!Number.isInteger(weekCount) || weekCount <= 0) return [];
+  const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const dates: string[] = [];
+  for (let offset = 0; offset < weekCount * 7; offset += 1) {
+    if ([0, 4, 6].includes(cursor.getDay())) {
+      const year = cursor.getFullYear();
+      const month = String(cursor.getMonth() + 1).padStart(2, "0");
+      const day = String(cursor.getDate()).padStart(2, "0");
+      dates.push(`${year}-${month}-${day}`);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
 export function moveItem<T>(values: T[], from: number, to: number): T[] {
   if (from < 0 || from >= values.length || to < 0 || to >= values.length || from === to) return values;
   const result = [...values];

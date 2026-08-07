@@ -4,19 +4,20 @@ import { Link } from "react-router-dom";
 import { ApiError, api, errorMessage, jsonBody } from "../api";
 import { Alert, Badge, Button, EmptyState, Field, PageHeader, Panel, SectionTitle } from "../components";
 import { competitionLabels, type Competition, type CreateBatchResult } from "../types";
-import { cartesianPairs, formatDate } from "../utils";
+import { cartesianPairs, formatDate, futureMatchDates } from "../utils";
 
 const competitions: Competition[] = ["male", "female", "futsal"];
 
 export function DashboardPage() {
   const [dateInput, setDateInput] = useState("");
+  const [weekInput, setWeekInput] = useState("2");
   const [dates, setDates] = useState<string[]>([]);
   const [selectedCompetitions, setSelectedCompetitions] = useState<Competition[]>(["male", "female"]);
   const [results, setResults] = useState<CreateBatchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { document.title = "创建批次 · 前瞻管理"; }, []);
+  useEffect(() => { document.title = "创建批次 · 绿茵宣传部"; }, []);
   const combinations = useMemo(
     () => cartesianPairs(dates, selectedCompetitions).map(({ left: date, right: competition }) => ({ date, competition })),
     [dates, selectedCompetitions],
@@ -26,6 +27,15 @@ export function DashboardPage() {
     if (!dateInput) return;
     setDates((current) => Array.from(new Set([...current, dateInput])).sort());
     setDateInput("");
+    setError(null);
+  };
+
+  const weekCount = Number(weekInput);
+  const validWeekCount = Number.isInteger(weekCount) && weekCount > 0;
+  const addFutureDates = () => {
+    if (!validWeekCount) return;
+    setDates(Array.from(new Set([...dates, ...futureMatchDates(weekCount)])).sort());
+    setError(null);
   };
 
   const toggleCompetition = (competition: Competition) => {
@@ -64,10 +74,18 @@ export function DashboardPage() {
           <SectionTitle title="选择范围" description="日期与赛事将组合成独立批次。" />
           {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
           <form onSubmit={submit} className="stack stack--large">
-            <Field label="比赛日期" hint="最多可以创建 31 个日期。">
+            <Field label="比赛日期" hint="可以手动添加任意日期。">
               <div className="inline-field">
                 <input type="date" value={dateInput} onChange={(event) => setDateInput(event.target.value)} />
                 <Button type="button" onClick={addDate} disabled={!dateInput}><Plus size={16} />添加</Button>
+              </div>
+            </Field>
+            <Field label="快捷添加" hint="从今天起连续计算，周数需填写正整数。">
+              <div className="week-shortcut">
+                <span>批量添加未来</span>
+                <input aria-label="未来周数" type="number" min={1} step={1} value={weekInput} onChange={(event) => setWeekInput(event.target.value)} />
+                <span>周的周四、周六、周日</span>
+                <Button type="button" onClick={addFutureDates} disabled={!validWeekCount}><CalendarDays size={16} />添加</Button>
               </div>
             </Field>
             <div className="chip-list" aria-label="已选日期">

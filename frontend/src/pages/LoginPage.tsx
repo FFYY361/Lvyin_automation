@@ -14,7 +14,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  useEffect(() => { document.title = "登录 · 前瞻管理"; }, []);
+  useEffect(() => { document.title = "登录 · 绿茵宣传部"; }, []);
   if (loading) return <LoadingScreen label="正在检查登录状态" />;
   if (user) return <Navigate to={user.role === "admin" ? "/previews" : "/tasks"} replace />;
 
@@ -41,8 +41,8 @@ export function LoginPage() {
     <main className="login-page">
       <div className="login-card">
         <div className="login-icon"><LockKeyhole size={24} /></div>
-        <p className="eyebrow">LVYIN PREVIEW</p>
-        <h1>登录前瞻协作</h1>
+        <p className="eyebrow">LVYIN MEDIA DEPARTMENT</p>
+        <h1>登录-绿茵宣传部</h1>
         <p className="login-subtitle">管理员和协会成员均可使用账号登录</p>
         {error ? <Alert tone="danger">{error}</Alert> : null}
         <form onSubmit={submit} className="stack stack--large">

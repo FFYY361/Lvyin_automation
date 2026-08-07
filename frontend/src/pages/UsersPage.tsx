@@ -25,7 +25,7 @@ export function UsersPage() {
     catch (value) { setError(errorMessage(value)); }
     finally { setLoading(false); }
   }, []);
-  useEffect(() => { document.title = "用户管理 · 前瞻管理"; void load(); }, [load]);
+  useEffect(() => { document.title = "用户管理 · 绿茵宣传部"; void load(); }, [load]);
   const filtered = useMemo(() => {
     const value = query.trim().toLocaleLowerCase();
     return value ? items.filter((item) => `${item.username} ${item.display_name}`.toLocaleLowerCase().includes(value)) : items;

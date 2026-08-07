@@ -77,7 +77,7 @@ export function BatchDetailPage() {
     }
   }, [applyBatch, batchId]);
 
-  useEffect(() => { document.title = "批次详情 · 前瞻管理"; void load(); }, [load]);
+  useEffect(() => { document.title = "批次详情 · 绿茵宣传部"; void load(); }, [load]);
 
   const run = async (name: string, task: () => Promise<unknown>, message: string) => {
     setAction(name); setError(null); setSuccess(null);

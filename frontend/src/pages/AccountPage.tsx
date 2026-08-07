@@ -14,7 +14,7 @@ export function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  useEffect(() => { document.title = "个人设置 · 前瞻协作"; }, []);
+  useEffect(() => { document.title = "个人设置 · 绿茵宣传部"; }, []);
 
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault(); setSaving("profile"); setError(null); setSuccess(null);

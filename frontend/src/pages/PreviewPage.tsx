@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Maximize2, RefreshCw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { api, errorMessage } from "../api";
+import { api, errorMessage, getReportDiagnostics } from "../api";
 import { useAuth } from "../auth";
 import { Alert, Badge, Button, EmptyState, LoadingScreen, PageHeader, Panel, SectionTitle } from "../components";
-import { competitionLabels, labelMissingField, type Article, type PreviewBatch, type PreviewMatch } from "../types";
+import { ReportDiagnostics } from "../ReportDiagnostics";
+import { competitionLabels, labelMissingField, type Article, type PreviewBatch, type PreviewMatch, type ReportRenderDiagnostic } from "../types";
 import { formatDateTime } from "../utils";
 
 export function PreviewPage({ articleType = "preview" }: { articleType?: "preview" | "report" }) {
@@ -17,6 +18,7 @@ export function PreviewPage({ articleType = "preview" }: { articleType?: "previe
   const [rendering, setRendering] = useState(false);
   const [reused, setReused] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<ReportRenderDiagnostic[]>([]);
 
   const load = useCallback(async () => {
     if (!batchId) return;
@@ -31,14 +33,14 @@ export function PreviewPage({ articleType = "preview" }: { articleType?: "previe
     } catch (value) { setError(errorMessage(value)); } finally { setLoading(false); }
   }, [articleType, batchId]);
 
-  useEffect(() => { document.title = `${articleType === "preview" ? "前瞻" : "战报"}文章 · 绿茵管理`; void load(); }, [articleType, load]);
+  useEffect(() => { document.title = `${articleType === "preview" ? "前瞻" : "战报"}文章 · 绿茵宣传部`; void load(); }, [articleType, load]);
 
   const render = async () => {
-    setRendering(true); setError(null);
+    setRendering(true); setError(null); setDiagnostics([]);
     try {
-      const value = await api<{ reused: boolean; article: Article }>(`/api/batches/${batchId}/render-${articleType}`, { method: "POST" });
-      setArticle(value.article); setReused(value.reused); await load();
-    } catch (value) { setError(errorMessage(value)); } finally { setRendering(false); }
+      const value = await api<{ reused: boolean; article: Article; diagnostics?: ReportRenderDiagnostic[] }>(`/api/batches/${batchId}/render-${articleType}`, { method: "POST" });
+      setArticle(value.article); setReused(value.reused); setDiagnostics(value.diagnostics ?? []); await load();
+    } catch (value) { setError(errorMessage(value)); setDiagnostics(getReportDiagnostics(value)); } finally { setRendering(false); }
   };
 
   if (loading && !batch) return <LoadingScreen label="正在读取文章" />;
@@ -57,6 +59,7 @@ export function PreviewPage({ articleType = "preview" }: { articleType?: "previe
       <PageHeader eyebrow={articleType === "preview" ? "前瞻文章" : "战报文章"} title={batch ? `${competitionLabels[batch.competition]} · ${batch.batch_date}` : "文章预览"} description={isAdmin ? "渲染结果保留为不可变版本，内容变化后需要重新渲染。" : "查看管理员最近一次渲染的文章版本。"} actions={<><Link className="button button--quiet" to={articleType === "preview" ? `/previews/${batchId}` : "/reports"}><ArrowLeft size={16} />返回{articleType === "preview" ? "批次" : "战报列表"}</Link>{isAdmin ? <Button variant="primary" loading={rendering} onClick={() => void render()}><RefreshCw size={16} />{article ? "重新渲染" : "渲染文章"}</Button> : null}</>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {reused !== null ? <Alert tone={reused ? "info" : "success"}>{reused ? "内容没有变化，已复用当前文章版本。" : "已生成新的文章版本。"}</Alert> : null}
+      {articleType === "report" ? <ReportDiagnostics diagnostics={diagnostics} matches={batch?.matches ?? []} /> : null}
       {stale ? <Alert tone="warning"><strong>当前数据已发生变化，文章已过期。</strong><span>{isAdmin ? "以下为最近一次渲染结果，请重新渲染后再用于发布。" : "以下仍是最近一次渲染结果，请等待管理员重新渲染。"}</span></Alert> : null}
       {!article ? <Panel><EmptyState title="尚未渲染文章" description={isAdmin ? articleType === "preview" ? "可以先渲染带缺项提示的预览，完善内容后再重新渲染。" : "渲染时会实时查询批次中已完赛比赛，并生成战报文章。" : "请等待管理员完成文章渲染。"} action={isAdmin ? <Button variant="primary" loading={rendering} onClick={() => void render()}>开始渲染</Button> : undefined} /></Panel> : (
         <div className="preview-layout">
