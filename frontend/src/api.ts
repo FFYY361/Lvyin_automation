@@ -1,4 +1,4 @@
-import type { ApiErrorDetails } from "./types";
+import type { ApiErrorDetails, ReportRenderDiagnostic } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -78,6 +78,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return error instanceof Error ? error.message : "发生未知错误";
+}
+
+export function getReportDiagnostics(error: unknown): ReportRenderDiagnostic[] {
+  if (!(error instanceof ApiError) || !Array.isArray(error.details?.diagnostics)) return [];
+  return error.details.diagnostics.filter((item): item is ReportRenderDiagnostic => {
+    if (!item || typeof item !== "object") return false;
+    const value = item as Partial<ReportRenderDiagnostic>;
+    return typeof value.game_id === "number" && (value.status === "success" || value.status === "failed") && Array.isArray(value.issues);
+  });
 }
 
 export function jsonBody(value: unknown): RequestInit {

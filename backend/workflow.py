@@ -42,7 +42,6 @@ from auto_report.service import (
 )
 from auto_report.service import (
     DEFAULT_REPORT_COVER_MEDIA_ID,
-    build_abandon_text,
 )
 from preview import (
     PlayedMatch,
@@ -61,8 +60,11 @@ from preview import (
 )
 from thufootball import (
     GameDetail,
+    GameEventIssue,
     GameStatus,
+    PreparedGameReport,
     ReportSettings,
+    ReportValidationError,
     THUFootballClient,
     THUFootballQueryService,
     THUFootballReportService,
@@ -77,6 +79,8 @@ from wechat_official import (
 )
 
 from .artifacts import (
+    parse_report_storage_descriptor,
+    report_storage_descriptor,
     resolve_report_storage_key,
     resolve_storage_key,
     save_cover,
@@ -142,8 +146,8 @@ class WebsiteReportSession:
     async def __aexit__(self, *args: object) -> None:
         await self._client.aclose()
 
-    async def get_game_detail(self, game_id: int) -> tuple[Any, tuple[Any, ...]]:
-        return await self._reports.get_game_detail(game_id)
+    async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
+        return await self._reports.get_prepared_game_report(game_id)
 
     async def render_game_detail(
         self, detail: GameDetail, *, settings: ReportSettings
@@ -912,18 +916,29 @@ def _report_input_sha256(detail: GameDetail) -> str:
     )
 
 
-def report_content_path(settings: WebsiteSettings, match: Match) -> Path:
+def report_content_paths(settings: WebsiteSettings, match: Match) -> dict[str, Path]:
     if match.report_storage_key is None or match.report_content_sha256 is None:
         raise WorkflowError(404, "report_not_found", "match report has not been rendered")
     try:
-        path = resolve_report_storage_key(settings.artifact_root, match.report_storage_key)
+        storage_keys = parse_report_storage_descriptor(match.report_storage_key)
     except ValueError as exc:
         raise WorkflowError(409, "report_path_invalid", str(exc)) from exc
-    if not path.is_file():
-        raise WorkflowError(409, "report_missing", "match report artifact is missing")
-    if sha256_file(path) != match.report_content_sha256:
-        raise WorkflowError(409, "report_changed", "match report artifact changed")
-    return path
+    descriptor, fingerprint = report_storage_descriptor(storage_keys)
+    if descriptor != match.report_storage_key or fingerprint != match.report_content_sha256:
+        raise WorkflowError(409, "report_changed", "match report descriptor changed")
+    paths: dict[str, Path] = {}
+    for kind, storage_key in storage_keys.items():
+        try:
+            path = resolve_report_storage_key(settings.artifact_root, storage_key)
+        except ValueError as exc:
+            raise WorkflowError(409, "report_path_invalid", str(exc)) from exc
+        if not path.is_file():
+            raise WorkflowError(409, "report_missing", "match report artifact is missing")
+        expected_sha256 = path.stem
+        if len(expected_sha256) != 64 or sha256_file(path) != expected_sha256:
+            raise WorkflowError(409, "report_changed", "match report artifact changed")
+        paths[kind] = path
+    return paths
 
 
 async def _render_match_with_service(
@@ -931,40 +946,37 @@ async def _render_match_with_service(
     settings: WebsiteSettings,
     match: Match,
     reports: Any,
-) -> bool:
-    detail, _warnings = await reports.get_game_detail(match.game_id)
-    if detail.game.status is not GameStatus.FINISHED:
+) -> tuple[bool, tuple[GameEventIssue, ...]]:
+    prepared = await reports.get_prepared_game_report(match.game_id)
+    if prepared.source_detail.game.status is not GameStatus.FINISHED:
         raise WorkflowError(
             409,
             "match_not_finished",
             f"match {match.game_id} is not finished; refresh the batch first",
         )
-    input_sha256 = _report_input_sha256(detail)
+    input_sha256 = _report_input_sha256(prepared.source_detail)
     if match.report_input_sha256 == input_sha256:
         try:
-            report_content_path(settings, match)
+            report_content_paths(settings, match)
         except WorkflowError:
             pass
         else:
-            return True
+            return True, prepared.warnings
 
-    if detail.game.home_abandon is True or detail.game.away_abandon is True:
-        batch = session.get(Batch, match.batch_id)
-        if batch is None:
-            raise WorkflowError(409, "batch_missing", "match batch is missing")
-        content = build_abandon_text(
-            detail.game, ReportCompetition(batch.competition)
-        ).encode("utf-8")
-        extension = "txt"
-    else:
-        content, _width, _height = await reports.render_game_detail(
-            detail, settings=ReportSettings()
+    contents: dict[str, tuple[bytes, str]] = {}
+    if prepared.render_image:
+        image, _width, _height = await reports.render_game_detail(
+            prepared.detail, settings=ReportSettings()
         )
-        extension = "png"
+        contents["image"] = (image, "png")
+    if prepared.text is not None:
+        contents["text"] = (prepared.text.encode("utf-8"), "txt")
     try:
-        storage_key, content_sha256 = save_report(
-            settings.artifact_root, content, extension=extension
-        )
+        storage_keys = {
+            kind: save_report(settings.artifact_root, content, extension=extension)[0]
+            for kind, (content, extension) in contents.items()
+        }
+        storage_key, content_sha256 = report_storage_descriptor(storage_keys)
     except ValueError as exc:
         raise WorkflowError(500, "report_artifact_invalid", str(exc)) from exc
     match.report_input_sha256 = input_sha256
@@ -978,7 +990,49 @@ async def _render_match_with_service(
     batch.current_report_article_id = None
     batch.updated_at = _now()
     session.flush()
-    return False
+    return False, prepared.warnings
+
+
+def _report_workflow_error(exc: Exception) -> WorkflowError:
+    if isinstance(exc, WorkflowError):
+        return exc
+    if isinstance(exc, ReportValidationError):
+        return WorkflowError(
+            422,
+            "report_event_validation_failed",
+            str(exc),
+            details={"issues": [asdict(issue) for issue in exc.issues]},
+        )
+    return WorkflowError(502, "report_query_failed", str(exc))
+
+
+def _report_success_diagnostic(
+    match: Match,
+    reused: bool,
+    issues: tuple[GameEventIssue, ...],
+) -> dict[str, Any]:
+    return {
+        "game_id": match.game_id,
+        "status": "success",
+        "reused": reused,
+        "issues": [asdict(issue) for issue in issues],
+        "error": None,
+    }
+
+
+def _report_failure_diagnostic(
+    match: Match,
+    error: WorkflowError,
+) -> dict[str, Any]:
+    details = error.details or {}
+    issues = details.get("issues")
+    return {
+        "game_id": match.game_id,
+        "status": "failed",
+        "reused": None,
+        "issues": issues if isinstance(issues, list) else [],
+        "error": {"code": error.code, "message": error.message},
+    }
 
 
 async def render_match_report(
@@ -986,26 +1040,32 @@ async def render_match_report(
     settings: WebsiteSettings,
     factories: ExternalFactories,
     match: Match,
-) -> bool:
+) -> tuple[bool, list[dict[str, Any]]]:
     _advisory_lock(session, "match-report", str(match.game_id))
     session.refresh(match)
     try:
         async with factories.reports() as reports:
-            return await _render_match_with_service(
+            reused, issues = await _render_match_with_service(
                 session, settings, match, reports
             )
-    except WorkflowError:
-        raise
+            return reused, [_report_success_diagnostic(match, reused, issues)]
     except Exception as exc:
-        raise WorkflowError(502, "report_query_failed", str(exc)) from exc
+        error = _report_workflow_error(exc)
+        raise WorkflowError(
+            error.status_code,
+            error.code,
+            error.message,
+            details={"diagnostics": [_report_failure_diagnostic(match, error)]},
+        ) from exc
 
 
 def _report_body(settings: WebsiteSettings, matches: list[Match]) -> str:
     fragments: list[str] = []
     for match in matches:
-        path = report_content_path(settings, match)
-        if path.suffix == ".png":
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        paths = report_content_paths(settings, match)
+        image_path = paths.get("image")
+        if image_path is not None:
+            encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
             fragments.append(
                 '<section style="margin:0;padding:0;">'
                 '<img src="data:image/png;base64,'
@@ -1013,10 +1073,11 @@ def _report_body(settings: WebsiteSettings, matches: list[Match]) -> str:
                 + '" style="display:block;width:100%;height:auto;" />'
                 "</section>"
             )
-        else:
+        text_path = paths.get("text")
+        if text_path is not None:
             fragments.append(
                 '<p style="margin:16px 0;line-height:1.75;">'
-                + html.escape(path.read_text(encoding="utf-8"))
+                + html.escape(text_path.read_text(encoding="utf-8"))
                 + "</p>"
             )
     return "".join(fragments)
@@ -1027,7 +1088,7 @@ async def render_report_batch(
     settings: WebsiteSettings,
     factories: ExternalFactories,
     batch: Batch,
-) -> tuple[ArticleRecord, bool]:
+) -> tuple[ArticleRecord, bool, list[dict[str, Any]]]:
     _advisory_lock(session, "report-batch", str(batch.id))
     session.refresh(batch)
     matches = list(
@@ -1045,14 +1106,40 @@ async def render_report_batch(
         raise WorkflowError(
             409, "no_finished_matches", "batch has no saved finished matches"
         )
+    diagnostics: list[dict[str, Any]] = []
+    failure_statuses: list[int] = []
     try:
         async with factories.reports() as reports:
             for match in matches:
-                await _render_match_with_service(session, settings, match, reports)
-    except WorkflowError:
-        raise
+                try:
+                    reused, issues = await _render_match_with_service(
+                        session, settings, match, reports
+                    )
+                    diagnostics.append(
+                        _report_success_diagnostic(match, reused, issues)
+                    )
+                except Exception as exc:
+                    error = _report_workflow_error(exc)
+                    failure_statuses.append(error.status_code)
+                    diagnostics.append(_report_failure_diagnostic(match, error))
     except Exception as exc:
-        raise WorkflowError(502, "report_query_failed", str(exc)) from exc
+        error = _report_workflow_error(exc)
+        diagnostics = [
+            _report_failure_diagnostic(match, error) for match in matches
+        ]
+        failure_statuses = [error.status_code] * len(matches)
+    if failure_statuses:
+        status_code = (
+            502
+            if any(value >= 500 for value in failure_statuses)
+            else max(failure_statuses)
+        )
+        raise WorkflowError(
+            status_code,
+            "report_batch_render_failed",
+            f"report rendering failed for {len(failure_statuses)} match(es)",
+            details={"diagnostics": diagnostics},
+        )
 
     snapshot = {
         "matches": [
@@ -1073,7 +1160,7 @@ async def render_report_batch(
         ):
             raise WorkflowError(409, "article_pointer_invalid", "current report article is invalid")
         if existing.input_snapshot == snapshot:
-            return existing, True
+            return existing, True, diagnostics
 
     cover = CoverMediaId(DEFAULT_REPORT_COVER_MEDIA_ID)
     body_html = _report_body(settings, matches)
@@ -1114,7 +1201,7 @@ async def render_report_batch(
     batch.current_report_article_id = record.id
     batch.updated_at = _now()
     session.flush()
-    return record, False
+    return record, False, diagnostics
 
 
 def article_domain(
@@ -1314,6 +1401,13 @@ def match_payload(value: Match) -> dict[str, Any]:
         ]
         return payload
 
+    report_storage: dict[str, str] = {}
+    if value.report_storage_key is not None:
+        try:
+            report_storage = parse_report_storage_descriptor(value.report_storage_key)
+        except ValueError:
+            report_storage = {}
+
     return {
         "game_id": value.game_id,
         "batch_id": value.batch_id,
@@ -1336,14 +1430,7 @@ def match_payload(value: Match) -> dict[str, Any]:
         "body_version": value.body_version,
         "status": value.status,
         "report": {
-            "available": value.report_storage_key is not None,
-            "kind": (
-                None
-                if value.report_storage_key is None
-                else "text"
-                if value.report_storage_key.endswith(".txt")
-                else "image"
-            ),
+            "available": bool(report_storage),
             "content_sha256": value.report_content_sha256,
             "rendered_at": (
                 value.report_rendered_at.isoformat()

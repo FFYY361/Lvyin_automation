@@ -60,7 +60,7 @@ const batch: PreviewBatch = {
     body: "正文",
     body_version: 2,
     status: "scheduled",
-    report: { available: false, kind: null, content_sha256: null, rendered_at: null },
+    report: { available: false, content_sha256: null, rendered_at: null },
     updated_at: "2026-08-01T00:00:00Z",
   }],
 };
@@ -82,8 +82,19 @@ describe("batch and match pages", () => {
     renderRoute("/previews", "/previews", <BatchesPage />);
 
     expect(await screen.findAllByRole("link", { name: "打开批次" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "渲染文章" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("checkbox", { name: "显示五人制批次" }));
     expect(screen.getAllByRole("link", { name: "打开批次" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "渲染文章" })).toHaveLength(2);
+  });
+
+  it("renders a preview article from the batch row and shows missing-field warnings", async () => {
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(json(init?.method === "POST" ? { reused: false, article: { missing_fields: ["matches.11.body"] } } : { items: [batch] }))));
+    renderRoute("/previews", "/previews", <BatchesPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "渲染文章" }));
+    expect(await screen.findByText("前瞻文章已生成，但仍存在缺项。")).toBeInTheDocument();
+    expect(screen.getByText("比赛 #11 · 正文")).toBeInTheDocument();
   });
 
   it("uses compact match cards as links from the batch page", async () => {

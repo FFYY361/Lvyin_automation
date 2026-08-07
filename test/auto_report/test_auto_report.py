@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from functools import wraps
 from pathlib import Path
@@ -24,11 +24,14 @@ from auto_report.service import (
     _report_warning_message,
 )
 from thufootball import (
+    GameDetail,
     GameEventIssue,
     GameQuery,
     GameReportFile,
     GameStatus,
     GameSummary,
+    PreparedGameReport,
+    prepare_game_report,
 )
 from wechat_official import Article, CoverFile, CoverMediaId, DraftReceipt
 
@@ -88,9 +91,11 @@ class FakeFootball:
         games_by_tournaments: dict[tuple[int, ...], list[GameSummary]],
         *,
         warning_game_ids: set[int] | None = None,
+        mixed_game_ids: set[int] | None = None,
     ) -> None:
         self.games_by_tournaments = games_by_tournaments
         self.warning_game_ids = warning_game_ids or set()
+        self.mixed_game_ids = mixed_game_ids or set()
         self.queries: list[GameQuery] = []
         self.reports: list[dict[str, object]] = []
 
@@ -103,6 +108,82 @@ class FakeFootball:
     async def query_games(self, query: GameQuery) -> list[GameSummary]:
         self.queries.append(query)
         return list(self.games_by_tournaments.get(query.tournament_ids, []))
+
+    def _find_game(self, game_id: int) -> GameSummary:
+        return next(
+            game
+            for games in self.games_by_tournaments.values()
+            for game in games
+            if game.game_id == game_id
+        )
+
+    async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
+        game = self._find_game(game_id)
+        detail = GameDetail(
+            game=game,
+            events=(),
+            referees=(),
+            players_per_side=5 if game.tournament_id == 128 else 11,
+        )
+        if game_id in self.mixed_game_ids:
+            rendered = replace(
+                detail,
+                game=replace(
+                    game,
+                    home_score=3,
+                    away_score=0,
+                    result_text="3:0",
+                    home_abandon=False,
+                    away_abandon=False,
+                ),
+            )
+            return PreparedGameReport(
+                source_detail=detail,
+                detail=rendered,
+                warnings=(
+                    GameEventIssue(
+                        severity="warning",
+                        code="abandon_with_events_awarded_loss",
+                        message="B弃赛但仍有事件，视为B被判负",
+                        side="away",
+                    ),
+                ),
+                render_image=True,
+                text="AvsB的比赛，由于B被判负，记为A 3:0 B。",
+            )
+        if game.home_abandon is True or game.away_abandon is True:
+            return prepare_game_report(detail)
+        warnings = (
+            (
+                GameEventIssue(
+                    severity="warning",
+                    code="lineup_under_capacity",
+                    message="under capacity",
+                    side="home",
+                ),
+            )
+            if game_id in self.warning_game_ids
+            else ()
+        )
+        return PreparedGameReport(
+            source_detail=detail,
+            detail=detail,
+            warnings=warnings,
+            render_image=True,
+            text=None,
+        )
+
+    async def render_game_detail(
+        self, detail: GameDetail, *, settings: object
+    ) -> tuple[bytes, int, int]:
+        self.reports.append(
+            {
+                "game_id": detail.game.game_id,
+                "settings": settings,
+                "refresh_stats": False,
+            }
+        )
+        return b"\x89PNG\r\n" + str(detail.game.game_id).encode(), 1600, 900
 
     async def download_game_report(
         self,
@@ -157,24 +238,10 @@ class FailingFootball(FakeFootball):
         super().__init__(games_by_tournaments)
         self.fail_game_id = fail_game_id
 
-    async def download_game_report(
-        self,
-        game_id: int,
-        output: Path,
-        *,
-        settings: object,
-        refresh_stats: bool,
-        overwrite: bool,
-    ) -> GameReportFile:
+    async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
         if game_id == self.fail_game_id:
             raise RuntimeError("report validation failed")
-        return await super().download_game_report(
-            game_id,
-            output,
-            settings=settings,
-            refresh_stats=refresh_stats,
-            overwrite=overwrite,
-        )
+        return await super().get_prepared_game_report(game_id)
 
 
 @dataclass
@@ -322,7 +389,13 @@ async def test_report_queries_each_competition_once_and_caches_skips(
     first_manifest = json.loads(
         result.runs[0].report_manifest_path.read_text(encoding="utf-8")
     )
-    assert first_manifest["items"][0]["path"] == "reports/0900_1.png"
+    assert first_manifest["items"][0]["artifacts"] == [
+        {
+            "kind": "image",
+            "path": "reports/0900_1.png",
+            "sha256": first_manifest["items"][0]["artifacts"][0]["sha256"],
+        }
+    ]
     assert first_manifest["items"][0]["warnings"][0]["code"] == (
         "lineup_under_capacity"
     )
@@ -330,9 +403,11 @@ async def test_report_queries_each_competition_once_and_caches_skips(
     abandon_manifest = json.loads(
         result.runs[2].report_manifest_path.read_text(encoding="utf-8")
     )
-    assert abandon_manifest["items"][0]["text"] == (
-        "AvsB的比赛，由于A弃赛，记为A 0:3 B。"
-    )
+    abandon_artifact = abandon_manifest["items"][0]["artifacts"][0]
+    assert abandon_artifact["kind"] == "text"
+    assert (
+        result.runs[2].run_directory / abandon_artifact["path"]
+    ).read_text(encoding="utf-8") == "AvsB的比赛，由于A弃赛，记为A 0:3 B。"
     assert result.runs[1].reason == "no_games"
     assert result.runs[3].reason == "no_games"
 
@@ -458,6 +533,39 @@ async def test_article_mixes_images_and_abandon_text_in_game_order(
         article.body_html.index(abandon)
     )
     assert "width:100%;height:auto" in article.body_html
+
+
+@_async_test
+async def test_awarded_loss_with_events_writes_png_then_text(tmp_path: Path) -> None:
+    game = _game(
+        22,
+        datetime(2026, 4, 11, 11, tzinfo=UTC),
+        away_abandon=True,
+    )
+    football = FakeFootball(
+        {(122, 124, 126): [game]},
+        mixed_game_ids={22},
+    )
+    result = await AutoReportPipeline(
+        project_root=tmp_path,
+        football_service_factory=lambda: football,
+        logger=_logger(),
+    ).run(
+        PipelineRequest(
+            report_dates=(date(2026, 4, 11),),
+            competitions=(Competition.MALE,),
+        )
+    )
+
+    manifest = json.loads(result.report_manifest_path.read_text(encoding="utf-8"))
+    assert [item["kind"] for item in manifest["items"][0]["artifacts"]] == [
+        "image",
+        "text",
+    ]
+    assert [path.suffix for path in result.report_files] == [".png", ".txt"]
+    article = Article.load(result.article_directory)
+    text = "AvsB的比赛，由于B被判负，记为A 3:0 B。"
+    assert article.body_html.index("data:image/png;base64,") < article.body_html.index(text)
 
 
 @_async_test

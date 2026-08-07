@@ -10,20 +10,29 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
+from dataclasses import replace
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 
 from PIL import Image, UnidentifiedImageError
 
 from .client import THUFootballClient
-from .errors import ConfigurationError, InvalidResponse, QueryValidationError
+from .errors import (
+    ConfigurationError,
+    InvalidResponse,
+    QueryValidationError,
+    ReportValidationError,
+)
 from .models import (
     GameDetail,
     GameEvent,
     GameEventIssue,
     GameReportFile,
     GameSummary,
+    PreparedGameReport,
     ReportSettings,
 )
 from .rankings import load_static_outcome_catalog
@@ -52,18 +61,26 @@ _WEBSITE_ASSET_NAMES = (
     "legend_own_goal",
     *_EVENT_ASSET_NAMES.values(),
 )
+_REPORT_ASSET_CACHE: dict[str, bytes] = {}
+_REPORT_ASSET_CACHE_LOCK = Lock()
 _REPORT_DATA_PATTERN = re.compile(
     rb'<pre id="report-data">data:image/png;base64,([^<]+)</pre>'
 )
 _REPORT_ERROR_PATTERN = re.compile(rb'<pre id="report-data">ERROR:([^<]*)</pre>')
 
-# These are the same local fallbacks loaded by member/game_new.php. Pinning the
-# paths to TAFA's copies keeps text measurement and layer geometry aligned with
-# the website instead of reimplementing jCanvas approximately.
-_JQUERY_URL = (
-    "https://www.tafa.org.cn/member/static/jquery-3.6.4.min.js"
-)
-_JCANVAS_URL = "https://www.tafa.org.cn/member/static/jcanvas.min.js"
+_REPORT_ASSET_DIRECTORY = Path(__file__).with_name("assets")
+_JQUERY_PATH = _REPORT_ASSET_DIRECTORY / "jquery-3.6.4.min.js"
+_JCANVAS_PATH = _REPORT_ASSET_DIRECTORY / "jcanvas.min.js"
+
+
+@lru_cache(maxsize=1)
+def _report_script_sources() -> tuple[str, str]:
+    """Load the pinned browser dependencies once for inline report HTML."""
+
+    return (
+        _JQUERY_PATH.read_text(encoding="utf-8"),
+        _JCANVAS_PATH.read_text(encoding="utf-8"),
+    )
 
 
 def _positive_game_id(value: object) -> int:
@@ -116,6 +133,128 @@ def resolve_report_team_name(
         game.away_team_report_name
         or game.away_team_brief_name
         or game.away_team_name
+    )
+
+
+def _awarded_score(detail: GameDetail) -> int:
+    return 5 if detail.players_per_side == 5 else 3
+
+
+def _single_abandon_score(detail: GameDetail) -> tuple[int, int]:
+    game = detail.game
+    awarded = _awarded_score(detail)
+    baseline = (0, awarded) if game.home_abandon is True else (awarded, 0)
+    home_score = game.home_score
+    away_score = game.away_score
+    if home_score is None or away_score is None:
+        return baseline
+    abandoning_side_is_losing = (
+        game.home_abandon is True and home_score < away_score
+    ) or (game.away_abandon is True and away_score < home_score)
+    if not abandoning_side_is_losing:
+        return baseline
+    current_key = (abs(home_score - away_score), max(home_score, away_score))
+    baseline_key = (awarded, awarded)
+    return (home_score, away_score) if current_key > baseline_key else baseline
+
+
+def _single_abandon_text(
+    detail: GameDetail,
+    *,
+    awarded_loss: bool,
+    score: tuple[int, int] | None = None,
+) -> str:
+    game = detail.game
+    home_name = resolve_report_team_name(game, "home")
+    away_name = resolve_report_team_name(game, "away")
+    abandoned_name = home_name if game.home_abandon is True else away_name
+    reason = "被判负" if awarded_loss else "弃赛"
+    home_score, away_score = score or (
+        (0, _awarded_score(detail))
+        if game.home_abandon is True
+        else (_awarded_score(detail), 0)
+    )
+    return (
+        f"{home_name}vs{away_name}的比赛，由于{abandoned_name}{reason}，"
+        f"记为{home_name} {home_score}:{away_score} {away_name}。"
+    )
+
+
+def prepare_game_report(detail: GameDetail) -> PreparedGameReport:
+    """Apply shared event-validation and abandonment rules to one report."""
+
+    game = detail.game
+    home_abandon = game.home_abandon is True
+    away_abandon = game.away_abandon is True
+    if home_abandon and away_abandon:
+        home_name = resolve_report_team_name(game, "home")
+        away_name = resolve_report_team_name(game, "away")
+        warning = GameEventIssue(
+            severity="warning",
+            code="both_sides_abandoned",
+            message="双方弃赛",
+        )
+        return PreparedGameReport(
+            source_detail=detail,
+            detail=detail,
+            warnings=(warning,),
+            render_image=False,
+            text=f"{home_name}vs{away_name}的比赛，双方弃赛",
+        )
+
+    if home_abandon or away_abandon:
+        if not detail.events:
+            return PreparedGameReport(
+                source_detail=detail,
+                detail=detail,
+                warnings=(),
+                render_image=False,
+                text=_single_abandon_text(detail, awarded_loss=False),
+            )
+
+        side = "home" if home_abandon else "away"
+        team_name = resolve_report_team_name(game, side)
+        warning = GameEventIssue(
+            severity="warning",
+            code="abandon_with_events_awarded_loss",
+            message=f"{team_name}弃赛但仍有事件，视为{team_name}被判负",
+            side=side,
+        )
+        try:
+            validated, warnings = validate_game_events(detail)
+        except ReportValidationError as exc:
+            raise ReportValidationError(
+                (warning, *exc.issues), game_id=game.game_id
+            ) from exc
+        score = _single_abandon_score(detail)
+        render_game = replace(
+            validated.game,
+            home_score=score[0],
+            away_score=score[1],
+            result_text=f"{score[0]}:{score[1]}",
+            penalty_shootout=False,
+            home_penalty=None,
+            away_penalty=None,
+            home_abandon=False,
+            away_abandon=False,
+        )
+        return PreparedGameReport(
+            source_detail=detail,
+            detail=replace(validated, game=render_game),
+            warnings=(warning, *warnings),
+            render_image=True,
+            text=_single_abandon_text(
+                detail, awarded_loss=True, score=score
+            ),
+        )
+
+    validated, warnings = validate_game_events(detail)
+    return PreparedGameReport(
+        source_detail=detail,
+        detail=validated,
+        warnings=warnings,
+        render_image=True,
+        text=None,
     )
 
 
@@ -332,8 +471,8 @@ html, body { margin: 0; padding: 0; background: white; }
 canvas { display: block; }
 #report-data { display: none; }
 </style>
-<script src="__JQUERY_URL__"></script>
-<script src="__JCANVAS_URL__"></script>
+<script>__JQUERY_SOURCE__</script>
+<script>__JCANVAS_SOURCE__</script>
 </head>
 <body>
 <canvas id="canvas"></canvas>
@@ -984,6 +1123,7 @@ renderReport().catch(error => {
 def _build_report_html(payload: Mapping[str, Any]) -> str:
     import json
 
+    jquery_source, jcanvas_source = _report_script_sources()
     serialized = json.dumps(
         payload,
         ensure_ascii=False,
@@ -991,8 +1131,8 @@ def _build_report_html(payload: Mapping[str, Any]) -> str:
     ).encode("utf-8")
     encoded = base64.b64encode(serialized).decode("ascii")
     return (
-        _REPORT_HTML.replace("__JQUERY_URL__", _JQUERY_URL)
-        .replace("__JCANVAS_URL__", _JCANVAS_URL)
+        _REPORT_HTML.replace("__JQUERY_SOURCE__", jquery_source)
+        .replace("__JCANVAS_SOURCE__", jcanvas_source)
         .replace("__PAYLOAD_BASE64__", encoded)
     )
 
@@ -1230,13 +1370,43 @@ class THUFootballReportService:
     def __init__(self, client: THUFootballClient) -> None:
         self._client = client
 
+    async def _get_report_assets(self) -> Mapping[str, bytes]:
+        with _REPORT_ASSET_CACHE_LOCK:
+            if all(name in _REPORT_ASSET_CACHE for name in _WEBSITE_ASSET_NAMES):
+                return {
+                    name: _REPORT_ASSET_CACHE[name]
+                    for name in _WEBSITE_ASSET_NAMES
+                }
+
+        payloads = await asyncio.gather(
+            *(self._client.get_report_asset(name) for name in _WEBSITE_ASSET_NAMES)
+        )
+        with _REPORT_ASSET_CACHE_LOCK:
+            for name, payload in zip(
+                _WEBSITE_ASSET_NAMES, payloads, strict=True
+            ):
+                _REPORT_ASSET_CACHE.setdefault(name, payload)
+            return {
+                name: _REPORT_ASSET_CACHE[name]
+                for name in _WEBSITE_ASSET_NAMES
+            }
+
+    async def load_game_detail(self, game_id: int) -> GameDetail:
+        """Read the current unvalidated report input."""
+
+        return await self._client.get_game_info(_positive_game_id(game_id))
+
+    async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
+        """Read one match and apply the shared report rules."""
+
+        return prepare_game_report(await self.load_game_detail(game_id))
+
     async def get_game_detail(
         self, game_id: int
     ) -> tuple[GameDetail, tuple[GameEventIssue, ...]]:
         """Read and validate the current report input without rendering it."""
 
-        game_id = _positive_game_id(game_id)
-        detail = await self._client.get_game_info(game_id)
+        detail = await self.load_game_detail(game_id)
         return validate_game_events(detail)
 
     async def render_game_detail(
@@ -1249,15 +1419,14 @@ class THUFootballReportService:
 
         settings = _validate_settings(settings)
         game_id = detail.game.game_id
-        qr_code = (
-            await self._client.get_game_page_code(game_id)
-            if settings.include_qr_code
-            else None
-        )
-        asset_payloads = await asyncio.gather(
-            *(self._client.get_report_asset(name) for name in _WEBSITE_ASSET_NAMES)
-        )
-        assets = dict(zip(_WEBSITE_ASSET_NAMES, asset_payloads, strict=True))
+        if settings.include_qr_code:
+            qr_code, assets = await asyncio.gather(
+                self._client.get_game_page_code(game_id),
+                self._get_report_assets(),
+            )
+        else:
+            qr_code = None
+            assets = await self._get_report_assets()
         return await asyncio.to_thread(
             render_game_report,
             detail,

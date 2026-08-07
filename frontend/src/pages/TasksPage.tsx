@@ -113,7 +113,7 @@ export function TasksPage() {
     }
   }, [isAdmin]);
 
-  useEffect(() => { document.title = "任务中心 · 前瞻协作"; void load(); }, [load]);
+  useEffect(() => { document.title = "任务中心 · 绿茵宣传部"; void load(); }, [load]);
 
   const allTasks = [...myTasks, ...waitingTasks, ...openTasks];
   const claimantNames = useClaimantNames(allTasks.map((match) => match.claimed_by_user_id));

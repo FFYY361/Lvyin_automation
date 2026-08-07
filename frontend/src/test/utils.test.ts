@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { labelMissingField, type PlayedMatchSnapshot, type SeasonOutcomeSnapshot } from "../types";
-import { cartesianPairs, formatPlayedMatch, formatSeasonOutcome, matchTaskStatus, moveItem, parseNames } from "../utils";
+import { cartesianPairs, formatPlayedMatch, formatSeasonOutcome, futureMatchDates, matchTaskStatus, moveItem, parseNames } from "../utils";
 
 describe("frontend workflow helpers", () => {
   it("normalizes personnel names without duplicates", () => {
@@ -14,6 +14,15 @@ describe("frontend workflow helpers", () => {
       { left: "08-09", right: "male" },
       { left: "08-09", right: "female" },
     ]);
+  });
+
+  it("builds Thursday, Saturday, and Sunday dates across future weeks", () => {
+    expect(futureMatchDates(2, new Date(2026, 7, 5, 15))).toEqual([
+      "2026-08-06", "2026-08-08", "2026-08-09",
+      "2026-08-13", "2026-08-15", "2026-08-16",
+    ]);
+    expect(futureMatchDates(11, new Date(2026, 7, 5))).toHaveLength(33);
+    expect(futureMatchDates(0, new Date(2026, 7, 5))).toEqual([]);
   });
 
   it("reorders draft articles without mutating the source", () => {

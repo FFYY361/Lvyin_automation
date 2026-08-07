@@ -550,6 +550,8 @@ class THUFootballQueryService:
                 continue
             if not game.record_active or not game.valid:
                 continue
+            if game.home_abandon is True and game.away_abandon is True:
+                continue
             if game.status is GameStatus.FINISHED:
                 resolved = _resolve_finished_game(
                     game,
@@ -670,6 +672,8 @@ class THUFootballQueryService:
             else:
                 continue
             if not game.record_active or not game.valid:
+                continue
+            if game.home_abandon is True and game.away_abandon is True:
                 continue
             if game.status is GameStatus.FINISHED:
                 resolved = _resolve_finished_game(

@@ -299,8 +299,6 @@ def map_game_summary(
 def _validate_finished_game(game: GameSummary, path: str) -> None:
     if game.status is not GameStatus.FINISHED:
         return
-    if game.home_abandon is True and game.away_abandon is True:
-        raise _schema(f"{path}.home_abandon")
     if game.home_abandon is True or game.away_abandon is True:
         return
     if game.home_score is None:

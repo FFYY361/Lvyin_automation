@@ -456,13 +456,7 @@ class MapperTests(unittest.TestCase):
                 self.assertEqual(caught.exception.field_path, field_path)
 
     def test_inconsistent_finished_core_fields_fail_strictly(self) -> None:
-        cases = (
-            (
-                "game.home_abandon",
-                {"home_abandon": 1, "away_abandon": 1},
-            ),
-            ("game.home_goal", {"home_goal": None}),
-        )
+        cases = (("game.home_goal", {"home_goal": None}),)
         for field_path, changes in cases:
             with self.subTest(field_path=field_path):
                 with self.assertRaises(SchemaError) as caught:
@@ -471,6 +465,15 @@ class MapperTests(unittest.TestCase):
                         "game",
                     )
                 self.assertEqual(caught.exception.field_path, field_path)
+
+    def test_finished_game_allows_both_sides_abandoned(self) -> None:
+        game = map_game_summary(
+            _game(started=True, ended=True, home_abandon=1, away_abandon=1),
+            "game",
+        )
+
+        self.assertTrue(game.home_abandon)
+        self.assertTrue(game.away_abandon)
 
     def test_penalty_shootout_is_rule_flag_not_occurrence_flag(self) -> None:
         non_draw = map_game_summary(

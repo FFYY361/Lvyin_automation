@@ -19,7 +19,7 @@ export function SettingsPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    document.title = "设置 · 前瞻管理";
+    document.title = "设置 · 绿茵宣传部";
     Promise.all([
       api<CredentialStatus>("/api/settings/thufootball-credentials"),
       api<EditorialDefaults>("/api/editorial-defaults"),

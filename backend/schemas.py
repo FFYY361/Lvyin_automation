@@ -142,7 +142,7 @@ class THUFootballCredentialsRequest(BaseModel):
 
 
 class CreateBatchesRequest(BaseModel):
-    dates: list[date] = Field(min_length=1, max_length=31)
+    dates: list[date] = Field(min_length=1)
     competitions: list[CompetitionValue] = Field(min_length=1, max_length=3)
 
 

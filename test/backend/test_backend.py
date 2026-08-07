@@ -25,6 +25,8 @@ import backend.api as backend_api
 import backend.credentials as backend_credentials
 from backend.api import create_app
 from backend.artifacts import (
+    parse_report_storage_descriptor,
+    report_storage_descriptor,
     resolve_report_storage_key,
     resolve_storage_key,
     save_report,
@@ -64,8 +66,11 @@ from backend.workflow import (
 from thufootball import (
     AuthenticationError,
     GameDetail,
+    GameEventIssue,
     GameStatus,
     GameSummary,
+    PreparedGameReport,
+    ReportValidationError,
     UserProbe,
 )
 from wechat_official import CoverMediaId, DraftReceipt
@@ -94,6 +99,18 @@ def test_report_artifacts_are_content_addressed_and_path_limited(tmp_path: Path)
         resolve_report_storage_key(tmp_path, "covers/report.png")
     with pytest.raises(ValueError):
         resolve_report_storage_key(tmp_path, "reports/../report.png")
+
+    descriptors = (
+        {"image": first_key},
+        {"text": f"reports/{'a' * 64}.txt"},
+        {"image": first_key, "text": f"reports/{'b' * 64}.txt"},
+    )
+    for artifacts in descriptors:
+        descriptor, fingerprint = report_storage_descriptor(artifacts)
+        assert parse_report_storage_descriptor(descriptor) == artifacts
+        assert fingerprint == hashlib.sha256(descriptor.encode()).hexdigest()
+    with pytest.raises(ValueError):
+        parse_report_storage_descriptor(first_key)
 
 
 @pytest.fixture(scope="session")
@@ -267,8 +284,11 @@ def _finished_detail(game_id: int, *, home_score: int = 2) -> GameDetail:
 class _FakeWebsiteReports:
     def __init__(self, detail: GameDetail) -> None:
         self.detail = detail
+        self.warnings: tuple[GameEventIssue, ...] = ()
+        self.error: Exception | None = None
         self.query_calls = 0
         self.render_calls = 0
+        self.prepared: PreparedGameReport | None = None
 
     async def __aenter__(self):
         return self
@@ -276,13 +296,21 @@ class _FakeWebsiteReports:
     async def __aexit__(self, *args: object) -> None:
         return None
 
-    async def get_game_detail(self, game_id: int):
+    async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
         assert game_id == self.detail.game.game_id
         self.query_calls += 1
-        return self.detail, ()
+        if self.error is not None:
+            raise self.error
+        return self.prepared or PreparedGameReport(
+            source_detail=self.detail,
+            detail=self.detail,
+            warnings=self.warnings,
+            render_image=True,
+            text=None,
+        )
 
     async def render_game_detail(self, detail: GameDetail, **_: object):
-        assert detail == self.detail
+        assert detail.game.game_id == self.detail.game.game_id
         self.render_calls += 1
         stream = BytesIO()
         Image.new("RGB", (16, 10), (self.render_calls, 80, 30)).save(
@@ -695,8 +723,15 @@ def test_stage6_single_and_batch_report_rendering(
         first = user_client.post(f"/api/matches/{game_id}/render-report")
         first.raise_for_status()
         assert first.json()["reused"] is False
+        assert first.json()["diagnostics"] == [{
+            "game_id": game_id,
+            "status": "success",
+            "reused": False,
+            "issues": [],
+            "error": None,
+        }]
         assert first.json()["match"]["status"] == "scheduled"
-        assert first.json()["match"]["report"]["kind"] == "image"
+        assert "kind" not in first.json()["match"]["report"]
         assert "report_storage_key" not in first.text
         assert reports.query_calls == 1
         assert reports.render_calls == 1
@@ -708,7 +743,8 @@ def test_stage6_single_and_batch_report_rendering(
         assert reports.render_calls == 1
         content = user_client.get(f"/api/matches/{game_id}/report/content")
         content.raise_for_status()
-        assert content.headers["content-type"].startswith("image/png")
+        assert content.json()["image"]["media_type"] == "image/png"
+        assert content.json()["text"] is None
 
         reports.detail = replace(
             reports.detail,
@@ -719,6 +755,58 @@ def test_stage6_single_and_batch_report_rendering(
         assert changed.json()["reused"] is False
         assert reports.query_calls == 3
         assert reports.render_calls == 2
+
+        source_detail = replace(
+            reports.detail,
+            game=replace(
+                reports.detail.game,
+                home_score=0,
+                away_score=2,
+                home_abandon=True,
+            ),
+        )
+        rendered_detail = replace(
+            source_detail,
+            game=replace(
+                source_detail.game,
+                home_score=0,
+                away_score=3,
+                result_text="0:3",
+                home_abandon=False,
+            ),
+        )
+        reports.detail = source_detail
+        reports.prepared = PreparedGameReport(
+            source_detail=source_detail,
+            detail=rendered_detail,
+            warnings=(),
+            render_image=True,
+            text="主队vs客队的比赛，由于主队被判负，记为主队 0:3 客队。",
+        )
+        mixed = user_client.post(f"/api/matches/{game_id}/render-report")
+        mixed.raise_for_status()
+        assert "kind" not in mixed.json()["match"]["report"]
+        mixed_content = user_client.get(f"/api/matches/{game_id}/report/content")
+        mixed_content.raise_for_status()
+        assert mixed_content.json()["image"]["media_type"] == "image/png"
+        assert mixed_content.json()["text"]["content"].endswith("0:3 客队。")
+        with session_factory() as session:
+            stored = session.get(Match, game_id)
+            assert stored is not None
+            assert set(parse_report_storage_descriptor(stored.report_storage_key)) == {
+                "image",
+                "text",
+            }
+        reports.prepared = None
+        reports.detail = replace(
+            source_detail,
+            game=replace(
+                source_detail.game,
+                home_score=4,
+                away_score=1,
+                home_abandon=False,
+            ),
+        )
 
         assert user_client.post(
             f"/api/batches/{batch_id}/render-report"
@@ -743,6 +831,44 @@ def test_stage6_single_and_batch_report_rendering(
         assert [
             item["article"]["id"] for item in candidates.json()["items"]
         ] == [article.json()["article"]["id"]]
+
+        warning = GameEventIssue(
+            severity="warning",
+            code="lineup_under_capacity",
+            message="home has 10 START players; expected 11.",
+            side="home",
+        )
+        reports.warnings = (warning,)
+        warned = user_client.post(f"/api/matches/{game_id}/render-report")
+        warned.raise_for_status()
+        warning_issues = warned.json()["diagnostics"][0]["issues"]
+        assert warning_issues[0]["code"] == "lineup_under_capacity"
+
+        blocking = GameEventIssue(
+            severity="error",
+            code="duplicate_start",
+            message="Player appears in more than one START event.",
+            event_ids=(11, 12),
+            player_id=99,
+            side="home",
+        )
+        reports.error = ReportValidationError(
+            (warning, blocking), game_id=game_id
+        )
+        failed = user_client.post(f"/api/matches/{game_id}/render-report")
+        assert failed.status_code == 422
+        failed_diagnostics = failed.json()["error"]["details"]["diagnostics"]
+        assert [
+            item["severity"] for item in failed_diagnostics[0]["issues"]
+        ] == ["warning", "error"]
+
+        batch_failed = admin_client.post(
+            f"/api/batches/{batch_id}/render-report"
+        )
+        assert batch_failed.status_code == 422
+        diagnostic = batch_failed.json()["error"]["details"]["diagnostics"][0]
+        assert diagnostic["game_id"] == game_id
+        assert diagnostic["error"]["code"] == "report_event_validation_failed"
 
 
 def test_identical_weather_keeps_render_and_actual_change_invalidates(

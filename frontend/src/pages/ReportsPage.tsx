@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRight, ChevronDown, ChevronRight, RefreshCw, Search } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight, FileText, RefreshCw, Search } from "lucide-react";
 import { Link } from "react-router-dom";
-import { api, errorMessage } from "../api";
+import { api, errorMessage, getReportDiagnostics } from "../api";
 import { useAuth } from "../auth";
 import { Alert, Badge, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
-import { competitionLabels, type Competition, type PreviewBatch } from "../types";
+import { ReportDiagnostics } from "../ReportDiagnostics";
+import { competitionLabels, type Article, type Competition, type PreviewBatch, type ReportRenderDiagnostic } from "../types";
 import { formatDate, formatDateTime, teamName } from "../utils";
 
 const matchStatusLabels = {
@@ -30,11 +31,13 @@ export function ReportsPage() {
   const [competition, setCompetition] = useState<Competition | "">("");
   const [showUnfinished, setShowUnfinished] = useState(false);
   const [refreshing, setRefreshing] = useState<number | null>(null);
+  const [rendering, setRendering] = useState<Set<number>>(() => new Set());
+  const [renderFeedback, setRenderFeedback] = useState<Record<number, { tone: "success" | "info" | "danger"; message: string; diagnostics: ReportRenderDiagnostic[] }>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     const query = new URLSearchParams();
     if (date) query.set("batch_date", date);
@@ -45,11 +48,11 @@ export function ReportsPage() {
     } catch (value) {
       setError(errorMessage(value));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [competition, date]);
 
-  useEffect(() => { document.title = "战报批次 · 绿茵管理"; void load(); }, [load]);
+  useEffect(() => { document.title = "战报批次 · 绿茵宣传部"; void load(); }, [load]);
 
   const toggle = async (batchId: number) => {
     if (expanded === batchId) {
@@ -81,6 +84,34 @@ export function ReportsPage() {
     }
   };
 
+  const renderArticle = async (batch: PreviewBatch) => {
+    setRendering((current) => new Set(current).add(batch.id));
+    setRenderFeedback((current) => {
+      const next = { ...current };
+      delete next[batch.id];
+      return next;
+    });
+    try {
+      let detail = details[batch.id];
+      if (!detail) {
+        detail = await api<PreviewBatch>(`/api/batches/${batch.id}`);
+        setDetails((current) => ({ ...current, [batch.id]: detail }));
+      }
+      const result = await api<{ reused: boolean; article: Article; diagnostics: ReportRenderDiagnostic[] }>(`/api/batches/${batch.id}/render-report`, { method: "POST" });
+      setRenderFeedback((current) => ({ ...current, [batch.id]: { tone: result.reused ? "info" : "success", message: result.reused ? "内容没有变化，已复用当前战报文章。" : "战报文章渲染成功。", diagnostics: result.diagnostics } }));
+      await load(true);
+    } catch (value) {
+      const diagnostics = getReportDiagnostics(value);
+      setRenderFeedback((current) => ({ ...current, [batch.id]: { tone: "danger", message: diagnostics.length ? "战报文章渲染失败，请查看逐场诊断。" : `战报文章渲染失败：${errorMessage(value)}`, diagnostics } }));
+    } finally {
+      setRendering((current) => {
+        const next = new Set(current);
+        next.delete(batch.id);
+        return next;
+      });
+    }
+  };
+
   return (
     <>
       <PageHeader eyebrow="内容管理" title="战报批次" description="展开批次查看比赛；比赛数据只在管理员手动重新查询时更新。" />
@@ -100,6 +131,7 @@ export function ReportsPage() {
                 const detail = details[batch.id];
                 const matches = (detail?.matches ?? []).filter((match) => match.active && (showUnfinished || match.status === "finished"));
                 const status = articleStatus(batch);
+                const feedback = renderFeedback[batch.id];
                 return (
                   <tbody key={batch.id}>
                     <tr>
@@ -107,8 +139,9 @@ export function ReportsPage() {
                       <td data-label="赛事">{competitionLabels[batch.competition]}</td>
                       <td data-label="战报文章"><Badge tone={status.tone}>{status.label}</Badge></td>
                       <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
-                      <td data-label="操作"><div className="row-actions">{isAdmin ? <Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询" aria-label="重新查询"><RefreshCw size={16} /></Button> : null}<Link className="icon-link" to={`/reports/${batch.id}/article`} aria-label="预览战报文章" title="预览战报文章"><ArrowRight size={17} /></Link></div></td>
+                      <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询" aria-label="重新查询"><RefreshCw size={16} /></Button><Button variant="quiet" loading={rendering.has(batch.id)} onClick={() => void renderArticle(batch)} title="渲染战报文章" aria-label="渲染文章"><FileText size={16} /></Button></> : null}<Link className="icon-link" to={`/reports/${batch.id}/article`} aria-label="预览战报文章" title="预览战报文章"><ArrowRight size={17} /></Link></div></td>
                     </tr>
+                    {feedback ? <tr className="batch-feedback-row"><td colSpan={5}><Alert tone={feedback.tone} onDismiss={() => setRenderFeedback((current) => { const next = { ...current }; delete next[batch.id]; return next; })}>{feedback.message}</Alert><ReportDiagnostics diagnostics={feedback.diagnostics} matches={detail?.matches ?? []} /></td></tr> : null}
                     {expanded === batch.id ? <tr className="report-expanded-row"><td colSpan={5}>{!detail ? <LoadingScreen label="正在读取比赛" /> : !matches.length ? <EmptyState title="没有可显示的比赛" description={showUnfinished ? "该批次当前没有有效比赛。" : "当前没有已完赛比赛，可勾选显示未完赛比赛。"} /> : <div className="match-card-list">{matches.map((match) => <Link className="match-card" key={match.game_id} to={`/reports/${batch.id}/matches/${match.game_id}`}><div className="match-card__heading"><span>{match.competition_name} · {match.stage}</span><Badge tone={match.status === "finished" ? "success" : "neutral"}>{matchStatusLabels[match.status]}</Badge></div><strong>{teamName(match.home)} <em>vs</em> {teamName(match.away)}</strong><div className="match-card__meta"><span>{formatDateTime(match.kickoff)}</span><span>{match.venue}</span><span>{match.report.available ? "战报已生成" : "尚未生成战报"}</span></div><ChevronRight className="match-card__arrow" size={18} /></Link>)}</div>}</td></tr> : null}
                   </tbody>
                 );

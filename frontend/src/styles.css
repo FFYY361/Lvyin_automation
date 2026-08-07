@@ -107,6 +107,9 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .field-group { margin: 0; padding: 0; border: 0; }
 .field-group legend { margin-bottom: 9px; }
 .inline-field { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.week-shortcut { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: #424955; font-size: 13px; }
+.week-shortcut input { flex: 0 0 72px; width: 72px; }
+.week-shortcut .button { margin-left: auto; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .divider { display: flex; align-items: center; gap: 10px; margin: 20px 0; color: #9aa1ad; font-size: 11px; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
@@ -123,6 +126,13 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .alert--success { border-color: #cae8d9; background: var(--success-soft); color: #225f43; }
 .alert--warning { border-color: #f0dfac; background: var(--warning-soft); color: #79510c; }
 .alert--danger { border-color: #f0cccf; background: var(--danger-soft); color: #8e3034; }
+.report-diagnostics { display: flex; flex-direction: column; }
+.report-issue-list { display: flex; flex-direction: column; gap: 8px; margin: 7px 0 0; padding: 0; list-style: none; }
+.report-issue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; border-top: 1px solid currentColor; padding-top: 8px; }
+.report-issue__severity { border-radius: 999px; padding: 2px 7px; background: rgba(255, 255, 255, .7); font-size: 10px; font-weight: 750; }
+.report-issue > div strong, .report-issue > div span { display: block; }
+.report-issue > div span { margin-top: 2px; font-size: 11px; opacity: .85; }
+.report-issue code { font-size: 10px; opacity: .8; }
 .success-text { color: var(--success); }
 .danger-text { color: var(--danger); }
 .muted { color: var(--muted); font-size: 13px; }
@@ -172,6 +182,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .report-batch-table .report-expanded-row td { width: auto; height: auto; padding: 12px 16px 16px; background: var(--surface-subtle); }
 .report-expanded-row .loading-screen { min-height: 100px; }
 .report-expanded-row .empty-state { min-height: 100px; padding: 10px; }
+.data-table .batch-feedback-row td { width: auto; height: auto; padding: 12px 16px; background: var(--surface-subtle); }
+.batch-feedback-row .alert:last-child, .batch-feedback-row .report-diagnostics .alert:last-child { margin-bottom: 0; }
 
 .batch-summary { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 16px; border: 1px solid var(--border); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
 .batch-summary > div { display: flex; min-height: 72px; flex-direction: column; justify-content: center; gap: 7px; border-right: 1px solid var(--border); padding: 14px 18px; }
@@ -388,13 +400,16 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
   .data-table td:last-child { border-top: 1px solid var(--border); margin-top: 5px; padding-top: 10px; }
   .report-batch-table th:last-child, .report-batch-table td:last-child { width: auto; }
   .report-expanded-row { margin-top: -12px; }
-  .report-expanded-row td, .report-expanded-row td:last-child { display: block; border: 0; margin: 0; padding: 12px 0 2px; background: transparent; }
-  .report-expanded-row td::before { display: none; }
+  .report-expanded-row td, .report-expanded-row td:last-child, .batch-feedback-row td, .batch-feedback-row td:last-child { display: block; border: 0; margin: 0; padding: 12px 0 2px; background: transparent; }
+  .report-expanded-row td::before, .batch-feedback-row td::before { display: none; }
   .error-summary { max-width: 100%; }
 }
 
 @media (max-width: 480px) {
   .filter-bar, .task-filter, .option-grid { grid-template-columns: 1fr; }
+  .week-shortcut .button { width: 100%; margin-left: 0; }
+  .report-issue { grid-template-columns: auto 1fr; }
+  .report-issue code { grid-column: 2; }
   .batch-summary { grid-template-columns: 1fr; }
   .batch-summary > div { min-height: 58px; border-right: 0; border-bottom: 1px solid var(--border); }
   .batch-summary > div:last-child { border-bottom: 0; }

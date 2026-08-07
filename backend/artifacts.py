@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
+from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 
@@ -16,6 +18,7 @@ _FORMATS = {
     "PNG": ("png", "image/png"),
     "GIF": ("gif", "image/gif"),
 }
+_REPORT_KINDS = ("image", "text")
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -100,6 +103,34 @@ def save_report(root: Path, content: bytes, *, extension: str) -> tuple[str, str
         finally:
             temporary.unlink(missing_ok=True)
     return relative.as_posix(), fingerprint
+
+
+def report_storage_descriptor(storage_keys: Mapping[str, str]) -> tuple[str, str]:
+    if not storage_keys or any(key not in _REPORT_KINDS for key in storage_keys):
+        raise ValueError("report artifacts must contain image and/or text")
+    ordered = {key: storage_keys[key] for key in _REPORT_KINDS if key in storage_keys}
+    for kind, storage_key in ordered.items():
+        expected_suffix = ".png" if kind == "image" else ".txt"
+        if not isinstance(storage_key, str) or not storage_key.endswith(expected_suffix):
+            raise ValueError(f"report {kind} storage key has the wrong extension")
+    descriptor = json.dumps(ordered, ensure_ascii=False, separators=(",", ":"))
+    return descriptor, sha256_bytes(descriptor.encode("utf-8"))
+
+
+def parse_report_storage_descriptor(value: str) -> dict[str, str]:
+    try:
+        payload = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid report storage descriptor") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("invalid report storage descriptor")
+    try:
+        descriptor, _fingerprint = report_storage_descriptor(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid report storage descriptor") from exc
+    if descriptor != value:
+        raise ValueError("report storage descriptor is not canonical")
+    return payload
 
 
 def resolve_storage_key(root: Path, storage_key: str) -> Path:
