@@ -125,8 +125,7 @@ alembic upgrade head
 alembic current
 ```
 
-首个迁移有意保持为空，只用于建立并验证迁移链。最终的 `current` 应显示
-`0001_initial (head)`。
+最终的 `current` 应显示唯一迁移 `v1_initial (head)`。
 
 在 `psql` 中可检查迁移表：
 

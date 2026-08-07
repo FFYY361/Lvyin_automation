@@ -16,8 +16,8 @@ from wechat_official import publication_fingerprint as _publication_fingerprint
 from .errors import ArtifactValidationError
 from .models import Competition
 
-RUN_SCHEMA_VERSION = 3
-DRAFT_SCHEMA_VERSION = 2
+RUN_SCHEMA_VERSION = 1
+DRAFT_SCHEMA_VERSION = 1
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -130,8 +130,7 @@ def load_run_state(
         raise ArtifactValidationError(
             "run.json 字段不符合当前契约", stage="state-validation"
         )
-    schema_version = payload.get("schema_version")
-    if schema_version not in {2, RUN_SCHEMA_VERSION}:
+    if payload.get("schema_version") != RUN_SCHEMA_VERSION:
         raise ArtifactValidationError("run.json 版本不受支持", stage="state-validation")
     expected_request = {
         "preview_date": preview_date.isoformat(),
@@ -149,22 +148,6 @@ def load_run_state(
         raise ArtifactValidationError(
             "run.json.article 字段损坏", stage="state-validation"
         )
-    if schema_version == 2 and isinstance(payload.get("source"), dict):
-        source = payload["source"]
-        if set(source) != {"selected_games", "accepted_placeholder_sha256"}:
-            raise ArtifactValidationError(
-                "旧版 run.json.source 字段损坏", stage="state-validation"
-            )
-        payload["source"] = {
-            "status": "ready",
-            "preview_date": preview_date.isoformat(),
-            "competition": competition.value,
-            "selected_games": source["selected_games"],
-            "accepted_placeholder_sha256": source["accepted_placeholder_sha256"],
-            "queried_at": None,
-            "query_scope_sha256": None,
-        }
-    payload["schema_version"] = RUN_SCHEMA_VERSION
     return payload
 
 
@@ -194,7 +177,7 @@ def _valid_publication_article(value: object) -> bool:
     )
 
 
-def _valid_v2_receipt(value: object) -> bool:
+def _valid_receipt(value: object) -> bool:
     if not isinstance(value, dict) or set(value) != {
         "media_id",
         "created_at",
@@ -229,8 +212,7 @@ def load_draft_history(
         raise ArtifactValidationError(
             "draft.json 字段不符合当前契约", stage="draft-validation"
         )
-    schema_version = payload.get("schema_version")
-    if schema_version not in {1, DRAFT_SCHEMA_VERSION}:
+    if payload.get("schema_version") != DRAFT_SCHEMA_VERSION:
         raise ArtifactValidationError(
             "draft.json 版本不受支持", stage="draft-validation"
         )
@@ -239,45 +221,8 @@ def load_draft_history(
         raise ArtifactValidationError(
             "draft.json.receipts 字段损坏", stage="draft-validation"
         )
-    if schema_version == DRAFT_SCHEMA_VERSION:
-        if any(not _valid_v2_receipt(receipt) for receipt in receipts):
-            raise ArtifactValidationError(
-                "draft.json.receipts 字段损坏", stage="draft-validation"
-            )
-        return payload
-
-    normalized: list[dict[str, Any]] = []
-    for receipt in receipts:
-        if (
-            not isinstance(receipt, dict)
-            or set(receipt)
-            != {
-                "media_id",
-                "created_at",
-                "article_fingerprint",
-                "cover_fingerprint",
-            }
-            or not all(isinstance(value, str) and value for value in receipt.values())
-            or len(receipt["article_fingerprint"]) != 64
-            or len(receipt["cover_fingerprint"]) != 64
-        ):
-            raise ArtifactValidationError(
-                "draft.json.receipts 字段损坏", stage="draft-validation"
-            )
-        articles = [
-            {
-                "preview_date": preview_date.isoformat(),
-                "competition": competition.value,
-                "article_fingerprint": receipt["article_fingerprint"],
-                "cover_fingerprint": receipt["cover_fingerprint"],
-            }
-        ]
-        normalized.append(
-            {
-                "media_id": receipt["media_id"],
-                "created_at": receipt["created_at"],
-                "publication_fingerprint": publication_fingerprint(articles),
-                "articles": articles,
-            }
+    if any(not _valid_receipt(receipt) for receipt in receipts):
+        raise ArtifactValidationError(
+            "draft.json.receipts 字段损坏", stage="draft-validation"
         )
-    return {"schema_version": DRAFT_SCHEMA_VERSION, "receipts": normalized}
+    return payload

@@ -154,7 +154,7 @@ export function BatchDetailPage() {
         </div>
         <div className="admin-settings__grid">
           <Panel>
-            <SectionTitle title="批次信息" description="编辑、责编和审核人员设置。修改后会使当前文章版本过期。" actions={<Users size={20} />} />
+            <SectionTitle title="批次信息" description="编辑、责编和审核人员设置。修改后会使当前渲染记录过期。" actions={<Users size={20} />} />
             <form className="stack" onSubmit={savePersonnel}>
               <Field label="编辑"><NameInput value={editors} onChange={setEditors} /></Field>
               <Field label="责编"><NameInput value={reviewers} onChange={setReviewers} /></Field>

@@ -102,7 +102,7 @@ AUTO_PREVIEW_DIGEST = "马杯前瞻"
 HAIDIAN_ADCODE = "110108"
 COMPETITION_ORDER = {"male": 0, "female": 1, "futsal": 2}
 SHANGHAI = timezone(timedelta(hours=8))
-MATCH_REPORT_TEMPLATE_VERSION = "thufootball-report-canvas-v1"
+MATCH_REPORT_TEMPLATE_VERSION = "v1 initial"
 
 
 class WorkflowError(RuntimeError):

@@ -135,7 +135,7 @@ export function MatchPage() {
         <SectionTitle title="正文与署名" description="一个或多个换行都会分段，段前空格会自动去除。" />
         <div className="writer-grid">
           <Field label="署名" htmlFor="match-writers">{isAdmin ? <NameInput id="match-writers" value={writers} onChange={setWriters} /> : <input id="match-writers" value={writers} readOnly aria-readonly="true" />}</Field>
-          <div className="version-display"><span>保存版本</span><strong>v{version}</strong>{dirty ? <Badge tone="warning">未保存</Badge> : <Badge tone="success">已保存</Badge>}</div>
+          <div className="version-display"><span>保存序号</span><strong>#{version}</strong>{dirty ? <Badge tone="warning">未保存</Badge> : <Badge tone="success">已保存</Badge>}</div>
         </div>
         <Field label="前瞻正文" htmlFor="match-body"><textarea id="match-body" rows={14} value={body} onChange={(event) => setBody(event.target.value)} placeholder="粘贴或填写本场比赛的前瞻正文……" /></Field>
         <div className="editor-actions"><Button disabled={!dirty} onClick={() => { setWriters(namesText(baseWriters)); setBody(baseBody); }}>撤销修改</Button><Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}><Save size={16} />保存正文</Button></div>
@@ -155,8 +155,8 @@ export function MatchPage() {
         <div className="head-to-head-card"><strong>近三届交锋</strong><HistoryList values={match.head_to_head} empty="无" render={(value) => formatPlayedMatch(value as PlayedMatchSnapshot, true)} /></div>
       </Panel>
 
-      {conflict ? <Modal title="正文已被其他请求更新" wide actions={<><Button onClick={loadServer}>加载服务器版本</Button><Button variant="primary" onClick={rebaseLocal}>保留本地内容并人工合并</Button></>}>
-        <Alert tone="warning">服务器版本已经变为 v{conflict.body_version}。系统不会自动覆盖，请比较后明确选择。</Alert>
+      {conflict ? <Modal title="正文已被其他请求更新" wide actions={<><Button onClick={loadServer}>加载服务器内容</Button><Button variant="primary" onClick={rebaseLocal}>保留本地内容并人工合并</Button></>}>
+        <Alert tone="warning">服务器保存序号已经变为 #{conflict.body_version}。系统不会自动覆盖，请比较后明确选择。</Alert>
         <div className="conflict-grid"><div><strong>你的未保存内容</strong><span>署名：{writers || "—"}</span><pre>{body || "（空正文）"}</pre></div><div><strong>服务器当前内容</strong><span>署名：{namesText(conflict.writers) || "—"}</span><pre>{conflict.body || "（空正文）"}</pre></div></div>
       </Modal> : null}
       {blocker.state === "blocked" ? <Modal title="有未保存的正文" actions={<><Button onClick={() => blocker.reset()}>留在此页</Button><Button variant="danger" onClick={() => blocker.proceed()}>放弃修改并离开</Button></>}><p>离开页面会丢失尚未保存的署名或正文。</p></Modal> : null}

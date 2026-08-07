@@ -71,7 +71,7 @@ export function WechatDraftPage() {
           <SectionTitle title="可选文章" description="仅显示每个批次当前且完整的文章。" />
           {!visibleCandidates.length ? <EmptyState title="暂时没有完整文章" description="请先完善批次并渲染文章。" /> : <div className="candidate-list">{visibleCandidates.map(({ batch, article }) => {
             const checked = selected.includes(article.id);
-            return <label className="candidate-card" key={article.id}><input type="checkbox" checked={checked} disabled={!checked && selected.length >= 8} onChange={() => toggle(article.id)} /><div><strong>{article.title}</strong><span>{article.article_type === "preview" ? "前瞻" : "战报"} · {formatDate(batch.batch_date)} · {competitionLabels[batch.competition]} · v{article.version_number}</span></div>{checked ? <Check size={18} /> : null}</label>;
+            return <label className="candidate-card" key={article.id}><input type="checkbox" checked={checked} disabled={!checked && selected.length >= 8} onChange={() => toggle(article.id)} /><div><strong>{article.title}</strong><span>{article.article_type === "preview" ? "前瞻" : "战报"} · {formatDate(batch.batch_date)} · {competitionLabels[batch.competition]} · 记录 #{article.version_number}</span></div>{checked ? <Check size={18} /> : null}</label>;
           })}</div>}
         </Panel>
         <Panel>

@@ -54,7 +54,7 @@ describe("stage 5 task center", () => {
     const open = screen.getByRole("heading", { name: "全部开放任务（1）" });
     expect(mine.compareDocumentPosition(waiting) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(waiting.compareDocumentPosition(open) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-    expect(screen.queryByText(/已编辑正文|未编辑正文|保存版本|最近更新/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/已编辑正文|未编辑正文|保存序号|最近更新/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/认领人：/).length).toBeGreaterThan(0);
   });
 

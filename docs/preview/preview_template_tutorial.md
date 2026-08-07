@@ -45,7 +45,6 @@ preview render templates/qhly_preview_v1/template.html `
   --cover path/to/cover.png `
   --author "清华绿茵" `
   --digest "本期比赛前瞻" `
-  --version qhly-preview-v1 `
   --output tmp/qhly_preview_v1/article
 ```
 
@@ -70,10 +69,7 @@ source = load_preview_bundle(
     "templates/qhly_preview_v1/example_weather.json",
     "templates/qhly_preview_v1/example_config.json",
 )
-service = PreviewService.from_template(
-    "templates/qhly_preview_v1/template.html",
-    version="qhly-preview-v1",
-)
+service = PreviewService.from_template("templates/qhly_preview_v1/template.html")
 article = service.render(
     source,
     cover=CoverFile(Path("path/to/cover.png")),

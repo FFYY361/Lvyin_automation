@@ -285,7 +285,7 @@ def create_app(
 
     app = FastAPI(
         title="清华绿茵内容管理 API",
-        version="0.4.0",
+        version="1.0.0",
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings

@@ -12,12 +12,11 @@ python -m alembic upgrade head
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-迁移 `0003_stage4_collaboration` 给 `users` 增加 `auth_version`，并把角色约束改为
-`user/admin`。它不新增任务表，也不转换已有角色数据。只有确认测试数据库没有普通
-用户数据时才验证回滚：
+当前唯一迁移 `v1_initial` 已包含 `auth_version` 和 `user/admin` 角色约束，不转换
+任何旧数据库。只有确认测试数据库没有需保留的数据时才验证回滚：
 
 ```powershell
-python -m alembic downgrade 0002_admin_backend
+python -m alembic downgrade base
 python -m alembic upgrade head
 ```
 

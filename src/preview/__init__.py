@@ -30,7 +30,12 @@ from .models import (
     validate_preview_source,
 )
 from .service import PreviewService
-from .template import PreviewTemplate, format_result_text, load_preview_template
+from .template import (
+    PREVIEW_TEMPLATE_VERSION,
+    PreviewTemplate,
+    format_result_text,
+    load_preview_template,
+)
 
 __all__ = [
     "PlayedMatch",
@@ -38,6 +43,7 @@ __all__ = [
     "PreviewCredits",
     "PreviewError",
     "PreviewMatch",
+    "PREVIEW_TEMPLATE_VERSION",
     "PreviewService",
     "PreviewSourceDocument",
     "PreviewSourceData",
