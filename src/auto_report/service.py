@@ -64,7 +64,7 @@ from .state import (
 )
 
 ServiceFactory = Callable[[], Any]
-ARTICLE_TEMPLATE_VERSION = "auto-report-html-v1"
+ARTICLE_TEMPLATE_VERSION = "v1 initial"
 ARTICLE_AUTHOR = "清华绿茵"
 ARTICLE_DIGEST = "马杯战报"
 DEFAULT_REPORT_COVER_MEDIA_ID = (

@@ -372,7 +372,6 @@ class TemplateTests(unittest.TestCase):
               <!-- wx:each source.matches as match --><span>{{match.home.team_id}}</span><!-- wx:endeach -->
             </section>
             """,
-            version="test-preview-v1",
         )
         rendered = _render(template, source)
 
@@ -572,7 +571,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertGreater(template_source.count("\n"), 100)
         self.assertNotIn("schedule_rows", source_text)
         self.assertNotIn("_html", source_text)
-        PreviewTemplate.compile(template_source, version="qhly-preview-v1")
+        compiled = PreviewTemplate.compile(template_source)
+        self.assertEqual(compiled.version, "v1 initial")
+        self.assertEqual(len(compiled.fingerprint), 64)
         rendered = self.rendered
 
         self.assertEqual(rendered.title, "【马杯男足周日前瞻】|| 测试")

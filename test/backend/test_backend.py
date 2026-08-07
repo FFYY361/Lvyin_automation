@@ -466,6 +466,7 @@ def test_incomplete_render_uses_placeholder_and_reuses_current_article(
         assert first.cover_sha256 == hashlib.sha256(
             b"website-default-cover"
         ).hexdigest()
+        assert first.template_version == "v1 initial"
         assert "待补充比赛与前瞻内容" in first.body_html
         second, reused = render_batch(session, settings, batch)
         assert reused is True

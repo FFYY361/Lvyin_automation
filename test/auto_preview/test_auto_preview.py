@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
@@ -39,7 +38,7 @@ from auto_preview.config import competition_config
 from auto_preview.diagnostics import failure_lines
 from auto_preview.logging_utils import configure_logging
 from auto_preview.source import PreviewSourceBuilder, preview_data_to_dict
-from auto_preview.state import sha256_file
+from auto_preview.state import sha256_bytes
 from preview import PreviewValidationError, SeasonOutcome
 from preview.template import _head_to_head_line
 from thufootball import (
@@ -59,7 +58,7 @@ from thufootball import (
     PermissionError as THUFootballPermissionError,
 )
 from weather import DailyWeather, WeatherNetworkError
-from wechat_official import Article, CoverFile, CoverMediaId, DraftReceipt
+from wechat_official import Article, CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
 
@@ -713,28 +712,31 @@ class CliTests(unittest.TestCase):
         )
 
 
-class DefaultCoverAssetTests(unittest.TestCase):
-    def test_default_cover_is_expected_png_size_and_under_upload_limit(self) -> None:
-        path = _PROJECT_ROOT / "src" / "auto_preview" / "assets" / "default_cover.png"
-        content = path.read_bytes()
-        self.assertEqual(content[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(struct.unpack(">II", content[16:24]), (1536, 1024))
-        self.assertLess(len(content), 10 * 1024 * 1024)
-
-    def test_default_cover_prefers_configured_media_id_and_keeps_file_fallback(
-        self,
-    ) -> None:
-        with patch.dict(
-            os.environ,
-            {"WEBSITE_DEFAULT_COVER_MEDIA_ID": "permanent-cover"},
-        ):
-            configured = default_cover()
+class DefaultCoverTests(unittest.TestCase):
+    def test_default_cover_requires_configured_media_id(self) -> None:
+        configured = default_cover(
+            environment={"WEBSITE_DEFAULT_COVER_MEDIA_ID": "permanent-cover"}
+        )
         self.assertEqual(configured, CoverMediaId("permanent-cover"))
 
-        with patch.dict(os.environ, {}, clear=True):
-            fallback = default_cover()
-        self.assertIsInstance(fallback, CoverFile)
-        self.assertEqual(fallback.path.name, "default_cover.png")
+        with self.assertRaises(PipelineError) as caught:
+            default_cover(environment={})
+        self.assertEqual(caught.exception.stage, "article")
+        self.assertIn("WEBSITE_DEFAULT_COVER_MEDIA_ID", str(caught.exception))
+
+    def test_default_cover_reads_project_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                'WEBSITE_DEFAULT_COVER_MEDIA_ID="dotenv-cover"\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("auto_preview.cover._DEFAULT_ENV_FILE", env_path),
+            ):
+                configured = default_cover()
+        self.assertEqual(configured, CoverMediaId("dotenv-cover"))
 
 
 class LoggingTests(unittest.TestCase):
@@ -900,6 +902,14 @@ class _FakeWeather:
 
 
 class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._default_cover_environment = patch.dict(
+            os.environ,
+            {"WEBSITE_DEFAULT_COVER_MEDIA_ID": "default-preview-cover"},
+        )
+        self._default_cover_environment.start()
+        self.addCleanup(self._default_cover_environment.stop)
+
     def _root(self, directory: str, *, with_global_inputs: bool = True) -> Path:
         root = Path(directory)
         template_directory = root / "templates" / "qhly_preview_v1"
@@ -1173,8 +1183,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             first = await runner.run(request)
             self.assertEqual(first.draft_media_id, "draft-1")
             article = Article.load(first.article_directory)
-            self.assertIsInstance(article.cover, CoverFile)
-            self.assertEqual(article.cover.path.name, "cover.png")
+            self.assertEqual(article.cover, CoverMediaId("default-preview-cover"))
             self.assertEqual(article.digest, "马杯前瞻")
 
             reused = await runner.run(
@@ -1209,7 +1218,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 (second.run_directory / "draft.json").read_text(encoding="utf-8")
             )
             self.assertEqual(len(history["receipts"]), 3)
-            self.assertEqual(history["schema_version"], 2)
+            self.assertEqual(history["schema_version"], 1)
             self.assertEqual(len(history["receipts"][-1]["articles"]), 1)
 
     async def test_configured_default_cover_uses_existing_media_id(self) -> None:
@@ -1442,7 +1451,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             state = json.loads(
                 (changed.runs[0].run_directory / "run.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(state["schema_version"], 3)
+            self.assertEqual(state["schema_version"], 1)
             self.assertEqual(state["source"]["status"], "no_games")
             self.assertEqual(state["source"]["preview_date"], "2026-04-11")
             self.assertEqual(state["source"]["competition"], "female")
@@ -1537,72 +1546,6 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(queries.game_queries), 3)
             self.assertEqual(wechat.articles, [])
 
-    async def test_legacy_run_and_single_draft_schemas_are_upgraded(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = self._root(directory)
-            queries = _BatchQueries()
-            wechat = _FakeWechat()
-            runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
-            request = PipelineRequest(
-                (date(2026, 4, 11),),
-                (Competition.FEMALE,),
-                stage=Stage.PUBLISH,
-            )
-            created = await runner.run(request)
-            run = created.runs[0]
-            state_path = run.run_directory / "run.json"
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            state["schema_version"] = 2
-            state["source"] = {
-                "selected_games": state["source"]["selected_games"],
-                "accepted_placeholder_sha256": state["source"][
-                    "accepted_placeholder_sha256"
-                ],
-            }
-            state_path.write_text(
-                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-
-            draft_path = run.run_directory / "draft.json"
-            draft = json.loads(draft_path.read_text(encoding="utf-8"))
-            receipt = draft["receipts"][-1]
-            component = receipt["articles"][0]
-            draft_path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "receipts": [
-                            {
-                                "media_id": receipt["media_id"],
-                                "created_at": receipt["created_at"],
-                                "article_fingerprint": component["article_fingerprint"],
-                                "cover_fingerprint": component["cover_fingerprint"],
-                            }
-                        ],
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            reused = await runner.run(request)
-
-            self.assertEqual(reused.draft_media_id, created.draft_media_id)
-            self.assertEqual(len(queries.game_queries), 1)
-            self.assertEqual(len(wechat.articles), 1)
-            upgraded_state = json.loads(state_path.read_text(encoding="utf-8"))
-            upgraded_draft = json.loads(draft_path.read_text(encoding="utf-8"))
-            self.assertEqual(upgraded_state["schema_version"], 3)
-            self.assertEqual(upgraded_state["source"]["status"], "ready")
-            self.assertEqual(upgraded_draft["schema_version"], 2)
-            self.assertEqual(
-                upgraded_draft["receipts"][0]["articles"][0]["competition"],
-                "female",
-            )
-
     async def test_placeholders_warn_and_continue_without_querying_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._root(directory)
@@ -1675,10 +1618,13 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
                 article.content_fingerprint, before_article.content_fingerprint
             )
             self.assertEqual(len(state["article"]["input_sha256"]), 64)
+            self.assertEqual(state["article"]["template_version"], "v1 initial")
+            self.assertEqual(len(state["article"]["template_fingerprint"]), 64)
             self.assertNotIn("source_sha256", state["article"])
+            self.assertIsInstance(article.cover, CoverMediaId)
             self.assertEqual(
                 state["article"]["cover"]["sha256"],
-                sha256_file(article.cover.path),
+                sha256_bytes(article.cover.media_id.encode("utf-8")),
             )
             self.assertEqual(len(queries.game_queries), 1)
             self.assertTrue(
@@ -2546,7 +2492,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             created = await runner.run(request)
             state_path = created.run_directory / "run.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
-            state["schema_version"] = 1
+            state["schema_version"] = 2
             state_path.write_text(
                 json.dumps(state, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",

@@ -33,10 +33,10 @@ docker compose up -d
 python -m alembic upgrade head
 ```
 
-迁移回滚验证只在确认没有需保留的 Stage 2 数据时执行：
+当前只有 `v1_initial`。回滚验证只在确认数据库没有需保留的数据时执行：
 
 ```powershell
-python -m alembic downgrade 0001_initial
+python -m alembic downgrade base
 python -m alembic upgrade head
 ```
 

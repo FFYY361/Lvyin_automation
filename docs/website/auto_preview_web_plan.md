@@ -91,9 +91,9 @@
 缺项，可以直接创建微信草稿，也不做远程预校验。
 
 这是对现有 Auto Preview 业务逻辑的修改：`AutoPreviewPipeline` 未显式指定封面
-且没有可复用旧封面时，优先把该配置解析成 `CoverMediaId`，避免把默认图片重复
-上传到微信；CLI 缺少配置时仍回退到原 `default_cover.png`。除这个小型解析函数
-外，不改变 CLI、`runs/` 状态机、日志、文件结构或公开返回值。
+且没有可复用旧封面时，把该配置解析成 `CoverMediaId`，避免把默认图片重复上传
+到微信；CLI 使用相同配置，缺少配置时不再回退到本地默认图片。除这个小型解析
+函数外，不改变 CLI、`runs/` 状态机、日志、文件结构或公开返回值。
 
 网站依赖方向固定为 `backend → src`。直接复用 `Competition`、赛事排序、
 `PreviewSourceBuilder`、天气 Service、`PreviewSourceData`、正文分段、

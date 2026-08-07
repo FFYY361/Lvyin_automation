@@ -23,6 +23,7 @@ from .models import (
 )
 
 _PATH = r"[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*"
+PREVIEW_TEMPLATE_VERSION = "v1 initial"
 _TOKEN = re.compile(
     rf"<!--\s*wx:(?:(?P<each>each)\s+(?P<each_path>{_PATH})\s+as\s+"
     rf"(?P<alias>[a-zA-Z_][\w]*)|(?P<empty>empty)|(?P<end>endeach))\s*-->"
@@ -445,27 +446,21 @@ def _render_nodes(
 class PreviewTemplate:
     """A compiled HTML template that accepts only typed preview source data."""
 
-    def __init__(self, *, nodes: tuple[_Node, ...], source: str, version: str) -> None:
+    def __init__(self, *, nodes: tuple[_Node, ...], source: str) -> None:
         self._nodes = nodes
         self.source = source
-        self.version = version
+        self.version = PREVIEW_TEMPLATE_VERSION
+        self.fingerprint = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
     @classmethod
-    def compile(
-        cls, body_template: str, *, version: str | None = None
-    ) -> "PreviewTemplate":
+    def compile(cls, body_template: str) -> "PreviewTemplate":
         if not isinstance(body_template, str) or not body_template.strip():
             raise TemplateContractError(
                 "body template must be a non-empty string",
                 stage="template-compile",
             )
         nodes = _Parser(body_template).parse()
-        if version is None:
-            version = (
-                "sha256:"
-                + hashlib.sha256(body_template.encode("utf-8")).hexdigest()[:16]
-            )
-        return cls(nodes=nodes, source=body_template, version=version)
+        return cls(nodes=nodes, source=body_template)
 
     def render_body(
         self,
@@ -494,12 +489,5 @@ class PreviewTemplate:
         return title, normalised_body
 
 
-def load_preview_template(
-    path: str | Path,
-    *,
-    version: str | None = None,
-) -> PreviewTemplate:
-    return PreviewTemplate.compile(
-        Path(path).read_text(encoding="utf-8"),
-        version=version,
-    )
+def load_preview_template(path: str | Path) -> PreviewTemplate:
+    return PreviewTemplate.compile(Path(path).read_text(encoding="utf-8"))
