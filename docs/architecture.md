@@ -1,4 +1,4 @@
-# thufootball_automation 项目架构
+# 绿茵宣传部项目架构
 
 ## 当前边界
 

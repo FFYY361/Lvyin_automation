@@ -17,7 +17,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import CHAR, create_engine, delete, inspect, text
+from sqlalchemy import CHAR, create_engine, delete, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -167,6 +167,9 @@ def settings(tmp_path: Path) -> WebsiteSettings:
         cookie_name="test_session",
         cookie_secret="test-cookie-secret-that-is-long-enough",
         cookie_secure=False,
+        invite_code="test-invite-code",
+        allowed_hosts=("testserver", "localhost", "127.0.0.1"),
+        docs_enabled=True,
     )
 
 
@@ -322,8 +325,20 @@ class _FakeWebsiteReports:
 def test_required_default_cover_and_username_contract(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("WEBSITE_DATABASE_URL", "postgresql+psycopg://example")
     monkeypatch.setenv("WEBSITE_COOKIE_SECRET", "x" * 32)
+    monkeypatch.setenv("WEBSITE_INVITE_CODE", "test-invite-code")
     monkeypatch.delenv("WEBSITE_DEFAULT_COVER_MEDIA_ID", raising=False)
     with pytest.raises(RuntimeError, match="WEBSITE_DEFAULT_COVER_MEDIA_ID"):
+        WebsiteSettings.from_environment(env_path=tmp_path / "missing.env")
+
+
+@pytest.mark.parametrize("invite_code", ["short", "x" * 129])
+def test_invite_code_environment_contract(monkeypatch, tmp_path: Path, invite_code: str) -> None:
+    monkeypatch.setenv("WEBSITE_DATABASE_URL", "postgresql+psycopg://example")
+    monkeypatch.setenv("WEBSITE_COOKIE_SECRET", "x" * 32)
+    monkeypatch.setenv("WEBSITE_DEFAULT_COVER_MEDIA_ID", "cover")
+    monkeypatch.setenv("WEBSITE_INVITE_CODE", invite_code)
+
+    with pytest.raises(RuntimeError, match="WEBSITE_INVITE_CODE"):
         WebsiteSettings.from_environment(env_path=tmp_path / "missing.env")
 
 
@@ -1575,6 +1590,7 @@ def test_stage4_registration_profile_user_queries_and_session_invalidation(
                 "username": "Stage4User",
                 "display_name": "普通用户",
                 "password": "user-password",
+                "invite_code": settings.invite_code,
             },
         )
         assert registered.status_code == 201
@@ -1626,6 +1642,126 @@ def test_stage4_registration_profile_user_queries_and_session_invalidation(
         )
         assert reset.status_code == 204
         assert user_client.get("/api/auth/me").status_code == 401
+
+
+def test_registration_requires_valid_invite_before_hashing_or_writing(
+    session_factory,
+    settings: WebsiteSettings,
+    monkeypatch,
+) -> None:
+    def unexpected_hash(_: str) -> str:
+        raise AssertionError("an invalid invite must not trigger password hashing")
+
+    monkeypatch.setattr(backend_api, "hash_password", unexpected_hash)
+    app = create_app(settings=settings, session_factory=session_factory)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "username": "InviteRejected",
+                "display_name": "Invite Rejected",
+                "password": "user-password",
+                "invite_code": "wrong-invite-code",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "invalid_invite_code"
+    with session_factory() as session:
+        registered_count = session.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.username == "InviteRejected")
+        )
+        assert registered_count == 0
+
+
+def test_registration_invite_contract_rejects_missing_and_trimmed_short_code(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    app = create_app(settings=settings, session_factory=session_factory)
+    base_payload = {
+        "username": "InviteContract",
+        "display_name": "Invite Contract",
+        "password": "user-password",
+    }
+    with TestClient(app) as client:
+        missing = client.post("/api/auth/register", json=base_payload)
+        too_short = client.post(
+            "/api/auth/register",
+            json={**base_payload, "invite_code": "   short   "},
+        )
+
+    assert missing.status_code == 422
+    assert too_short.status_code == 422
+
+
+def test_health_checks_database_and_artifact_root(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    app = create_app(settings=settings, session_factory=session_factory)
+    with TestClient(app) as client:
+        healthy = client.get("/api/health")
+        settings.artifact_root.rmdir()
+        settings.artifact_root.write_text("not a directory", encoding="utf-8")
+        unavailable = client.get("/api/health")
+
+    assert healthy.status_code == 200
+    assert healthy.json() == {"status": "ok"}
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"status": "unavailable"}
+
+
+def test_health_hides_database_errors(settings: WebsiteSettings) -> None:
+    class BrokenSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def execute(self, _statement) -> None:
+            raise RuntimeError("secret database location")
+
+    app = create_app(
+        settings=settings,
+        session_factory=lambda: BrokenSession(),  # type: ignore[arg-type]
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "unavailable"}
+    assert "secret" not in response.text
+
+
+def test_trusted_host_and_disabled_docs(
+    session_factory,
+    settings: WebsiteSettings,
+    tmp_path: Path,
+) -> None:
+    production = replace(
+        settings,
+        allowed_hosts=("media.thufootball.tech", "127.0.0.1", "localhost"),
+        docs_enabled=False,
+    )
+    app = create_app(
+        settings=production,
+        session_factory=session_factory,
+        frontend_dist=tmp_path / "missing-dist",
+    )
+    with TestClient(app) as client:
+        rejected = client.get("/api/health")
+        accepted = client.get(
+            "/api/health", headers={"host": "media.thufootball.tech"}
+        )
+        docs = client.get("/docs", headers={"host": "media.thufootball.tech"})
+
+    assert rejected.status_code == 400
+    assert accepted.status_code == 200
+    assert docs.status_code == 404
 
 
 def test_stage4_task_claim_content_release_assign_and_read_permissions(

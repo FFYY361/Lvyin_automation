@@ -56,6 +56,9 @@ class WebsiteSettings:
     cookie_name: str
     cookie_secret: str
     cookie_secure: bool
+    invite_code: str
+    allowed_hosts: tuple[str, ...]
+    docs_enabled: bool
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     log_level: str = "INFO"
@@ -73,6 +76,18 @@ class WebsiteSettings:
         secret = _required("WEBSITE_COOKIE_SECRET")
         if len(secret) < 32:
             raise RuntimeError("WEBSITE_COOKIE_SECRET must contain at least 32 characters")
+        invite_code = _required("WEBSITE_INVITE_CODE")
+        if not 8 <= len(invite_code) <= 128:
+            raise RuntimeError("WEBSITE_INVITE_CODE must contain 8-128 characters")
+        allowed_hosts = tuple(
+            host.strip()
+            for host in os.environ.get(
+                "WEBSITE_ALLOWED_HOSTS", "127.0.0.1,localhost"
+            ).split(",")
+            if host.strip()
+        )
+        if not allowed_hosts:
+            raise RuntimeError("WEBSITE_ALLOWED_HOSTS must contain at least one host")
         try:
             port = int(os.environ.get("WEBSITE_API_PORT", "8000"))
         except ValueError as exc:
@@ -85,6 +100,9 @@ class WebsiteSettings:
             or "lvyin_session",
             cookie_secret=secret,
             cookie_secure=_boolean("WEBSITE_COOKIE_SECURE", False),
+            invite_code=invite_code,
+            allowed_hosts=allowed_hosts,
+            docs_enabled=_boolean("WEBSITE_DOCS_ENABLED", True),
             api_host=os.environ.get("WEBSITE_API_HOST", "127.0.0.1").strip()
             or "127.0.0.1",
             api_port=port,

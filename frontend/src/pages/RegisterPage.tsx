@@ -11,6 +11,7 @@ export function RegisterPage() {
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -27,7 +28,7 @@ export function RegisterPage() {
     }
     setSubmitting(true); setError(null);
     try {
-      await register(username, displayName, password);
+      await register(username, displayName, password, inviteCode);
       navigate("/tasks", { replace: true });
     } catch (value) {
       setError(errorMessage(value));
@@ -49,6 +50,7 @@ export function RegisterPage() {
           <Field label="展示名称" hint="前瞻推送中你的署名，请填写真实姓名"><input autoComplete="name" maxLength={100} value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></Field>
           <Field label="密码" hint="至少 8 个字符。"><input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></Field>
           <Field label="确认密码"><input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required /></Field>
+          <Field label="邀请码" hint="请向宣传部负责人获取。"><input type="password" autoComplete="off" minLength={8} maxLength={128} value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} required /></Field>
           <Button variant="primary" loading={submitting} type="submit" className="button--full">注册并登录</Button>
         </form>
         <p className="auth-switch">已有账号？<Link to="/login">返回登录</Link></p>
