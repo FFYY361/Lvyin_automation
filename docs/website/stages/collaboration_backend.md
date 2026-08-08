@@ -22,14 +22,15 @@ python -m alembic upgrade head
 
 ## 2. 账号和会话
 
-公开注册会创建并自动登录普通用户：
+使用共享邀请码注册会创建并自动登录普通用户：
 
 ```json
 POST /api/auth/register
 {
   "username": "member1",
   "display_name": "用户甲",
-  "password": "至少八个字符"
+  "password": "至少八个字符",
+  "invite_code": "由管理员提供的邀请码"
 }
 ```
 

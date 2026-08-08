@@ -64,9 +64,15 @@ class RegisterRequest(BaseModel):
     username: str
     display_name: str
     password: str = Field(min_length=8, max_length=128)
+    invite_code: str = Field(min_length=8, max_length=128)
 
     _username = field_validator("username")(validate_username)
     _display_name = field_validator("display_name")(validate_display_name)
+
+    @field_validator("invite_code", mode="before")
+    @classmethod
+    def normalize_invite_code(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class UpdateSelfRequest(BaseModel):

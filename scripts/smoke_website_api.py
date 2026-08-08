@@ -160,6 +160,7 @@ def main() -> int:
                         "username": "smoke-user",
                         "display_name": "Smoke User",
                         "password": "smoke-user-password",
+                        "invite_code": settings.invite_code,
                     },
                 )
                 registered.raise_for_status()

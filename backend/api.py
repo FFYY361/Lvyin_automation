@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -15,10 +16,11 @@ from typing import Any
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from thufootball import (
     AuthenticationError,
@@ -287,12 +289,19 @@ def create_app(
         title="清华绿茵内容管理 API",
         version="1.0.0",
         lifespan=lifespan,
+        docs_url="/docs" if resolved_settings.docs_enabled else None,
+        redoc_url="/redoc" if resolved_settings.docs_enabled else None,
+        openapi_url="/openapi.json" if resolved_settings.docs_enabled else None,
     )
     app.state.settings = resolved_settings
     app.state.session_factory = session_factory
     app.state.external_factories = resolved_factories
     app.state.thufootball_lock = thufootball_lock
     app.state.automatic_credentials = automatic_credentials
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=list(resolved_settings.allowed_hosts),
+    )
     app.add_middleware(
         SessionMiddleware,
         secret_key=resolved_settings.cookie_secret,
@@ -331,12 +340,32 @@ def create_app(
         _set_login_session(request, user)
         return _user_payload(user)
 
+    @app.get("/api/health")
+    def health(session: Session = Depends(get_session)) -> JSONResponse:
+        try:
+            session.execute(text("SELECT 1"))
+            artifact_root = resolved_settings.artifact_root
+            if not (
+                artifact_root.is_dir()
+                and os.access(artifact_root, os.R_OK | os.W_OK)
+            ):
+                raise OSError("artifact root is unavailable")
+        except Exception:
+            logger.exception("Website health check failed")
+            return JSONResponse(status_code=503, content={"status": "unavailable"})
+        return JSONResponse(content={"status": "ok"})
+
     @app.post("/api/auth/register", status_code=201)
     def register(
         payload: RegisterRequest,
         request: Request,
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
+        if not secrets.compare_digest(
+            payload.invite_code,
+            resolved_settings.invite_code,
+        ):
+            raise WorkflowError(403, "invalid_invite_code", "invalid invite code")
         user = User(
             username=payload.username,
             display_name=payload.display_name,
