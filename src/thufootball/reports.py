@@ -1218,8 +1218,9 @@ def _render_html_to_png(
                 "--hide-scrollbars",
                 "--no-first-run",
                 "--disable-extensions",
+                "--disable-dev-shm-usage",
                 f"--user-data-dir={profile_path}",
-                "--virtual-time-budget=10000",
+                "--virtual-time-budget=30000",
                 "--dump-dom",
                 html_path.resolve().as_uri(),
             ]
@@ -1230,7 +1231,7 @@ def _render_html_to_png(
                 command,
                 check=False,
                 capture_output=True,
-                timeout=45,
+                timeout=60,
                 **run_options,
             )
     except subprocess.TimeoutExpired as exc:
