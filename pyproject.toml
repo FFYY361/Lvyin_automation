@@ -39,7 +39,11 @@ weather = "weather.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-thufootball = ["assets/*.js"]
+thufootball = [
+  "assets/*.js",
+  "notes/*.json",
+  "notes/ranks/*.json",
+]
 
 [tool.ruff]
 target-version = "py311"
