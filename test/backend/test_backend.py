@@ -847,6 +847,12 @@ def test_stage6_single_and_batch_report_rendering(
         assert [
             item["article"]["id"] for item in candidates.json()["items"]
         ] == [article.json()["article"]["id"]]
+        assert set(candidates.json()["items"][0]["article"]) == {
+            "id",
+            "article_type",
+            "version_number",
+            "title",
+        }
 
         warning = GameEventIssue(
             severity="warning",
