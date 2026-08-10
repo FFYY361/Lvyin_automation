@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Check, GripVertical } from "lucide-react";
 import { api, errorMessage, jsonBody } from "../api";
 import { Alert, Badge, Button, EmptyState, LoadingScreen, Modal, PageHeader, Panel, SectionTitle } from "../components";
-import { competitionLabels, type Article, type Competition, type DraftResponse, type WechatDraft } from "../types";
+import { competitionLabels, type ArticleCandidate, type Competition, type DraftResponse, type WechatDraft } from "../types";
 import { formatDate, formatDateTime, moveItem } from "../utils";
 
-interface Candidate { batch: { id: number; batch_date: string; competition: Competition }; article: Article }
+interface Candidate { batch: { id: number; batch_date: string; competition: Competition }; article: ArticleCandidate }
 
 export function WechatDraftPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);

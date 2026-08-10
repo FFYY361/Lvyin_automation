@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import case, func, select, text, update
+from sqlalchemy import and_, case, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
@@ -1178,34 +1178,55 @@ def create_app(
                 "invalid_article_type",
                 "article_type must be all, preview or report",
             )
-        rows: list[tuple[ArticleRecord, Batch]] = []
-        for batch in session.scalars(
-            select(Batch).order_by(
-                Batch.batch_date.desc(), Batch.id.desc()
+        current_article_conditions = []
+        if article_type in {"all", "preview"}:
+            current_article_conditions.append(
+                and_(
+                    ArticleRecord.id == Batch.current_preview_article_id,
+                    ArticleRecord.article_type == "preview",
+                )
             )
-        ):
-            pointers = []
-            if article_type in {"all", "preview"}:
-                pointers.append(batch.current_preview_article_id)
-            if article_type in {"all", "report"}:
-                pointers.append(batch.current_report_article_id)
-            for article_id in pointers:
-                if article_id is None:
-                    continue
-                record = session.get(ArticleRecord, article_id)
-                if record is not None and record.is_complete:
-                    rows.append((record, batch))
+        if article_type in {"all", "report"}:
+            current_article_conditions.append(
+                and_(
+                    ArticleRecord.id == Batch.current_report_article_id,
+                    ArticleRecord.article_type == "report",
+                )
+            )
+        rows = session.execute(
+            select(
+                Batch.id.label("batch_id"),
+                Batch.batch_date,
+                Batch.competition,
+                ArticleRecord.id.label("article_id"),
+                ArticleRecord.article_type,
+                ArticleRecord.version_number,
+                ArticleRecord.title,
+            )
+            .join(ArticleRecord, or_(*current_article_conditions))
+            .where(ArticleRecord.is_complete.is_(True))
+            .order_by(
+                Batch.batch_date.desc(),
+                Batch.id.desc(),
+                ArticleRecord.article_type,
+            )
+        ).mappings()
         return {
             "items": [
                 {
                     "batch": {
-                        "id": batch.id,
-                        "batch_date": batch.batch_date.isoformat(),
-                        "competition": batch.competition,
+                        "id": row["batch_id"],
+                        "batch_date": row["batch_date"].isoformat(),
+                        "competition": row["competition"],
                     },
-                    "article": article_payload(record, record.id),
+                    "article": {
+                        "id": row["article_id"],
+                        "article_type": row["article_type"],
+                        "version_number": row["version_number"],
+                        "title": row["title"],
+                    },
                 }
-                for record, batch in rows
+                for row in rows
             ]
         }
 

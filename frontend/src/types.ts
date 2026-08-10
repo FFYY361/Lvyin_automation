@@ -181,6 +181,13 @@ export interface Article {
   is_current: boolean | null;
 }
 
+export interface ArticleCandidate {
+  id: number;
+  article_type: "preview" | "report";
+  version_number: number;
+  title: string;
+}
+
 export interface CreateBatchResult {
   date: string;
   competition: Competition;
