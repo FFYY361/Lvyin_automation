@@ -206,6 +206,29 @@ def _deactivate_active_matches(session: Session, batch: Batch) -> bool:
     return True
 
 
+def close_batch_tasks(session: Session, batch_ids: list[int]) -> list[int]:
+    """Close every active task in the supplied batches without clearing its work."""
+    resolved_ids = list(dict.fromkeys(batch_ids))
+    if not resolved_ids:
+        return []
+    matches = list(
+        session.scalars(
+            select(Match)
+            .where(
+                Match.batch_id.in_(resolved_ids),
+                Match.active.is_(True),
+            )
+            .order_by(Match.kickoff, Match.game_id)
+        )
+    )
+    changed_at = _now()
+    for match in matches:
+        if match.task_open:
+            match.task_open = False
+            match.updated_at = changed_at
+    return [match.game_id for match in matches]
+
+
 def _weather_values(value: DailyWeather) -> dict[str, Any]:
     return {
         "adcode": value.adcode,
@@ -1259,6 +1282,13 @@ async def create_wechat_draft(
                 details={"missing_fields": record.missing_fields},
             )
         records.append(record)
+    preview_batch_ids = list(
+        dict.fromkeys(
+            record.batch_id
+            for record in records
+            if record.article_type == "preview"
+        )
+    )
     components = [
         {
             "article_id": record.id,
@@ -1275,6 +1305,8 @@ async def create_wechat_draft(
         )
     )
     if existing is not None:
+        if confirm:
+            close_batch_tasks(session, preview_batch_ids)
         return {"status": "reused", "draft": draft_payload(existing)}
     if not confirm:
         return {
@@ -1296,6 +1328,7 @@ async def create_wechat_draft(
     )
     session.add(draft)
     session.flush()
+    close_batch_tasks(session, preview_batch_ids)
     return {"status": "created", "draft": draft_payload(draft)}
 
 

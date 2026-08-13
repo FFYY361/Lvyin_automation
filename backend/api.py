@@ -80,6 +80,7 @@ from .workflow import (
     WorkflowError,
     article_payload,
     batch_payload,
+    close_batch_tasks,
     create_batches,
     create_wechat_draft,
     draft_payload,
@@ -755,18 +756,9 @@ def create_app(
     ) -> dict[str, Any]:
         if session.get(Batch, batch_id) is None:
             raise _not_found("batch")
-        matches = list(
-            session.scalars(
-                select(Match).where(
-                    Match.batch_id == batch_id,
-                    Match.active.is_(True),
-                )
-            )
-        )
-        for match in matches:
-            match.task_open = False
+        game_ids = close_batch_tasks(session, [batch_id])
         session.commit()
-        return {"game_ids": [match.game_id for match in matches], "task_open": False}
+        return {"game_ids": game_ids, "task_open": False}
 
     @app.get("/api/matches")
     def list_open_matches(
