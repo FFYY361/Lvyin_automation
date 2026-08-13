@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { CalendarPlus, ClipboardList, FileText, Layers3, LogOut, Menu, Settings, UserCog, UserRound, X } from "lucide-react";
+import { BookOpen, CalendarPlus, ClipboardList, FileText, Layers3, LogOut, Menu, Settings, UserCog, UserRound, X } from "lucide-react";
 import { Navigate, NavLink, Outlet, createHashRouter, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
 import { Button, LoadingScreen, cx } from "./components";
@@ -15,6 +15,7 @@ import { ReportMatchPage } from "./pages/ReportMatchPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TasksPage } from "./pages/TasksPage";
+import { TutorialPage } from "./pages/TutorialPage";
 import { UsersPage } from "./pages/UsersPage";
 import { WechatDraftPage } from "./pages/WechatDraftPage";
 
@@ -24,6 +25,7 @@ const adminNavigation = [
   { to: "/create", label: "创建批次", icon: CalendarPlus },
   { to: "/tasks", label: "任务中心", icon: ClipboardList },
   { to: "/wechat-drafts", label: "微信草稿", icon: FileText },
+  { to: "/tutorial", label: "使用教程", icon: BookOpen },
   { to: "/users", label: "用户管理", icon: UserCog },
   { to: "/settings", label: "系统设置", icon: Settings },
 ];
@@ -31,6 +33,7 @@ const userNavigation = [
   { to: "/tasks", label: "任务中心", icon: ClipboardList },
   { to: "/previews", label: "前瞻批次", icon: Layers3 },
   { to: "/reports", label: "战报批次", icon: FileText },
+  { to: "/tutorial", label: "使用教程", icon: BookOpen },
   { to: "/account", label: "个人设置", icon: UserRound },
 ];
 
@@ -76,6 +79,7 @@ export const router = createHashRouter([
       { index: true, element: <RoleHome /> },
       { path: "tasks", element: <TasksPage /> },
       { path: "account", element: <AccountPage /> },
+      { path: "tutorial", element: <TutorialPage /> },
       { path: "previews", element: <BatchesPage /> },
       { path: "previews/:batchId", element: <BatchDetailPage /> },
       { path: "previews/:batchId/matches/:gameId", element: <MatchPage /> },

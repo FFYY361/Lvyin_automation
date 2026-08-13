@@ -509,6 +509,11 @@ class _FakeWechat:
         )
 
 
+class _FailingWechat(_FakeWechat):
+    async def create_draft(self, articles):
+        raise RuntimeError("wechat unavailable")
+
+
 def test_default_media_id_draft_is_ordered_and_idempotent(
     session_factory,
     settings: WebsiteSettings,
@@ -524,6 +529,17 @@ def test_default_media_id_draft_is_ordered_and_idempotent(
             complete=True,
             game_id=9102,
         )
+        untouched_batch = _batch(
+            session,
+            target_date=date(2026, 8, 10),
+            competition="male",
+            complete=True,
+            game_id=9103,
+        )
+        for game_id in (9101, 9102, 9103):
+            match = session.get(Match, game_id)
+            assert match is not None
+            match.task_open = True
         first, _ = render_batch(session, settings, first_batch)
         second, _ = render_batch(session, settings, second_batch)
         preview = asyncio.run(
@@ -537,6 +553,8 @@ def test_default_media_id_draft_is_ordered_and_idempotent(
         )
         assert preview["status"] == "ready"
         assert fake.calls == []
+        assert session.get(Match, 9101).task_open is True
+        assert session.get(Match, 9102).task_open is True
         created = asyncio.run(
             create_wechat_draft(
                 session,
@@ -555,6 +573,25 @@ def test_default_media_id_draft_is_ordered_and_idempotent(
             article.cover == CoverMediaId("website-default-cover")
             for article in fake.calls[0]
         )
+        assert session.get(Match, 9101).task_open is False
+        assert session.get(Match, 9102).task_open is False
+        assert session.get(Match, 9103).task_open is True
+        assert session.get(Match, 9101).writers == ["作者"]
+        assert session.get(Match, 9101).body == "第一段。\n\n第二段。"
+        session.get(Match, 9101).task_open = True
+        session.get(Match, 9102).task_open = True
+        reused_preview = asyncio.run(
+            create_wechat_draft(
+                session,
+                settings,
+                factories,
+                [second.id, first.id],
+                confirm=False,
+            )
+        )
+        assert reused_preview["status"] == "reused"
+        assert session.get(Match, 9101).task_open is True
+        assert session.get(Match, 9102).task_open is True
         reused = asyncio.run(
             create_wechat_draft(
                 session,
@@ -565,9 +602,73 @@ def test_default_media_id_draft_is_ordered_and_idempotent(
             )
         )
         assert reused["status"] == "reused"
+        assert session.get(Match, 9101).task_open is False
+        assert session.get(Match, 9102).task_open is False
         assert len(fake.calls) == 1
         assert session.query(WechatDraft).count() == 1
         assert batch_status(session, first_batch) == "drafted"
+        assert untouched_batch.current_preview_article_id is None
+
+
+def test_wechat_draft_closes_preview_batches_only(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    fake = _FakeWechat()
+    factories = ExternalFactories(wechat=lambda: fake)
+    with session_factory.begin() as session:
+        preview_batch = _batch(session, complete=True, game_id=9111)
+        report_batch = _batch(
+            session,
+            target_date=date(2026, 8, 9),
+            competition="male",
+            complete=True,
+            game_id=9112,
+        )
+        preview_match = session.get(Match, 9111)
+        report_match = session.get(Match, 9112)
+        preview_match.task_open = True
+        report_match.task_open = True
+        preview, _ = render_batch(session, settings, preview_batch)
+        report, _ = render_batch(session, settings, report_batch)
+        report.article_type = "report"
+        report_batch.current_preview_article_id = None
+        report_batch.current_report_article_id = report.id
+        result = asyncio.run(
+            create_wechat_draft(
+                session,
+                settings,
+                factories,
+                [preview.id, report.id],
+                confirm=True,
+            )
+        )
+        assert result["status"] == "created"
+        assert preview_match.task_open is False
+        assert report_match.task_open is True
+
+
+def test_wechat_failure_does_not_close_preview_tasks(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    factories = ExternalFactories(wechat=lambda: _FailingWechat())
+    with session_factory.begin() as session:
+        batch = _batch(session, complete=True, game_id=9121)
+        match = session.get(Match, 9121)
+        match.task_open = True
+        article, _ = render_batch(session, settings, batch)
+        with pytest.raises(WorkflowError, match="wechat unavailable"):
+            asyncio.run(
+                create_wechat_draft(
+                    session,
+                    settings,
+                    factories,
+                    [article.id],
+                    confirm=True,
+                )
+            )
+        assert match.task_open is True
 
 
 def test_article_media_id_sha_is_checked(

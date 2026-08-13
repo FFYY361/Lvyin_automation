@@ -57,6 +57,7 @@ export function WechatDraftPage() {
   };
 
   const ordered = selected.map((id) => candidates.find(({ article }) => article.id === id)).filter(Boolean) as Candidate[];
+  const includesPreview = ordered.some(({ article }) => article.article_type === "preview");
   const visibleCandidates = articleType === "all"
     ? candidates
     : candidates.filter(({ article }) => article.article_type === articleType);
@@ -65,7 +66,7 @@ export function WechatDraftPage() {
     <>
       <PageHeader eyebrow="发布" title="创建微信草稿" description="选择当前完整文章，顺序即公众号头条与次条顺序。" actions={<><select aria-label="文章类型" value={articleType} onChange={(event) => setArticleType(event.target.value as typeof articleType)}><option value="all">全部文章</option><option value="preview">前瞻</option><option value="report">战报</option></select><Button variant="primary" loading={submitting} disabled={!selected.length} onClick={() => void validate()}>核对并继续</Button></>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
-      {result ? <Alert tone="success"><strong>{result.status === "reused" ? "已复用已有草稿" : "微信草稿创建成功"}</strong><span className="result-media">media_id：<code>{result.draft.media_id}</code></span><span>微信回执时间：{formatDateTime(result.draft.wechat_created_at)}</span></Alert> : null}
+      {result ? <Alert tone="success"><strong>{result.status === "reused" ? "已复用已有草稿" : "微信草稿创建成功"}</strong><span className="result-media">media_id：<code>{result.draft.media_id}</code></span><span>微信回执时间：{formatDateTime(result.draft.wechat_created_at)}</span>{includesPreview ? <span>所选前瞻文章对应批次的任务已自动关闭。</span> : null}</Alert> : null}
       <div className="draft-layout">
         <Panel>
           <SectionTitle title="可选文章" description="仅显示每个批次当前且完整的文章。" />
@@ -84,7 +85,7 @@ export function WechatDraftPage() {
         </Panel>
       </div>
       {preview ? <Modal title="确认创建微信草稿" wide actions={<><Button onClick={() => setPreview(null)}>返回调整</Button><Button variant="primary" loading={submitting} onClick={() => void confirm()}>确认真实创建</Button></>} onClose={() => setPreview(null)}>
-        <Alert tone="warning">下一步会调用微信公众号接口并产生真实草稿。请最后核对文章与顺序。</Alert>
+        <Alert tone="warning">下一步会调用微信公众号接口并产生真实草稿。请最后核对文章与顺序。{includesPreview ? "创建成功后，所选前瞻文章对应批次的任务将自动关闭。" : ""}</Alert>
         <ol className="confirm-list">{ordered.map(({ article }, index) => <li key={article.id}><Badge tone={index === 0 ? "info" : "neutral"}>{index === 0 ? "头条" : `次条 ${index}`}</Badge><strong>{article.title}</strong></li>)}</ol>
         <div className="fingerprint"><span>发布指纹</span><code>{preview.publication_fingerprint}</code></div>
       </Modal> : null}
