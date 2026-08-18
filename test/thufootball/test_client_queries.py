@@ -583,6 +583,16 @@ class MapperTests(unittest.TestCase):
         self.assertNotIn("secret-session", rendered)
         self.assertNotIn("999.0", rendered)
 
+    def test_penalty_shootout_event_may_omit_minute(self) -> None:
+        payload = _detail_payload()
+        payload["events"][0]["during_penalty_shootout"] = 1
+        payload["events"][0]["time"] = None
+
+        detail = map_game_detail(payload, expected_game_id=1001)
+
+        self.assertTrue(detail.events[0].during_penalty_shootout)
+        self.assertIsNone(detail.events[0].minute)
+
     def test_missing_core_identity_reports_only_field_path(self) -> None:
         raw = _game()
         raw.pop("id")

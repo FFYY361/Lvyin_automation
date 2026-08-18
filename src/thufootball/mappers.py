@@ -372,6 +372,15 @@ def _map_event(raw: object, path: str, *, game_id: int) -> GameEvent:
     if raw_side not in {"HOME", "AWAY"}:
         raise _schema(f"{path}.side")
     side: Literal["home", "away"] = "home" if raw_side == "HOME" else "away"
+    during_penalty_shootout = _binary_flag(
+        item.get("during_penalty_shootout"),
+        f"{path}.during_penalty_shootout",
+    )
+    minute = (
+        None
+        if item.get("time") is None and during_penalty_shootout
+        else _non_negative_int(item.get("time"), f"{path}.time")
+    )
     return GameEvent(
         event_id=_positive_int(item.get("id"), f"{path}.id"),
         tournament_team_id=_positive_int(
@@ -384,15 +393,12 @@ def _map_event(raw: object, path: str, *, game_id: int) -> GameEvent:
         player_name=_text(item.get("name"), f"{path}.name"),
         side=side,
         event_type=_text(item.get("type"), f"{path}.type"),
-        minute=_non_negative_int(item.get("time"), f"{path}.time"),
+        minute=minute,
         stoppage_minute=_non_negative_int(
             item.get("stoppage_time"), f"{path}.stoppage_time"
         ),
         kit_number=_non_negative_int(item.get("kitnum"), f"{path}.kitnum"),
-        during_penalty_shootout=_binary_flag(
-            item.get("during_penalty_shootout"),
-            f"{path}.during_penalty_shootout",
-        ),
+        during_penalty_shootout=during_penalty_shootout,
         valid=_bool(item.get("valid"), f"{path}.valid"),
         note=_optional_text(item.get("note")),
         tactical_position_id=_optional_int(
