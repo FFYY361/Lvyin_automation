@@ -22,6 +22,7 @@ from .models import (
     DraftReceipt,
     MediaPublishResult,
     MediaReference,
+    publication_fingerprint,
 )
 from .service import WechatOfficialService
 
@@ -34,6 +35,7 @@ __all__ = [
     "DraftValidationError",
     "DraftWriteError",
     "MediaPublishResult",
+    "publication_fingerprint",
     "MediaPublisher",
     "MediaReference",
     "MediaUploadError",

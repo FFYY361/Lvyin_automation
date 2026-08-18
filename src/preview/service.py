@@ -18,14 +18,13 @@ class PreviewService:
     def template_version(self) -> str:
         return self._template.version
 
+    @property
+    def template_fingerprint(self) -> str:
+        return self._template.fingerprint
+
     @classmethod
-    def from_template(
-        cls,
-        path: str | Path,
-        *,
-        version: str | None = None,
-    ) -> "PreviewService":
-        return cls(load_preview_template(path, version=version))
+    def from_template(cls, path: str | Path) -> "PreviewService":
+        return cls(load_preview_template(path))
 
     def render(
         self,

@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "thufootball_automation"
-version = "0.1.0"
+name = "lvyin_media"
+version = "1.0.0"
 description = "Composable automation services for THUFootball workflows"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,6 +18,16 @@ dev = [
   "pytest>=9,<10",
   "ruff>=0.15,<1",
 ]
+website = [
+  "alembic>=1.14,<2",
+  "argon2-cffi>=23,<26",
+  "fastapi>=0.115,<1",
+  "itsdangerous>=2.2,<3",
+  "psycopg[binary]>=3.2,<4",
+  "python-multipart>=0.0.18,<1",
+  "SQLAlchemy>=2.0,<3",
+  "uvicorn>=0.34,<1",
+]
 
 [project.scripts]
 thufootball = "thufootball.cli:main"
@@ -29,7 +39,11 @@ weather = "weather.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-auto_preview = ["assets/*.png"]
+thufootball = [
+  "assets/*.js",
+  "notes/*.json",
+  "notes/ranks/*.json",
+]
 
 [tool.ruff]
 target-version = "py311"

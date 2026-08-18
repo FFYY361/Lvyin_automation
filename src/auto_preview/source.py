@@ -17,6 +17,7 @@ from preview import (
     PreviewValidationError,
     SeasonOutcome,
     TeamRef,
+    format_result_text,
     matchup_key,
     preview_article_file,
     validate_preview_source,
@@ -185,8 +186,6 @@ class PreviewSourceBuilder:
             )
             home_score, away_score = game.away_score, game.home_score
             home_penalty, away_penalty = game.away_penalty, game.home_penalty
-            # 原始 result_text 按原主客方向编码；交换后让渲染层从已交换比分生成。
-            result_text = None
         else:
             home = self._team_ref(
                 game.home_team_id,
@@ -200,7 +199,12 @@ class PreviewSourceBuilder:
             )
             home_score, away_score = game.home_score, game.away_score
             home_penalty, away_penalty = game.home_penalty, game.away_penalty
-            result_text = game.result_text
+        result_text = format_result_text(
+            home_score,
+            away_score,
+            home_penalty,
+            away_penalty,
+        )
         return PlayedMatch(
             game_id=game.game_id,
             home=home,
@@ -309,7 +313,10 @@ class PreviewSourceBuilder:
             history = await self._queries.query_team_to_team_matches(
                 key[0],
                 key[1],
-                self._config.historical_tournament_ids,
+                (
+                    self._config.current_tournament_ids
+                    + self._config.historical_tournament_ids
+                ),
                 include_unfinished=False,
             )
             matches = history.matches
@@ -488,6 +495,12 @@ def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
             "game_id": match.game_id,
             "home": team_ref(match.home),
             "away": team_ref(match.away),
+            "result_text": format_result_text(
+                match.home_score,
+                match.away_score,
+                match.home_penalty,
+                match.away_penalty,
+            ),
         }
         for name in (
             "season",
@@ -497,7 +510,6 @@ def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
             "away_score",
             "home_penalty",
             "away_penalty",
-            "result_text",
         ):
             value = getattr(match, name)
             if value is not None:

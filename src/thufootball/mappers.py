@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta, timezone
-from types import MappingProxyType
 from typing import Any, Literal
 
 from .errors import SchemaError
@@ -16,7 +15,6 @@ from .models import (
     RefereeAssignment,
     TournamentRef,
     TournamentSnapshot,
-    TournamentTeam,
     UserProbe,
 )
 
@@ -301,8 +299,6 @@ def map_game_summary(
 def _validate_finished_game(game: GameSummary, path: str) -> None:
     if game.status is not GameStatus.FINISHED:
         return
-    if game.home_abandon is True and game.away_abandon is True:
-        raise _schema(f"{path}.home_abandon")
     if game.home_abandon is True or game.away_abandon is True:
         return
     if game.home_score is None:
@@ -318,46 +314,6 @@ def map_current_games(payload: Mapping[str, Any]) -> list[GameSummary]:
         map_game_summary(raw, f"current_games[{index}]", now=now)
         for index, raw in enumerate(games)
     ]
-
-
-def map_tournament_team(
-    raw: object,
-    path: str,
-    *,
-    tournament_id: int,
-) -> TournamentTeam:
-    item = _mapping(raw, path)
-    raw_tournament_id = _positive_int(item.get("tourn_id"), f"{path}.tourn_id")
-    if raw_tournament_id != tournament_id:
-        raise _schema(f"{path}.tourn_id")
-    rank = _non_negative_int(item.get("rank"), f"{path}.rank")
-    return TournamentTeam(
-        tournament_team_id=_positive_int(item.get("id"), f"{path}.id"),
-        team_id=_positive_int(item.get("team_id"), f"{path}.team_id"),
-        name=_display_name(item, f"{path}.name"),
-        brief_name=_brief_name(item, f"{path}.brief_name"),
-        group_place=_optional_text(item.get("group_place")),
-        wins=_non_negative_int(item.get("win"), f"{path}.win"),
-        draws=_non_negative_int(item.get("draw"), f"{path}.draw"),
-        losses=_non_negative_int(item.get("lose"), f"{path}.lose"),
-        goals_for=_non_negative_int(item.get("goal"), f"{path}.goal"),
-        goals_against=_non_negative_int(item.get("concede"), f"{path}.concede"),
-        points=_non_negative_int(item.get("point"), f"{path}.point"),
-        reported_rank=rank if rank > 0 else None,
-    )
-
-
-def _map_season_ids(raw: object) -> dict[str, int]:
-    seasons = _mapping(raw, "season_ids")
-    result: dict[str, int] = {}
-    for season, value in seasons.items():
-        if not isinstance(season, str):
-            raise _schema("season_ids.<key>")
-        normalised = season.strip()
-        if not normalised:
-            raise _schema("season_ids.<key>")
-        result[normalised] = _positive_int(value, f"season_ids.{normalised}")
-    return result
 
 
 def _map_snapshot_games(
@@ -390,17 +346,6 @@ def map_tournament_snapshot(
         raise _schema("tourn_info.id")
     tournament_name = _display_name(tournament, "tourn_info.name")
 
-    season_ids = _map_season_ids(payload.get("season_ids"))
-
-    raw_teams = _sequence(payload.get("registered_teams"), "registered_teams")
-    teams = tuple(
-        map_tournament_team(
-            raw,
-            f"registered_teams[{index}]",
-            tournament_id=tournament_id,
-        )
-        for index, raw in enumerate(raw_teams)
-    )
     raw_games = _sequence(payload.get("games"), "games")
     games = _map_snapshot_games(
         raw_games,
@@ -412,15 +357,9 @@ def map_tournament_snapshot(
 
     return TournamentSnapshot(
         tournament_id=tournament_id,
-        name=tournament_name,
-        season=_string(tournament.get("season"), "tourn_info.season"),
-        begin_date=_date(tournament.get("begin"), "tourn_info.begin"),
-        end_date=_date(tournament.get("end"), "tourn_info.end"),
         players_per_side=_non_negative_int(
             tournament.get("players"), "tourn_info.players"
         ),
-        season_ids=MappingProxyType(season_ids),
-        teams=teams,
         games=games,
     )
 

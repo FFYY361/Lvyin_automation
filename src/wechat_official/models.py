@@ -352,6 +352,23 @@ def _draft_content_fingerprint(articles: Sequence[Article]) -> str:
     return hashlib.sha256(serialised).hexdigest()
 
 
+def publication_fingerprint(components: Sequence[Mapping[str, object]]) -> str:
+    """Fingerprint an ordered set of immutable article publication inputs."""
+
+    if not components:
+        raise DraftValidationError(
+            "publication components must not be empty",
+            stage="draft-validation",
+        )
+    serialised = json.dumps(
+        list(components),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialised).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class MediaReference:
     url: str

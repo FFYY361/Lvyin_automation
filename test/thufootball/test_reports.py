@@ -27,8 +27,9 @@ from thufootball import (
     ReportValidationError,
     THUFootballClient,
     THUFootballReportService,
+    prepare_game_report,
 )
-from thufootball.reports import _build_report_html, _report_payload
+from thufootball.reports import _REPORT_ASSET_CACHE, _build_report_html, _report_payload
 
 _TINY_PNG_BUFFER = BytesIO()
 Image.new("RGB", (2, 2), "white").save(_TINY_PNG_BUFFER, format="PNG")
@@ -231,6 +232,9 @@ class _FakeClient:
 
 
 class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _REPORT_ASSET_CACHE.clear()
+
     @patch("thufootball.reports._render_html_to_png")
     async def test_validation_errors_stop_before_any_report_resources(
         self,
@@ -281,6 +285,7 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
             ["invalid_event_ignored"],
         )
         self.assertIn(("qrcode", 4245), client.calls)
+
 
     @patch(
         "thufootball.reports._render_html_to_png",
@@ -373,8 +378,93 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
                 ],
             )
             self.assertTrue(Path(result.path).is_file())
-            self.assertFalse(result.refreshed_stats)
-            self.assertTrue(Path(result.path).name.startswith("game_4245_"))
+        self.assertFalse(result.refreshed_stats)
+        self.assertTrue(Path(result.path).name.startswith("game_4245_"))
+
+    @patch(
+        "thufootball.reports._render_html_to_png",
+        return_value=_REPORT_PNG,
+    )
+    async def test_reuses_static_assets_across_service_instances(
+        self,
+        _renderer: object,
+    ) -> None:
+        client = _FakeClient()
+
+        await THUFootballReportService(client).render_game_detail(  # type: ignore[arg-type]
+            _detail()
+        )
+        await THUFootballReportService(client).render_game_detail(  # type: ignore[arg-type]
+            _detail()
+        )
+
+        self.assertEqual(client.calls.count(("qrcode", 4245)), 2)
+        for name in _REPORT_ASSET_NAMES:
+            self.assertEqual(client.calls.count((name, 4245)), 1)
+
+
+class AbandonReportRuleTests(unittest.TestCase):
+    def test_single_abandon_without_events_skips_validation(self) -> None:
+        detail = replace(
+            _detail(),
+            game=replace(_summary(), home_abandon=True),
+            events=(),
+        )
+
+        prepared = prepare_game_report(detail)
+
+        self.assertFalse(prepared.render_image)
+        self.assertEqual(prepared.warnings, ())
+        self.assertEqual(
+            prepared.text,
+            "车辆与运载学院vs未央书院的比赛，由于车辆与运载学院弃赛，"
+            "记为车辆与运载学院 0:3 未央书院。",
+        )
+
+    def test_single_abandon_with_events_uses_larger_awarded_loss(self) -> None:
+        cases = (((1, 4), (1, 4)), ((0, 2), (0, 3)), ((4, 1), (0, 3)))
+        for current, expected in cases:
+            with self.subTest(current=current):
+                detail = _detail()
+                detail = replace(
+                    detail,
+                    game=replace(
+                        detail.game,
+                        home_score=current[0],
+                        away_score=current[1],
+                        home_abandon=True,
+                    ),
+                )
+
+                prepared = prepare_game_report(detail)
+
+                self.assertTrue(prepared.render_image)
+                self.assertEqual(
+                    (prepared.detail.game.home_score, prepared.detail.game.away_score),
+                    expected,
+                )
+                self.assertFalse(prepared.detail.game.home_abandon)
+                self.assertEqual(
+                    prepared.warnings[0].code,
+                    "abandon_with_events_awarded_loss",
+                )
+                self.assertIn(f"{expected[0]}:{expected[1]}", prepared.text or "")
+
+    def test_both_sides_abandoned_skip_events_and_return_text(self) -> None:
+        detail = _detail()
+        detail = replace(
+            detail,
+            game=replace(detail.game, home_abandon=True, away_abandon=True),
+        )
+
+        prepared = prepare_game_report(detail)
+
+        self.assertFalse(prepared.render_image)
+        self.assertEqual(prepared.warnings[0].message, "双方弃赛")
+        self.assertEqual(
+            prepared.text,
+            "车辆与运载学院vs未央书院的比赛，双方弃赛",
+        )
 
 
 class ReportRendererTests(unittest.TestCase):
@@ -449,6 +539,9 @@ class ReportRendererTests(unittest.TestCase):
         )
 
         html = _build_report_html(payload)
+        self.assertNotIn("<script src=", html)
+        self.assertIn("jQuery v3.6.4", html)
+        self.assertIn("jCanvas", html)
         self.assertIn('fontFamily: "simHei"', html)
         self.assertIn('fontStyle: "bold"', html)
         self.assertIn('fontFamily: "WenQuanYi Micro Hei"', html)

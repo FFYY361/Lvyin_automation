@@ -23,6 +23,7 @@ from .models import (
 )
 
 _PATH = r"[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*"
+PREVIEW_TEMPLATE_VERSION = "v1 initial"
 _TOKEN = re.compile(
     rf"<!--\s*wx:(?:(?P<each>each)\s+(?P<each_path>{_PATH})\s+as\s+"
     rf"(?P<alias>[a-zA-Z_][\w]*)|(?P<empty>empty)|(?P<end>endeach))\s*-->"
@@ -270,17 +271,31 @@ def _header_background_url(value: str) -> str:
     return DEFAULT_HEADER_BACKGROUND_URL
 
 
+def format_result_text(
+    home_score: int | None,
+    away_score: int | None,
+    home_penalty: int | None = None,
+    away_penalty: int | None = None,
+) -> str:
+    """Return the canonical score text for a completed match."""
+    if home_score is None or away_score is None:
+        raise ValueError("完赛记录必须提供常规比分")
+    if (home_penalty is None) != (away_penalty is None):
+        raise ValueError("点球比分必须同时提供主队和客队得分")
+    if home_penalty is not None:
+        return f"{home_score}({home_penalty}):{away_score}({away_penalty})"
+    return f"{home_score}:{away_score}"
+
+
 def _score_text(value: PlayedMatch) -> str:
     if not isinstance(value, PlayedMatch):
         raise TypeError("比分格式化器需要 PlayedMatch")
-    if value.home_penalty is not None:
-        return (
-            f"{value.home_score}({value.home_penalty}):"
-            f"{value.away_score}({value.away_penalty})"
-        )
-    if value.result_text is not None:
-        return value.result_text
-    return f"{value.home_score}:{value.away_score}"
+    return format_result_text(
+        value.home_score,
+        value.away_score,
+        value.home_penalty,
+        value.away_penalty,
+    )
 
 
 def _result_line(value: PlayedMatch) -> str:
@@ -346,7 +361,7 @@ def _paragraph_margin(value: bool) -> str:
 def _team_name_width(value: str) -> str:
     if not isinstance(value, str):
         raise TypeError("team_name_width 需要球队名称")
-    return "33%" if len(value.strip()) >= 14 else "100%"
+    return "58%" if len(value.strip()) >= 14 else "100%"
 
 
 _FILTERS = {
@@ -431,27 +446,21 @@ def _render_nodes(
 class PreviewTemplate:
     """A compiled HTML template that accepts only typed preview source data."""
 
-    def __init__(self, *, nodes: tuple[_Node, ...], source: str, version: str) -> None:
+    def __init__(self, *, nodes: tuple[_Node, ...], source: str) -> None:
         self._nodes = nodes
         self.source = source
-        self.version = version
+        self.version = PREVIEW_TEMPLATE_VERSION
+        self.fingerprint = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
     @classmethod
-    def compile(
-        cls, body_template: str, *, version: str | None = None
-    ) -> "PreviewTemplate":
+    def compile(cls, body_template: str) -> "PreviewTemplate":
         if not isinstance(body_template, str) or not body_template.strip():
             raise TemplateContractError(
                 "body template must be a non-empty string",
                 stage="template-compile",
             )
         nodes = _Parser(body_template).parse()
-        if version is None:
-            version = (
-                "sha256:"
-                + hashlib.sha256(body_template.encode("utf-8")).hexdigest()[:16]
-            )
-        return cls(nodes=nodes, source=body_template, version=version)
+        return cls(nodes=nodes, source=body_template)
 
     def render_body(
         self,
@@ -480,12 +489,5 @@ class PreviewTemplate:
         return title, normalised_body
 
 
-def load_preview_template(
-    path: str | Path,
-    *,
-    version: str | None = None,
-) -> PreviewTemplate:
-    return PreviewTemplate.compile(
-        Path(path).read_text(encoding="utf-8"),
-        version=version,
-    )
+def load_preview_template(path: str | Path) -> PreviewTemplate:
+    return PreviewTemplate.compile(Path(path).read_text(encoding="utf-8"))

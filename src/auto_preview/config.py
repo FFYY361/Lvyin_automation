@@ -84,7 +84,6 @@ COMPETITIONS = MappingProxyType(
             historical_seasons=(
                 HistoricalSeason("2024~2025", (111,), True),
                 HistoricalSeason("2023~2024", (93,), True),
-                HistoricalSeason("2022~2023", (82,), False),
             ),
         ),
     }

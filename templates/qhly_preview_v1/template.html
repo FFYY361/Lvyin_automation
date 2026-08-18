@@ -81,10 +81,11 @@
       <section style="background:#5a0383;height:4px;line-height:0;margin:-10px 0 10px -10px;overflow:hidden;width:60px"></section>
 
       <!-- 对阵与比赛信息 -->
-      <section style="font-size:19px;line-height:1.1;margin:10px 24px 0;text-align:left">
+      <!-- 长队名可越过中线少许；主客队上下错位，不会与居中的 VS 同行碰撞。 -->
+      <section style="color:#000;font-size:19px;line-height:1.2;margin:10px 24px 0;text-align:left">
         <section style="width:{{match.home.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.home.name}}</strong></p></section>
         <p style="color:#5a0383;margin:.8em 0;text-align:center"><strong>VS</strong></p>
-        <section style="color:#000;margin-left:auto;text-align:right;width:{{match.away.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.away.name}}</strong></p></section>
+        <section style="margin-left:auto;text-align:right;width:{{match.away.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.away.name}}</strong></p></section>
       </section>
       <section style="color:#000;font-size:14px;letter-spacing:1px;line-height:1.8;margin:10px 24px;text-align:left">
         <p style="margin:0">{{match.competition_name}} {{match.stage}}</p>

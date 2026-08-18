@@ -156,12 +156,17 @@ class _PreviewEntry:
     article_file: str
 
 
-def _markdown_paragraphs(content: str, path: str) -> tuple[str, ...]:
+def parse_preview_paragraphs(
+    content: str,
+    path: str = "$.body",
+) -> tuple[str, ...]:
+    """Split plain preview copy on line breaks without parsing Markdown."""
+
     normalised = (
         content.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     )
     paragraphs = tuple(
-        block.strip() for block in re.split(r"\n[ \t]*\n+", normalised) if block.strip()
+        block.strip() for block in re.split(r"\n+", normalised) if block.strip()
     )
     if not paragraphs:
         raise _error(path, "Markdown 文件至少需要一个非空段落")
@@ -195,7 +200,7 @@ def _read_article_file(
         raise _error(path, f"Markdown 文件必须使用 UTF-8 编码：{reference}") from exc
     except OSError as exc:
         raise _error(path, f"无法读取 Markdown 文件：{reference}") from exc
-    return _markdown_paragraphs(content, path)
+    return parse_preview_paragraphs(content, path)
 
 
 def _parse_preview_entries(value: object) -> dict[str, _PreviewEntry]:
