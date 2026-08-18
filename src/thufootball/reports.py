@@ -295,7 +295,7 @@ def _event_name(event: GameEvent) -> str:
 
 def _event_time(event: GameEvent) -> str:
     if event.during_penalty_shootout:
-        return f"{event.minute}'P"
+        return "P" if event.minute is None else f"{event.minute}'P"
     if event.stoppage_minute > 0:
         return f"{event.minute}'+{event.stoppage_minute}'"
     return f"{event.minute}'"

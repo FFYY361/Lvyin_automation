@@ -157,7 +157,7 @@ class GameEvent:
     player_name: str
     side: Literal["home", "away"]
     event_type: str
-    minute: int
+    minute: int | None
     stoppage_minute: int
     kit_number: int
     during_penalty_shootout: bool
