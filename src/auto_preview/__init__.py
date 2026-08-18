@@ -1,5 +1,6 @@
 """Automated football preview orchestration."""
 
+from .cover import DEFAULT_COVER_MEDIA_ID_ENV, default_cover
 from .errors import ArtifactValidationError, NoGamesForDate, PipelineError
 from .models import (
     CombinationResult,
@@ -20,4 +21,6 @@ __all__ = [
     "PipelineRequest",
     "PipelineResult",
     "Stage",
+    "DEFAULT_COVER_MEDIA_ID_ENV",
+    "default_cover",
 ]

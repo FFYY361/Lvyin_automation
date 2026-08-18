@@ -106,8 +106,9 @@ class BatchQueryError(THUFootballError):
     def __init__(self, failures: Mapping[int, THUFootballError]) -> None:
         ordered_failures = dict(failures)
         failed_ids = tuple(ordered_failures)
+        first_failure = next(iter(ordered_failures.values()))
         super().__init__(
-            f"Tournament batch failed for IDs {failed_ids}",
+            str(first_failure),
             stage="query_games",
             retryable=any(error.retryable for error in ordered_failures.values()),
         )

@@ -7,6 +7,7 @@ from .bundle import (
     parse_preview_bundle,
     parse_preview_config,
     parse_preview_document,
+    parse_preview_paragraphs,
     parse_weather_for_date,
     preview_article_file,
 )
@@ -29,7 +30,12 @@ from .models import (
     validate_preview_source,
 )
 from .service import PreviewService
-from .template import PreviewTemplate, load_preview_template
+from .template import (
+    PREVIEW_TEMPLATE_VERSION,
+    PreviewTemplate,
+    format_result_text,
+    load_preview_template,
+)
 
 __all__ = [
     "PlayedMatch",
@@ -37,6 +43,7 @@ __all__ = [
     "PreviewCredits",
     "PreviewError",
     "PreviewMatch",
+    "PREVIEW_TEMPLATE_VERSION",
     "PreviewService",
     "PreviewSourceDocument",
     "PreviewSourceData",
@@ -50,8 +57,10 @@ __all__ = [
     "UnsafeHtml",
     "load_preview_bundle",
     "load_preview_template",
+    "format_result_text",
     "matchup_key",
     "parse_preview_bundle",
+    "parse_preview_paragraphs",
     "parse_preview_config",
     "parse_preview_document",
     "parse_weather_for_date",

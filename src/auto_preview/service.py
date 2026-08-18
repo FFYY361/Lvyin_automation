@@ -41,6 +41,7 @@ from wechat_official import (
 )
 
 from .config import CompetitionConfig, competition_config
+from .cover import default_cover
 from .errors import ArtifactValidationError, NoGamesForDate, PipelineError
 from .inputs import (
     GlobalInputStatus,
@@ -465,7 +466,12 @@ class AutoPreviewPipeline:
     @staticmethod
     def _article_state(state: dict[str, Any]) -> dict[str, Any]:
         article_state = state.get("article")
-        required = {"input_sha256", "template_version", "cover"}
+        required = {
+            "input_sha256",
+            "template_version",
+            "template_fingerprint",
+            "cover",
+        }
         if not isinstance(article_state, dict) or set(article_state) != required:
             raise ArtifactValidationError(
                 "article 已存在但 run.json.article 缺失或损坏",
@@ -479,6 +485,11 @@ class AutoPreviewPipeline:
         if not isinstance(article_state.get("template_version"), str):
             raise ArtifactValidationError(
                 "run.json.article.template_version 字段损坏",
+                stage="article-validation",
+            )
+        if not isinstance(article_state.get("template_fingerprint"), str):
+            raise ArtifactValidationError(
+                "run.json.article.template_fingerprint 字段损坏",
                 stage="article-validation",
             )
         cover = article_state.get("cover")
@@ -842,7 +853,7 @@ class AutoPreviewPipeline:
         state: dict[str, Any],
         *,
         input_sha256: str,
-        template_version: str,
+        template_fingerprint: str,
     ) -> list[str]:
         reasons: list[str] = []
         actual_cover = article_cover_descriptor(existing)
@@ -855,7 +866,7 @@ class AutoPreviewPipeline:
         else:
             if article_state["input_sha256"] != input_sha256:
                 reasons.append("source、正文 Markdown、天气或人员配置已变化")
-            if article_state["template_version"] != template_version:
+            if article_state["template_fingerprint"] != template_fingerprint:
                 reasons.append("模板指纹已变化")
             if article_state["cover"] != actual_cover:
                 reasons.append("article 封面状态不一致")
@@ -898,7 +909,7 @@ class AutoPreviewPipeline:
                         existing,
                         state,
                         input_sha256=input_sha256,
-                        template_version=preview_service.template_version,
+                        template_fingerprint=preview_service.template_fingerprint,
                     )
                 )
             render_article = bool(rebuild_reasons)
@@ -916,7 +927,7 @@ class AutoPreviewPipeline:
         cover = (
             request.cover
             or (existing.cover if existing is not None else None)
-            or CoverFile(Path(__file__).with_name("assets") / "default_cover.png")
+            or default_cover()
         )
         article = preview_service.render(
             source,
@@ -929,6 +940,7 @@ class AutoPreviewPipeline:
         state["article"] = {
             "input_sha256": input_sha256,
             "template_version": preview_service.template_version,
+            "template_fingerprint": preview_service.template_fingerprint,
             "cover": article_cover_descriptor(persisted),
         }
         write_json(paths.state, state)

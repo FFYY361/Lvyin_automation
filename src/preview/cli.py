@@ -24,7 +24,6 @@ def _parser() -> argparse.ArgumentParser:
     render.add_argument("--weather", required=True, help="全局 weather.json 路径")
     render.add_argument("--config", required=True, help="全局 config.json 路径")
     render.add_argument("--output", required=True, help="文章输出目录")
-    render.add_argument("--version", help="显式模板版本")
     cover = render.add_mutually_exclusive_group(required=True)
     cover.add_argument("--cover", help="本地封面图片路径")
     cover.add_argument("--cover-media-id", help="已有公众号永久封面素材 ID")
@@ -38,7 +37,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     if args.command != "render":
         raise AssertionError("unreachable command")
     source = load_preview_bundle(args.source, args.weather, args.config)
-    service = PreviewService.from_template(args.template, version=args.version)
+    service = PreviewService.from_template(args.template)
     cover = (
         CoverFile(Path(args.cover))
         if args.cover is not None
@@ -56,6 +55,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         "status": "ok",
         "title": article.title,
         "template_version": service.template_version,
+        "template_fingerprint": service.template_fingerprint,
         "content_fingerprint": article.content_fingerprint,
         "output": str(output.resolve()),
         "external_writes": False,

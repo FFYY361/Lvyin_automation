@@ -372,7 +372,6 @@ class TemplateTests(unittest.TestCase):
               <!-- wx:each source.matches as match --><span>{{match.home.team_id}}</span><!-- wx:endeach -->
             </section>
             """,
-            version="test-preview-v1",
         )
         rendered = _render(template, source)
 
@@ -383,16 +382,12 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(rendered.body_html.count("254"), 1)
         self.assertEqual(rendered.body_html.count("47"), 1)
 
-    def test_penalty_and_special_results_use_finite_formatter(self) -> None:
+    def test_result_formatter_uses_numeric_scores_and_rejects_text_only(self) -> None:
         raw = _raw_source()
         first = raw["matches"][0]["home"]["current_results"][0]
         first["home_penalty"] = 5
         first["away_penalty"] = 4
-        first["result_text"] = "4:0（点球 5:4）"
-        second = raw["matches"][0]["home"]["current_results"][1]
-        del second["home_score"]
-        del second["away_score"]
-        second["result_text"] = "对手退赛"
+        first["result_text"] = "4(5):0(4)"
         source = _parse_source(raw)
         template = PreviewTemplate.compile(
             "<!-- wx:each source.matches as match -->"
@@ -403,8 +398,19 @@ class TemplateTests(unittest.TestCase):
         )
         rendered = _render(template, source)
         self.assertIn("社科-心理 4(5):0(4) 工物-安全", rendered.body_html)
-        self.assertNotIn("点球 5:4", rendered.body_html)
-        self.assertIn("社科-心理 对手退赛 法学", rendered.body_html)
+
+        raw = _raw_source()
+        raw["matches"][0]["home"]["current_results"][0]["result_text"] = "对手退赛"
+        with self.assertRaises(PreviewValidationError):
+            _parse_source(raw)
+
+        raw = _raw_source()
+        second = raw["matches"][0]["home"]["current_results"][1]
+        del second["home_score"]
+        del second["away_score"]
+        second["result_text"] = "对手退赛"
+        with self.assertRaises(PreviewValidationError):
+            _parse_source(raw)
 
     def test_invalid_marker_filter_and_path_fail(self) -> None:
         with self.assertRaises(TemplateContractError):
@@ -565,7 +571,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         self.assertGreater(template_source.count("\n"), 100)
         self.assertNotIn("schedule_rows", source_text)
         self.assertNotIn("_html", source_text)
-        PreviewTemplate.compile(template_source, version="qhly-preview-v1")
+        compiled = PreviewTemplate.compile(template_source)
+        self.assertEqual(compiled.version, "v1 initial")
+        self.assertEqual(len(compiled.fingerprint), 64)
         rendered = self.rendered
 
         self.assertEqual(rendered.title, "【马杯男足周日前瞻】|| 测试")
@@ -640,7 +648,14 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
             rendered.body_html.count("margin:0 0 .6em;text-indent:2em"),
             5,
         )
-        self.assertEqual(rendered.body_html.count("width:33%"), 2)
+        self.assertEqual(rendered.body_html.count("width:58%"), 2)
+        self.assertEqual(
+            rendered.body_html.count(
+                "color:#000;font-size:19px;line-height:1.2;"
+                "margin:10px 24px 0;text-align:left"
+            ),
+            2,
+        )
         self.assertEqual(
             rendered.body_html.count(
                 '<section style="width:100%"><p style="margin:0;word-break:break-all"'
@@ -649,7 +664,7 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
         )
         self.assertEqual(
             rendered.body_html.count(
-                "color:#000;margin-left:auto;text-align:right;width:100%"
+                "margin-left:auto;text-align:right;width:100%"
             ),
             1,
         )
@@ -728,7 +743,7 @@ class PreviewBundleTests(unittest.TestCase):
             markdown = root / article_file
             markdown.parent.mkdir(parents=True)
             markdown.write_text(
-                "第一段第一行。\n第一段第二行。\n\n第二段正文。\n\n\n第三段正文。\n",
+                "  第一段第一行。\n  第一段第二行。\n\n第二段正文。\n\n\n第三段正文。\n",
                 encoding="utf-8",
             )
 
@@ -742,7 +757,8 @@ class PreviewBundleTests(unittest.TestCase):
             self.assertEqual(
                 parsed.matches[0].preview_paragraphs,
                 (
-                    "第一段第一行。\n第一段第二行。",
+                    "第一段第一行。",
+                    "第一段第二行。",
                     "第二段正文。",
                     "第三段正文。",
                 ),

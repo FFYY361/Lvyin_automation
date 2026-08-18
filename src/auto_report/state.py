@@ -234,22 +234,15 @@ def validate_report_manifest(
                 stage="report-validation",
             )
         common = {
-            "kind",
             "game_id",
             "tournament_id",
             "kickoff_local",
             "home_name",
             "away_name",
+            "artifacts",
+            "warnings",
         }
-        kind = item.get("kind")
-        expected = (
-            common | {"path", "sha256", "warnings"}
-            if kind == "image"
-            else common | {"text"}
-            if kind == "abandon"
-            else set()
-        )
-        if not expected or set(item) != expected:
+        if set(item) != common:
             raise ArtifactValidationError(
                 "report.json.items 中存在未知或损坏的条目",
                 stage="report-validation",
@@ -270,6 +263,25 @@ def validate_report_manifest(
                 "report.json.items 中的比赛字段损坏",
                 stage="report-validation",
             )
+        artifacts = item["artifacts"]
+        if (
+            not isinstance(artifacts, list)
+            or not 1 <= len(artifacts) <= 2
+            or any(not isinstance(artifact, dict) for artifact in artifacts)
+            or [artifact.get("kind") for artifact in artifacts]
+            not in (["image"], ["text"], ["image", "text"])
+            or any(
+                set(artifact) != {"kind", "path", "sha256"}
+                or not isinstance(artifact.get("path"), str)
+                or not artifact["path"]
+                or not _is_sha256(artifact.get("sha256"))
+                for artifact in artifacts
+            )
+        ):
+            raise ArtifactValidationError(
+                "report.json 战报产物条目损坏",
+                stage="report-validation",
+            )
         key = (item["kickoff_local"], item["tournament_id"], item["game_id"])
         if previous_key is not None and key < previous_key:
             raise ArtifactValidationError(
@@ -277,12 +289,9 @@ def validate_report_manifest(
                 stage="report-validation",
             )
         previous_key = key
-        if kind == "image":
-            if (
-                not isinstance(item["path"], str)
-                or not _is_sha256(item["sha256"])
-                or not isinstance(item["warnings"], list)
-                or any(
+        if (
+            not isinstance(item["warnings"], list)
+            or any(
                     not isinstance(warning, dict)
                     or set(warning)
                     != {
@@ -326,14 +335,9 @@ def validate_report_manifest(
                     )
                     for warning in item["warnings"]
                 )
-            ):
-                raise ArtifactValidationError(
-                    "report.json 图片条目损坏",
-                    stage="report-validation",
-                )
-        elif not isinstance(item["text"], str) or not item["text"]:
+        ):
             raise ArtifactValidationError(
-                "report.json 弃赛条目损坏",
+                "report.json 战报 warning 条目损坏",
                 stage="report-validation",
             )
 

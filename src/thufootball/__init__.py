@@ -26,19 +26,20 @@ from .models import (
     HeadToHeadHistory,
     HeadToHeadSummary,
     MatchResult,
+    PreparedGameReport,
     RefereeAssignment,
     ReportSettings,
     TeamGameResult,
     TeamTournamentOutcome,
     TournamentRef,
     TournamentSnapshot,
-    TournamentTeam,
     UserProbe,
 )
 from .policy import BLACKLISTED_TOURNAMENT_IDS
 from .queries import THUFootballQueryService
 from .reports import (
     THUFootballReportService,
+    prepare_game_report,
     render_game_report,
     resolve_report_team_name,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "InvalidResponse",
     "MatchResult",
     "PermissionError",
+    "PreparedGameReport",
     "QueryValidationError",
     "RateLimited",
     "RefereeAssignment",
@@ -76,8 +78,8 @@ __all__ = [
     "Timeout",
     "TournamentRef",
     "TournamentSnapshot",
-    "TournamentTeam",
     "UserProbe",
     "render_game_report",
+    "prepare_game_report",
     "resolve_report_team_name",
 ]
