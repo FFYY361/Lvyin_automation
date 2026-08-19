@@ -22,7 +22,7 @@ from backend.credentials import (
 )
 from thufootball.cli import _jsonable
 from thufootball.errors import THUFootballError
-from thufootball.mappers import map_tournament_snapshot
+from thufootball.mappers import map_game_detail, map_tournament_snapshot
 
 AUTOMATIC_ROOT = PROJECT_ROOT / "data" / "ai_preview" / "automatic"
 TOURNAMENT_ROOT = AUTOMATIC_ROOT / "tournaments"
@@ -34,8 +34,19 @@ TOURNAMENTS = {
     126: "男足",
     123: "女足",
     128: "五人制",
+    99: "男足",
+    100: "男足",
+    101: "男足",
+    102: "女足",
+    111: "五人制",
+    89: "男足",
+    88: "男足",
+    90: "女足",
+    93: "五人制",
 }
 GAME_CONCURRENCY = 6
+ADJUSTED_GAME_ID = 3497
+REMOVED_EVENT_IDS = {124696, 124697}
 
 
 def _object(value: object, name: str) -> Mapping[str, Any]:
@@ -158,6 +169,50 @@ def _suspension(raw: object) -> dict[str, object]:
     }
 
 
+def _adjust_game_payload(payload: Mapping[str, Any], game_id: int) -> Mapping[str, Any]:
+    if game_id != ADJUSTED_GAME_ID:
+        return payload
+
+    game = _object(payload.get("game_info"), "game_info")
+    away_team = _object(
+        game.get("away_tourn_team_info"), "game_info.away_tourn_team_info"
+    )
+    if (
+        game.get("id") != game_id
+        or game.get("tourn_id") != 100
+        or game.get("away_tourn_team_id") != 1528
+        or away_team.get("team_id") != 55
+        or game.get("result") != "3:0"
+    ):
+        raise ValueError(f"unexpected source data for adjusted game {game_id}")
+
+    events = _array(payload.get("events"), "events")
+    parsed_events = [_object(event, "events[]") for event in events]
+    removed = [event for event in parsed_events if event.get("id") in REMOVED_EVENT_IDS]
+    if (
+        len(removed) != 2
+        or {event.get("id") for event in removed} != REMOVED_EVENT_IDS
+        or any(
+            event.get("type") != "GOAL"
+            or event.get("side") != "HOME"
+            or event.get("time") != 81
+            or event.get("tourn_team_player_id") is not None
+            or event.get("player_id") is not None
+            for event in removed
+        )
+    ):
+        raise ValueError(f"unexpected erroneous events for adjusted game {game_id}")
+
+    adjusted_game = dict(game)
+    adjusted_game["away_abandon"] = 1
+    adjusted_payload = dict(payload)
+    adjusted_payload["game_info"] = adjusted_game
+    adjusted_payload["events"] = [
+        event for event in parsed_events if event.get("id") not in REMOVED_EVENT_IDS
+    ]
+    return adjusted_payload
+
+
 def _tournament_document(
     payload: Mapping[str, Any],
     *,
@@ -190,9 +245,7 @@ def _tournament_document(
         ],
         "registered_players": [
             _registered_player(item)
-            for item in _array(
-                payload.get("registered_players"), "registered_players"
-            )
+            for item in _array(payload.get("registered_players"), "registered_players")
         ],
         "games": _jsonable(snapshot.games),
         "suspensions": [
@@ -212,7 +265,18 @@ async def _read_game(
         last_error: THUFootballError | None = None
         for attempt in range(3):
             try:
-                detail = await client.get_game_info(game_id)
+                if game_id == ADJUSTED_GAME_ID:
+                    payload = await client._request_json(
+                        "GetGameInfo",
+                        {"game_id": game_id},
+                        authentication_required=True,
+                    )
+                    detail = map_game_detail(
+                        _adjust_game_payload(payload, game_id),
+                        expected_game_id=game_id,
+                    )
+                else:
+                    detail = await client.get_game_info(game_id)
                 return game_id, {
                     "schema_version": SCHEMA_VERSION,
                     "source": {
@@ -320,8 +384,7 @@ async def _synchronise() -> dict[str, object]:
         games = document["games"]
         suspensions = document["suspensions"]
         if not all(
-            isinstance(items, list)
-            for items in (teams, players, games, suspensions)
+            isinstance(items, list) for items in (teams, players, games, suspensions)
         ):
             raise ValueError("tournament document arrays are invalid")
         tournament_game_ids = [game["game_id"] for game in games]
@@ -369,6 +432,14 @@ async def _synchronise() -> dict[str, object]:
         "missing_tournament_ids": [],
         "missing_game_detail_ids": [],
         "failed_requests": [],
+        "manual_adjustments": [
+            {
+                "game_id": ADJUSTED_GAME_ID,
+                "decision": "away_abandon",
+                "removed_event_ids": sorted(REMOVED_EVENT_IDS),
+                "reason": "软件学院被判负；两条81分钟进球事件为错误记录。",
+            }
+        ],
     }
     _write_json(AUTOMATIC_ROOT / "manifest.json", manifest)
     return manifest

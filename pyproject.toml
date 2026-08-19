@@ -30,6 +30,7 @@ website = [
 ]
 
 [project.scripts]
+ai-preview-prompt = "ai_preview.cli:main"
 thufootball = "thufootball.cli:main"
 preview = "preview.cli:main"
 wechat-official = "wechat_official.cli:main"
@@ -39,6 +40,11 @@ weather = "weather.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+ai_preview = [
+  "config.json",
+  "prompt/*.md",
+  "prompt/competition_rules/*.md",
+]
 thufootball = [
   "assets/*.js",
   "notes/*.json",
