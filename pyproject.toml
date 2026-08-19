@@ -30,6 +30,7 @@ website = [
 ]
 
 [project.scripts]
+ai-chat = "ai_service.cli:main"
 ai-preview-prompt = "ai_preview.cli:main"
 thufootball = "thufootball.cli:main"
 preview = "preview.cli:main"
@@ -40,6 +41,7 @@ weather = "weather.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+ai_service = ["config.json"]
 ai_preview = [
   "config.json",
   "prompt/*.md",

@@ -1,7 +1,33 @@
 # Service 说明
 
-本页面向二次开发，说明四个可组合的中层 Service。普通使用者优先使用 README 中的
+本页面向二次开发，说明五个可组合的中层 Service。普通使用者优先使用 README 中的
 `auto_preview` 和 `auto_report`。
+
+## ai_service
+
+`AIChatService` 通过 OpenAI-compatible Chat Completions 接口提供通用 AI 对话，
+不包含足球或前瞻业务逻辑。`src/ai_service/config.json` 可配置多个模型 profile 的
+`base_url`、`model`、密钥环境变量、温度、输出上限和超时；真实密钥只写入 `.env`。
+
+```powershell
+ai-chat --profile qwen --system "只回答一句话" "你好"
+```
+
+```python
+from ai_service import AIChatService, ChatMessage
+
+messages = [
+    ChatMessage("system", "你是一个严谨的中文编辑。"),
+    ChatMessage("user", "请改写这句话。"),
+]
+async with AIChatService.from_config("qwen") as service:
+    result = await service.chat(messages)
+    print(result.content)
+```
+
+内置 `qwen`、`deepseek`、`glm` 三个示例 profile，分别读取
+`AI_SERVICE_QWEN_API_KEY`、`AI_SERVICE_DEEPSEEK_API_KEY` 和
+`AI_SERVICE_GLM_API_KEY`。服务不自动重试生成请求，避免失败状态不明时产生重复费用。
 
 ## thufootball
 
