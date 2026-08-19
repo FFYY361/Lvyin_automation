@@ -1,0 +1,29 @@
+{
+  "default_profile": "qwen",
+  "profiles": {
+    "qwen": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.5-35b-a3b",
+      "api_key_env": "AI_SERVICE_QWEN_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 3000,
+      "timeout_seconds": 120
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-v4-flash",
+      "api_key_env": "AI_SERVICE_DEEPSEEK_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 3000,
+      "timeout_seconds": 120
+    },
+    "glm": {
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-4.7-flash",
+      "api_key_env": "AI_SERVICE_GLM_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 3000,
+      "timeout_seconds": 120
+    }
+  }
+}
