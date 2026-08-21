@@ -7,7 +7,10 @@
       "api_key_env": "AI_SERVICE_QWEN_API_KEY",
       "temperature": 0.6,
       "max_tokens": 3000,
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "request_options": {
+        "enable_thinking": false
+      }
     },
     "deepseek": {
       "base_url": "https://api.deepseek.com",
@@ -15,7 +18,25 @@
       "api_key_env": "AI_SERVICE_DEEPSEEK_API_KEY",
       "temperature": 0.6,
       "max_tokens": 3000,
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    },
+    "deepseek_v4_pro_thinking": {
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-v4-pro",
+      "api_key_env": "AI_SERVICE_DEEPSEEK_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 16000,
+      "timeout_seconds": 600,
+      "request_options": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
     },
     "glm": {
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -23,7 +44,71 @@
       "api_key_env": "AI_SERVICE_GLM_API_KEY",
       "temperature": 0.6,
       "max_tokens": 3000,
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "request_options": {}
+    },
+    "doubao_turbo": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-2-1-turbo-260628",
+      "api_key_env": "AI_SERVICE_DOUBAO_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 16000,
+      "timeout_seconds": 600,
+      "request_options": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    },
+    "doubao_pro": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-2-1-pro-260628",
+      "api_key_env": "AI_SERVICE_DOUBAO_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 16000,
+      "timeout_seconds": 600,
+      "request_options": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    },
+    "kimi_k2_6": {
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.6",
+      "api_key_env": "AI_SERVICE_KIMI_API_KEY",
+      "temperature": 1.0,
+      "max_tokens": 16000,
+      "timeout_seconds": 600,
+      "request_options": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    },
+    "kimi_k2_6_no_thinking": {
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.6",
+      "api_key_env": "AI_SERVICE_KIMI_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 3000,
+      "timeout_seconds": 180,
+      "request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    },
+    "kimi_k3": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "kimi/kimi-k3",
+      "api_key_env": "AI_SERVICE_QWEN_API_KEY",
+      "temperature": 1.0,
+      "max_tokens": 16000,
+      "timeout_seconds": 600,
+      "request_options": {
+        "reasoning_effort": "max"
+      }
     }
   }
 }

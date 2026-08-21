@@ -7,7 +7,9 @@
 
 `AIChatService` 通过 OpenAI-compatible Chat Completions 接口提供通用 AI 对话，
 不包含足球或前瞻业务逻辑。`src/ai_service/config.json` 可配置多个模型 profile 的
-`base_url`、`model`、密钥环境变量、温度、输出上限和超时；真实密钥只写入 `.env`。
+`base_url`、`model`、密钥环境变量、温度、输出上限、超时和供应商特有请求参数；真实密钥只写入
+`.env`。Qwen 和 DeepSeek profile 均通过 `request_options` 关闭默认思考模式，避免普通写作
+请求将输出额度消耗在推理过程。
 
 ```powershell
 ai-chat --profile qwen --system "只回答一句话" "你好"
@@ -25,9 +27,11 @@ async with AIChatService.from_config("qwen") as service:
     print(result.content)
 ```
 
-内置 `qwen`、`deepseek`、`glm` 三个示例 profile，分别读取
-`AI_SERVICE_QWEN_API_KEY`、`AI_SERVICE_DEEPSEEK_API_KEY` 和
-`AI_SERVICE_GLM_API_KEY`。服务不自动重试生成请求，避免失败状态不明时产生重复费用。
+内置 `qwen`、`deepseek`、`deepseek_v4_pro_thinking`、`glm`、`doubao_turbo`、
+`doubao_pro`、`kimi_k2_6`、`kimi_k2_6_no_thinking` 和 `kimi_k3` profile。豆包 profile 读取
+`AI_SERVICE_DOUBAO_API_KEY`；Kimi K2.6 使用 Moonshot 官方接口并读取
+`AI_SERVICE_KIMI_API_KEY`，Kimi K3 通过百炼月之暗面直供服务调用并复用
+`AI_SERVICE_QWEN_API_KEY`。服务不自动重试生成请求，避免失败状态不明时产生重复费用。
 
 ## thufootball
 
