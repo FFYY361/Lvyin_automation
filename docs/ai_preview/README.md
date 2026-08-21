@@ -1,7 +1,7 @@
 # AI 前瞻：文档资料库与 Prompt 工程
 
-本目录记录 AI 前瞻功能的资料库与 Prompt 工程。当前不实现网站或模型调用，已经建立本地
-资料和根据 `MATCH_ID` 组装 User message 的 Python 工具。
+本目录记录 AI 前瞻功能的资料库、Prompt 工程和本地生成评测。当前不接入网站，已经建立本地
+资料、根据 `MATCH_ID` 组装 Prompt 的 Python 工具和通用 AI 对话 Service。
 
 ## 当前目标
 
@@ -39,3 +39,5 @@
 - [TODO 清单](TODO.md)
 - [本地资料库实施规划](implementation_plan.md)
 - [Prompt 首版组装方案](prompt_engineering.md)
+- [AI 前瞻写作测试方案](evaluation.md)
+- [首轮模型测试结果](evaluation_results.md)

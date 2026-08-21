@@ -21,6 +21,14 @@ _PROFILE_FIELDS = {
     "temperature",
     "max_tokens",
     "timeout_seconds",
+    "request_options",
+}
+_RESERVED_REQUEST_OPTIONS = {
+    "model",
+    "messages",
+    "temperature",
+    "max_tokens",
+    "stream",
 }
 
 
@@ -37,6 +45,7 @@ class ModelProfile:
     temperature: float
     max_tokens: int
     timeout_seconds: float
+    request_options: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -114,6 +123,17 @@ def _profile(name: str, raw: object) -> ModelProfile:
         raise _configuration_error(
             f"profiles.{name}.timeout_seconds must be positive"
         )
+    request_options = raw["request_options"]
+    if not isinstance(request_options, dict):
+        raise _configuration_error(
+            f"profiles.{name}.request_options must be a JSON object"
+        )
+    conflicts = sorted(_RESERVED_REQUEST_OPTIONS & set(request_options))
+    if conflicts:
+        raise _configuration_error(
+            f"profiles.{name}.request_options cannot override "
+            + ", ".join(conflicts)
+        )
     return ModelProfile(
         name=name,
         base_url=base_url.rstrip("/"),
@@ -122,6 +142,7 @@ def _profile(name: str, raw: object) -> ModelProfile:
         temperature=float(temperature),
         max_tokens=max_tokens,
         timeout_seconds=float(timeout_seconds),
+        request_options=dict(request_options),
     )
 
 

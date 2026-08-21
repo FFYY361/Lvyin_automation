@@ -121,6 +121,7 @@ class OpenAICompatibleClient:
             "max_tokens": self.profile.max_tokens,
             "stream": False,
         }
+        payload.update(self.profile.request_options)
         try:
             response = await self._http_client.post(
                 f"{self.profile.base_url}/chat/completions",

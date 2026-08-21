@@ -45,8 +45,10 @@ TOURNAMENTS = {
     93: "五人制",
 }
 GAME_CONCURRENCY = 6
-ADJUSTED_GAME_ID = 3497
-REMOVED_EVENT_IDS = {124696, 124697}
+SOFTWARE_ABANDON_GAME_ID = 3497
+SOFTWARE_REMOVED_EVENT_IDS = {124696, 124697}
+SCHWARZMAN_ABANDON_GAME_ID = 4152
+ADJUSTED_GAME_IDS = {SOFTWARE_ABANDON_GAME_ID, SCHWARZMAN_ABANDON_GAME_ID}
 
 
 def _object(value: object, name: str) -> Mapping[str, Any]:
@@ -170,10 +172,37 @@ def _suspension(raw: object) -> dict[str, object]:
 
 
 def _adjust_game_payload(payload: Mapping[str, Any], game_id: int) -> Mapping[str, Any]:
-    if game_id != ADJUSTED_GAME_ID:
+    if game_id not in ADJUSTED_GAME_IDS:
         return payload
 
     game = _object(payload.get("game_info"), "game_info")
+    if game_id == SCHWARZMAN_ABANDON_GAME_ID:
+        home_team = _object(
+            game.get("home_tourn_team_info"), "game_info.home_tourn_team_info"
+        )
+        if (
+            game.get("id") != game_id
+            or game.get("tourn_id") != 124
+            or game.get("home_tourn_team_id") != 1751
+            or home_team.get("team_id") != 119
+            or game.get("result") != "1:0"
+        ):
+            raise ValueError(f"unexpected source data for adjusted game {game_id}")
+        adjusted_game = dict(game)
+        adjusted_game.update(
+            {
+                "home_goal": 0,
+                "away_goal": 3,
+                "result": "0:3",
+                "home_penalty": None,
+                "away_penalty": None,
+                "home_abandon": 1,
+            }
+        )
+        adjusted_payload = dict(payload)
+        adjusted_payload["game_info"] = adjusted_game
+        return adjusted_payload
+
     away_team = _object(
         game.get("away_tourn_team_info"), "game_info.away_tourn_team_info"
     )
@@ -188,10 +217,14 @@ def _adjust_game_payload(payload: Mapping[str, Any], game_id: int) -> Mapping[st
 
     events = _array(payload.get("events"), "events")
     parsed_events = [_object(event, "events[]") for event in events]
-    removed = [event for event in parsed_events if event.get("id") in REMOVED_EVENT_IDS]
+    removed = [
+        event
+        for event in parsed_events
+        if event.get("id") in SOFTWARE_REMOVED_EVENT_IDS
+    ]
     if (
         len(removed) != 2
-        or {event.get("id") for event in removed} != REMOVED_EVENT_IDS
+        or {event.get("id") for event in removed} != SOFTWARE_REMOVED_EVENT_IDS
         or any(
             event.get("type") != "GOAL"
             or event.get("side") != "HOME"
@@ -208,9 +241,33 @@ def _adjust_game_payload(payload: Mapping[str, Any], game_id: int) -> Mapping[st
     adjusted_payload = dict(payload)
     adjusted_payload["game_info"] = adjusted_game
     adjusted_payload["events"] = [
-        event for event in parsed_events if event.get("id") not in REMOVED_EVENT_IDS
+        event
+        for event in parsed_events
+        if event.get("id") not in SOFTWARE_REMOVED_EVENT_IDS
     ]
     return adjusted_payload
+
+
+def _adjust_tournament_games(document: dict[str, object]) -> None:
+    games = _array(document.get("games"), "games")
+    for raw_game in games:
+        if not isinstance(raw_game, dict):
+            raise ValueError("games[] must be an object")
+        game = raw_game
+        game_id = game.get("game_id")
+        if game_id == SOFTWARE_ABANDON_GAME_ID:
+            game["away_abandon"] = True
+        elif game_id == SCHWARZMAN_ABANDON_GAME_ID:
+            game.update(
+                {
+                    "home_score": 0,
+                    "away_score": 3,
+                    "result_text": "0:3",
+                    "home_penalty": None,
+                    "away_penalty": None,
+                    "home_abandon": True,
+                }
+            )
 
 
 def _tournament_document(
@@ -265,7 +322,7 @@ async def _read_game(
         last_error: THUFootballError | None = None
         for attempt in range(3):
             try:
-                if game_id == ADJUSTED_GAME_ID:
+                if game_id in ADJUSTED_GAME_IDS:
                     payload = await client._request_json(
                         "GetGameInfo",
                         {"game_id": game_id},
@@ -333,6 +390,7 @@ async def _synchronise() -> dict[str, object]:
                 competition=competition,
                 fetched_at=fetched_at,
             )
+            _adjust_tournament_games(tournament_documents[tournament_id])
 
         game_tournaments: dict[int, int] = {}
         for tournament_id, document in tournament_documents.items():
@@ -434,11 +492,17 @@ async def _synchronise() -> dict[str, object]:
         "failed_requests": [],
         "manual_adjustments": [
             {
-                "game_id": ADJUSTED_GAME_ID,
+                "game_id": SOFTWARE_ABANDON_GAME_ID,
                 "decision": "away_abandon",
-                "removed_event_ids": sorted(REMOVED_EVENT_IDS),
+                "removed_event_ids": sorted(SOFTWARE_REMOVED_EVENT_IDS),
                 "reason": "软件学院被判负；两条81分钟进球事件为错误记录。",
-            }
+            },
+            {
+                "game_id": SCHWARZMAN_ABANDON_GAME_ID,
+                "decision": "home_abandon",
+                "removed_event_ids": [],
+                "reason": "苏世民书院因球员资格问题被判负。",
+            },
         ],
     }
     _write_json(AUTOMATIC_ROOT / "manifest.json", manifest)

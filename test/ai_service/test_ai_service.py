@@ -79,9 +79,13 @@ class AIServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["model"], "qwen3.5-35b-a3b")
         self.assertEqual(payload["messages"][1]["content"], "你好")
         self.assertFalse(payload["stream"])
+        self.assertFalse(payload["enable_thinking"])
 
     async def test_classifies_authentication_failure_without_exposing_key(self) -> None:
+        requests: list[httpx.Request] = []
+
         def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
             return httpx.Response(401, json={"error": {"message": "bad key"}})
 
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -98,13 +102,48 @@ class AIServiceTests(unittest.IsolatedAsyncioTestCase):
             await http_client.aclose()
         self.assertEqual(caught.exception.status_code, 401)
         self.assertNotIn("private-key", str(caught.exception))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
 
-    def test_config_defines_three_selectable_profiles_without_secrets(self) -> None:
+    def test_config_defines_selectable_profiles_without_secrets(self) -> None:
         config = load_ai_service_config()
         self.assertEqual(config.default_profile, "qwen")
-        self.assertEqual(set(config.profiles), {"qwen", "deepseek", "glm"})
+        self.assertEqual(
+            set(config.profiles),
+            {
+                "qwen",
+                "deepseek",
+                "deepseek_v4_pro_thinking",
+                "glm",
+                "doubao_turbo",
+                "doubao_pro",
+                "kimi_k2_6",
+                "kimi_k2_6_no_thinking",
+                "kimi_k3",
+            },
+        )
         self.assertEqual(
             config.get_profile("glm").api_key_env, "AI_SERVICE_GLM_API_KEY"
+        )
+        self.assertEqual(
+            config.get_profile("deepseek_v4_pro_thinking").request_options,
+            {"thinking": {"type": "enabled"}},
+        )
+        self.assertEqual(
+            config.get_profile("doubao_turbo").request_options,
+            {"thinking": {"type": "enabled"}},
+        )
+        self.assertEqual(
+            config.get_profile("kimi_k3").request_options,
+            {"reasoning_effort": "max"},
+        )
+        self.assertEqual(
+            config.get_profile("kimi_k2_6_no_thinking").request_options,
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(
+            config.get_profile("kimi_k3").api_key_env,
+            "AI_SERVICE_QWEN_API_KEY",
         )
         self.assertNotIn("api_key", config.get_profile("glm").__dict__)
 
