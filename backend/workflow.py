@@ -16,6 +16,7 @@ from typing import Any, Callable
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from ai_service import AIChatService
 from auto_preview import Competition, NoGamesForDate
 from auto_preview.config import competition_config
 from auto_preview.source import (
@@ -69,6 +70,7 @@ from thufootball import (
     THUFootballQueryService,
     THUFootballReportService,
 )
+from thufootball.rankings import StaticOutcomeCatalog
 from weather import DailyWeather, WeatherQueryService
 from wechat_official import (
     Article,
@@ -122,6 +124,7 @@ class WorkflowError(RuntimeError):
 
 
 ServiceFactory = Callable[[], AbstractAsyncContextManager[Any]]
+AIServiceFactory = Callable[[str], AbstractAsyncContextManager[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,14 +133,15 @@ class ExternalFactories:
     weather: ServiceFactory = WeatherQueryService.from_environment
     wechat: ServiceFactory = WechatOfficialService.from_environment
     reports: ServiceFactory = lambda: WebsiteReportSession()
+    ai: AIServiceFactory = AIChatService.from_config
 
 
 class WebsiteReportSession:
     """Share one authenticated THUFootball client while rendering reports."""
 
-    def __init__(self) -> None:
+    def __init__(self, outcome_catalog: StaticOutcomeCatalog | None = None) -> None:
         self._client = THUFootballClient()
-        self._reports = THUFootballReportService(self._client)
+        self._reports = THUFootballReportService(self._client, outcome_catalog)
 
     async def __aenter__(self) -> "WebsiteReportSession":
         await self._client.__aenter__()

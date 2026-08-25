@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import backend.api as backend_api
 import backend.credentials as backend_credentials
+from ai_service import ChatResult, TokenUsage
+from backend.ai_preview import prepare_generation
 from backend.api import create_app
 from backend.artifacts import (
     parse_report_storage_descriptor,
@@ -42,6 +45,7 @@ from backend.credentials import (
     persist_credentials,
 )
 from backend.models import (
+    AIPreviewResult,
     Base,
     Batch,
     Match,
@@ -63,6 +67,7 @@ from backend.workflow import (
     set_manual_weather,
     upsert_source,
 )
+from test.football_data import clone_football_data
 from thufootball import (
     AuthenticationError,
     GameDetail,
@@ -73,6 +78,7 @@ from thufootball import (
     ReportValidationError,
     UserProbe,
 )
+from thufootball.database import FootballDataBase
 from wechat_official import CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -132,6 +138,8 @@ def postgres_engine():
         connect_args={"options": f"-csearch_path={schema}"},
     )
     Base.metadata.create_all(engine)
+    FootballDataBase.metadata.create_all(engine)
+    clone_football_data(administration, engine)
     try:
         yield engine
     finally:
@@ -402,6 +410,12 @@ def test_database_columns_and_indexes_match_plan(postgres_engine) -> None:
         "wechat_drafts": {
             "id", "articles", "publication_fingerprint", "media_id",
             "wechat_created_at", "created_at",
+        },
+        "ai_preview_results": {
+            "game_id", "model_profile", "prompt_hash", "model_config_hash",
+            "request_token", "status", "content", "error_code",
+            "error_message", "requested_by_user_id", "requested_at",
+            "started_at", "finished_at",
         },
     }
     for table, columns in expected.items():
@@ -2092,3 +2106,225 @@ def test_built_frontend_is_mounted_after_api_routes(
         assert "frontend" in client.get("/").text
         assert client.get("/api/auth/me").status_code == 401
         assert "Swagger UI" in client.get("/docs").text
+
+
+def test_ai_preview_generation_cache_and_manual_context(
+    postgres_engine,
+    settings: WebsiteSettings,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_SERVICE_DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.setenv("AI_SERVICE_QWEN_API_KEY", "test-qwen-key")
+    direct_factory = sessionmaker(bind=postgres_engine, expire_on_commit=False)
+    with direct_factory.begin() as session:
+        admin = User(
+            username="AIPreviewAdmin",
+            display_name="AI 管理员",
+            password_hash=hash_password("password-123"),
+            role="admin",
+        )
+        session.add(admin)
+        session.flush()
+        admin_id = admin.id
+        batch = _batch(
+            session,
+            target_date=date(2026, 9, 1),
+            competition="male",
+            complete=True,
+            game_id=4245,
+        )
+        batch_id = batch.id
+
+    calls: list[str] = []
+
+    class FakeAIService:
+        def __init__(self, profile: str) -> None:
+            self.profile = profile
+
+        async def chat(self, _messages):
+            calls.append(self.profile)
+            await asyncio.sleep(0.02)
+            return ChatResult(
+                content="这是生成的测试前瞻。",
+                profile=self.profile,
+                model="fake-model",
+                finish_reason="stop",
+                usage=TokenUsage(),
+            )
+
+    @asynccontextmanager
+    async def ai_factory(profile: str):
+        yield FakeAIService(profile)
+
+    app = create_app(
+        settings=settings,
+        session_factory=direct_factory,
+        external_factories=ExternalFactories(ai=ai_factory),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/api/auth/login",
+            json={"username": "AIPreviewAdmin", "password": "password-123"},
+        ).raise_for_status()
+        context = client.get("/api/matches/4245/ai-preview-context")
+        context.raise_for_status()
+        data = context.json()
+        assert [item["profile"] for item in data["models"]] == [
+            "deepseek_v4_flash_thinking",
+            "qwen38_thinking",
+        ]
+        assert data["manual"]["home_team"]["sort_basis"] == "minutes"
+        assert data["manual"]["home_team"]["players"]
+        assert client.get("/api/admin/institutions").json()["items"]
+
+        generated = client.post(
+            "/api/matches/4245/ai-preview-generations",
+            json={"model_profile": "deepseek_v4_flash_thinking"},
+        )
+        assert generated.status_code == 202
+        for _ in range(30):
+            result = client.get(
+                "/api/matches/4245/ai-preview-results/"
+                "deepseek_v4_flash_thinking"
+            )
+            result.raise_for_status()
+            if result.json()["status"] == "succeeded":
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("AI preview task did not finish")
+        assert result.json()["content"] == "这是生成的测试前瞻。"
+
+        reused = client.post(
+            "/api/matches/4245/ai-preview-generations",
+            json={"model_profile": "deepseek_v4_flash_thinking"},
+        )
+        reused.raise_for_status()
+        assert reused.json()["reused"] is True
+        assert calls == ["deepseek_v4_flash_thinking"]
+
+        assert batch_id > 0
+    with direct_factory.begin() as session:
+        session.execute(
+            delete(AIPreviewResult).where(AIPreviewResult.game_id == 4245)
+        )
+        session.execute(delete(Match).where(Match.game_id == 4245))
+        session.execute(delete(Batch).where(Batch.id == batch_id))
+        session.execute(delete(Weather).where(Weather.date == date(2026, 9, 1)))
+        session.execute(delete(User).where(User.id == admin_id))
+
+
+def test_match_and_admin_manual_description_apis(
+    session_factory,
+    settings: WebsiteSettings,
+) -> None:
+    with session_factory.begin() as session:
+        admin = User(
+            username="ManualDescriptionAdmin",
+            display_name="资料管理员",
+            password_hash=hash_password("password-123"),
+            role="admin",
+        )
+        session.add(admin)
+        _batch(
+            session,
+            target_date=date(2026, 9, 2),
+            competition="male",
+            complete=True,
+            game_id=4245,
+        )
+    app = create_app(settings=settings, session_factory=session_factory)
+    with TestClient(app) as client:
+        client.post(
+            "/api/auth/login",
+            json={
+                "username": "ManualDescriptionAdmin",
+                "password": "password-123",
+            },
+        ).raise_for_status()
+        context = client.get("/api/matches/4245/ai-preview-context").json()
+        manual = context["manual"]
+        payload = {}
+        for side in ("home_team", "away_team"):
+            team = manual[side]
+            payload[side] = {
+                "team_description": team["team_description"],
+                "player_descriptions": {
+                    player["name"]: player["description"]
+                    for player in team["players"]
+                },
+            }
+        payload["home_team"]["team_description"] += " 测试更新。"
+        saved = client.put(
+            "/api/matches/4245/manual-descriptions",
+            json=payload,
+        )
+        saved.raise_for_status()
+        assert saved.json()["home_team"]["team_description"].endswith(
+            "测试更新。"
+        )
+        institutions = client.get("/api/admin/institutions")
+        institutions.raise_for_status()
+        assert institutions.json()["items"]
+
+
+def test_ai_preview_slot_allows_only_one_concurrent_generation(
+    postgres_engine,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_SERVICE_DEEPSEEK_API_KEY", "test-deepseek-key")
+    direct_factory = sessionmaker(bind=postgres_engine, expire_on_commit=False)
+    suffix = uuid.uuid4().hex[:8]
+    target_date = date(2098, 12, 30)
+    with direct_factory.begin() as session:
+        user = User(
+            username=f"AIConcurrent{suffix}",
+            display_name="并发用户",
+            password_hash="hash",
+            role="admin",
+        )
+        session.add(user)
+        session.flush()
+        user_id = user.id
+        batch = _batch(
+            session,
+            target_date=target_date,
+            competition="male",
+            complete=True,
+            game_id=4245,
+        )
+        batch_id = batch.id
+
+    gate = Barrier(2)
+
+    def prepare() -> bool:
+        with direct_factory() as session:
+            gate.wait()
+            _, material = prepare_generation(
+                session,
+                game_id=4245,
+                model_profile="deepseek_v4_flash_thinking",
+                requested_by_user_id=user_id,
+            )
+            return material is not None
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            started = list(executor.map(lambda _: prepare(), range(2)))
+        assert sorted(started) == [False, True]
+        with direct_factory() as session:
+            result = session.get(
+                AIPreviewResult,
+                (4245, "deepseek_v4_flash_thinking"),
+            )
+            assert result is not None
+            assert result.status == "queued"
+    finally:
+        with direct_factory.begin() as session:
+            session.execute(
+                delete(AIPreviewResult).where(AIPreviewResult.game_id == 4245)
+            )
+            session.execute(delete(Match).where(Match.game_id == 4245))
+            session.execute(delete(Batch).where(Batch.id == batch_id))
+            session.execute(delete(Weather).where(Weather.date == target_date))
+            session.execute(delete(User).where(User.id == user_id))
