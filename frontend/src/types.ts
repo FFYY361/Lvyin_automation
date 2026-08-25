@@ -213,6 +213,84 @@ export interface CredentialStatus {
   updated_at?: string;
 }
 
+export type AIPreviewStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface AIPreviewModelOption {
+  profile: string;
+  label: string;
+  estimated_seconds: number;
+  score: number;
+  recommended: boolean;
+  available: boolean;
+}
+
+export interface AIPreviewResult {
+  model_profile: string;
+  status: AIPreviewStatus;
+  content: string | null;
+  is_stale: boolean;
+  error: { code: string; message: string } | null;
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  reused?: boolean;
+}
+
+export interface MatchManualPlayer {
+  name: string;
+  kit_number: number | null;
+  minutes: number | null;
+  description: string;
+}
+
+export interface MatchManualTeam {
+  institution_name: string;
+  institution_short_name: string;
+  team_name: string;
+  team_description: string;
+  sort_basis: "minutes" | "kit_number";
+  players: MatchManualPlayer[];
+}
+
+export interface AIPreviewContext {
+  models: AIPreviewModelOption[];
+  manual: {
+    competition: Competition;
+    home_team: MatchManualTeam;
+    away_team: MatchManualTeam;
+  };
+  results: Record<string, AIPreviewResult>;
+}
+
+export interface InstitutionSummary {
+  name: string;
+  short_name: string;
+  male_team_ids: number[];
+  female_team_ids: number[];
+  futsal_team_ids: number[];
+  team_descriptions_complete: Record<Competition, boolean>;
+  player_description_count: number;
+  player_count: number;
+}
+
+export interface InstitutionPlayer {
+  name: string;
+  competitions: Competition[];
+  description: string;
+}
+
+export interface InstitutionDetail {
+  name: string;
+  short_name: string;
+  male_team_ids: number[];
+  female_team_ids: number[];
+  futsal_team_ids: number[];
+  male_description: string;
+  female_description: string;
+  futsal_description: string;
+  players: InstitutionPlayer[];
+}
+
 export interface DraftArticleComponent {
   article_id: number;
   content_fingerprint: string;

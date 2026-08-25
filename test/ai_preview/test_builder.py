@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SRC_ROOT = _PROJECT_ROOT / "src"
@@ -16,34 +16,6 @@ from ai_preview import PromptConfig, build_prompt_bundle, build_system_message
 
 class PromptBuilderTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._temporary_directory = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary_directory.name)
-        (self.root / "automatic" / "games").mkdir(parents=True)
-        (self.root / "automatic" / "tournaments").mkdir()
-        (self.root / "institutions").mkdir()
-        self.teams_path = self.root / "teams.json"
-        _write_json(
-            self.teams_path,
-            {
-                "甲学院": {"男足": [1, 101]},
-                "乙书院": {"男足": [2]},
-            },
-        )
-        (self.root / "institutions" / "甲学院.md").write_text(
-            "# 甲学院\n\n## 球队\n\n### 男足\n\n擅长地面推进。\n\n"
-            "## 球员\n\n### 甲球员（男足）\n\n速度快。\n",
-            encoding="utf-8",
-        )
-        (self.root / "institutions" / "乙书院.md").write_text(
-            "# 乙书院\n\n## 球队\n\n### 男足\n\n防守组织紧凑。\n\n"
-            "## 球员\n\n### 乙球员（男足）\n\n待补充。\n",
-            encoding="utf-8",
-        )
-        _write_json(
-            self.root / "automatic" / "manifest.json",
-            {"tournaments": [{"tournament_id": 7, "competition": "男足"}]},
-        )
-
         games = [
             _game(10, "2025-10-01T13:00:00+08:00", 2, 101, 1, 2),
             _game(11, "2025-10-20T13:00:00+08:00", 1, 3, 0, 3),
@@ -59,22 +31,22 @@ class PromptBuilderTests(unittest.TestCase):
                 stage="半决赛",
             ),
         ]
-        _write_json(
-            self.root / "automatic" / "tournaments" / "7.json",
-            {
+        tournament = SimpleNamespace(
+            id=7,
+            competition="male",
+            final_rankings={},
+            data={
                 "tournament": {
                     "id": 7,
                     "name": "2025~2026马杯男足甲级",
                     "season": "2025~2026",
                 },
-                "final_ranking_source": None,
                 "registered_teams": [],
                 "games": games,
             },
         )
-        _write_json(
-            self.root / "automatic" / "games" / "10.json",
-            {
+        game_documents = {
+            10: {
                 "game": games[0],
                 "events": [
                     _event("START", "home", "乙首发", kit=8),
@@ -85,27 +57,52 @@ class PromptBuilderTests(unittest.TestCase):
                     _event("OFF", "away", "甲首发", minute=60),
                     _event("ON", "away", "甲替补", minute=60),
                 ],
-            },
-        )
+            }
+        }
         for game, player in ((games[1], "甲近况球员"), (games[2], "乙近况球员")):
-            _write_json(
-                self.root / "automatic" / "games" / f"{game['game_id']}.json",
-                {"game": game, "events": [_event("START", "home", player)]},
-            )
-        _write_json(
-            self.root / "automatic" / "games" / "20.json",
-            {"game": games[3], "events": []},
+            game_documents[game["game_id"]] = {
+                "game": game,
+                "events": [_event("START", "home", player)],
+            }
+        game_documents[20] = {"game": games[3], "events": []}
+        institutions = {
+            1: SimpleNamespace(
+                name="甲学院",
+                male_team_ids=[1, 101],
+                male_description="擅长地面推进。",
+                player_descriptions={
+                    "甲球员": {
+                        "competitions": ["male"],
+                        "description": "速度快。",
+                    }
+                },
+            ),
+            2: SimpleNamespace(
+                name="乙书院",
+                male_team_ids=[2],
+                male_description="防守组织紧凑。",
+                player_descriptions={
+                    "乙球员": {
+                        "competitions": ["male"],
+                        "description": "待补充。",
+                    }
+                },
+            ),
+        }
+        self.repository = _FakeRepository(
+            tournament,
+            {
+                game_id: SimpleNamespace(id=game_id, data=document)
+                for game_id, document in game_documents.items()
+            },
+            institutions,
         )
-
-    def tearDown(self) -> None:
-        self._temporary_directory.cleanup()
 
     def test_builds_context_and_normalizes_reversed_head_to_head(self) -> None:
         bundle = build_prompt_bundle(
             20,
             config=PromptConfig(recent_matches_with_events=1, history_seasons=1),
-            data_root=self.root,
-            teams_path=self.teams_path,
+            repository=self.repository,
         )
 
         automatic = bundle.automatic_context
@@ -144,8 +141,7 @@ class PromptBuilderTests(unittest.TestCase):
         bundle = build_prompt_bundle(
             20,
             config=PromptConfig(recent_matches_with_events=0, history_seasons=1),
-            data_root=self.root,
-            teams_path=self.teams_path,
+            repository=self.repository,
         )
 
         home = bundle.automatic_context["home_team"]
@@ -166,8 +162,25 @@ class PromptBuilderTests(unittest.TestCase):
                 self.assertEqual(message.count("赛制说明"), 1)
 
 
-def _write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+class _FakeRepository:
+    def __init__(self, tournament, games, institutions) -> None:
+        self.tournament = tournament
+        self.games = games
+        self.institutions = institutions
+
+    def list_tournaments(self):
+        return [self.tournament]
+
+    def get_tournament(self, tournament_id: int):
+        assert tournament_id == self.tournament.id
+        return self.tournament
+
+    def get_game(self, game_id: int):
+        return self.games[game_id]
+
+    def find_institution(self, team_id: int, competition: str):
+        assert competition == "male"
+        return self.institutions[1 if team_id in {1, 101} else 2]
 
 
 def _game(

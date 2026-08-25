@@ -32,8 +32,9 @@ from thufootball import (
     THUFootballQueryService,
 )
 from thufootball.rankings import (
+    StaticOutcomeCatalog,
     StaticTeamIdentity,
-    load_static_outcome_catalog,
+    load_outcome_catalog,
 )
 
 from .config import CompetitionConfig
@@ -93,13 +94,18 @@ class PreviewSourceBuilder:
         config: CompetitionConfig,
         *,
         logger: logging.Logger,
+        outcome_catalog: StaticOutcomeCatalog | None = None,
     ) -> None:
         self._queries = queries
         self._config = config
         self._logger = logger
         self._short_names: dict[int, str] = {}
         category = _TEAM_CATEGORY_BY_COMPETITION[config.competition.value]
-        catalog = load_static_outcome_catalog()
+        catalog = (
+            outcome_catalog
+            or getattr(queries, "outcome_catalog", None)
+            or load_outcome_catalog()
+        )
         self._official_teams: dict[int, StaticTeamIdentity] = {}
         for team_id, team_names in catalog.team_names_by_id.items():
             for team_name in team_names:

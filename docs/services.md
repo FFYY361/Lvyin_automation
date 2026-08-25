@@ -38,6 +38,12 @@ async with AIChatService.from_config("qwen") as service:
 `THUFootballQueryService` 查询比赛、球队赛果、赛事成绩和交锋记录；
 `THUFootballReportService` 生成单场 PNG 战报。
 
+球队身份、简称、最终排名和历史比赛来自 PostgreSQL。部署前执行：
+
+```powershell
+python -m alembic upgrade head
+```
+
 ```powershell
 thufootball games --match-date 2026-07-15 --tournament-id 122
 thufootball team-matches 48 --tournament-id 122

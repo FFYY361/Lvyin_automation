@@ -32,7 +32,7 @@ from .policy import (
     BLACKLISTED_TOURNAMENT_IDS,
     blacklisted_tournament_ids,
 )
-from .rankings import load_static_outcome_catalog
+from .rankings import StaticOutcomeCatalog, load_outcome_catalog
 
 
 @dataclass(frozen=True)
@@ -92,8 +92,9 @@ def _include_unfinished(value: object) -> bool:
     return value
 
 
-def _team_alias_ids(team_id: int) -> frozenset[int]:
-    catalog = load_static_outcome_catalog()
+def _team_alias_ids(
+    team_id: int, catalog: StaticOutcomeCatalog
+) -> frozenset[int]:
     team_names = catalog.team_names_by_id.get(team_id)
     if team_names is None:
         return frozenset((team_id,))
@@ -338,6 +339,7 @@ class THUFootballQueryService:
         client: THUFootballClient,
         *,
         max_concurrency: int = 4,
+        outcome_catalog: StaticOutcomeCatalog | None = None,
         _close_client: bool = False,
     ) -> None:
         if not isinstance(client, THUFootballClient):
@@ -349,10 +351,17 @@ class THUFootballQueryService:
         ):
             raise _validation_error("max_concurrency must be a positive integer")
         self._client = client
+        self._outcome_catalog = outcome_catalog
         self._close_client = _close_client
         self._tournament_semaphore = asyncio.Semaphore(max_concurrency)
         self._tournament_cache: dict[int, TournamentSnapshot] = {}
         self._tournament_tasks: dict[int, asyncio.Task[TournamentSnapshot]] = {}
+
+    @property
+    def outcome_catalog(self) -> StaticOutcomeCatalog:
+        if self._outcome_catalog is None:
+            self._outcome_catalog = load_outcome_catalog()
+        return self._outcome_catalog
 
     @classmethod
     def from_environment(
@@ -581,7 +590,7 @@ class THUFootballQueryService:
         tournament_ids: Sequence[int] | None = None,
     ) -> list[TeamTournamentOutcome]:
         team_id = _positive_id(team_id, "team_id")
-        catalog = load_static_outcome_catalog()
+        catalog = self.outcome_catalog
         team_names = catalog.team_names_by_id.get(team_id)
         if team_names is None:
             raise _validation_error(
@@ -640,8 +649,9 @@ class THUFootballQueryService:
         if team_a_id == team_b_id:
             raise _validation_error("team_a_id and team_b_id must be different")
         include_unfinished = _include_unfinished(include_unfinished)
-        team_a_ids = _team_alias_ids(team_a_id)
-        team_b_ids = _team_alias_ids(team_b_id)
+        catalog = self.outcome_catalog
+        team_a_ids = _team_alias_ids(team_a_id, catalog)
+        team_b_ids = _team_alias_ids(team_b_id, catalog)
         if team_a_ids & team_b_ids:
             raise _validation_error(
                 "team_a_id and team_b_id resolve to overlapping team ID aliases"

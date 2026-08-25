@@ -1,4 +1,4 @@
-"""Synchronise the complete local automatic-data repository for AI previews."""
+"""Synchronise complete automatic football data into PostgreSQL."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import asyncio
 import json
 import sys
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session, sessionmaker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 for import_root in (PROJECT_ROOT, PROJECT_ROOT / "src"):
@@ -21,34 +23,30 @@ from backend.credentials import (
     AutoRefreshingTHUFootballClient,
 )
 from thufootball.cli import _jsonable
-from thufootball.errors import THUFootballError
+from thufootball.database import (
+    GameRecord,
+    TournamentRecord,
+    create_football_engine,
+    create_football_session_factory,
+)
+from thufootball.errors import ConfigurationError, THUFootballError
 from thufootball.mappers import map_game_detail, map_tournament_snapshot
 
-AUTOMATIC_ROOT = PROJECT_ROOT / "data" / "ai_preview" / "automatic"
-TOURNAMENT_ROOT = AUTOMATIC_ROOT / "tournaments"
-GAME_ROOT = AUTOMATIC_ROOT / "games"
-SCHEMA_VERSION = 1
-TOURNAMENTS = {
-    122: "男足",
-    124: "男足",
-    126: "男足",
-    123: "女足",
-    128: "五人制",
-    99: "男足",
-    100: "男足",
-    101: "男足",
-    102: "女足",
-    111: "五人制",
-    89: "男足",
-    88: "男足",
-    90: "女足",
-    93: "五人制",
-}
 GAME_CONCURRENCY = 6
 SOFTWARE_ABANDON_GAME_ID = 3497
 SOFTWARE_REMOVED_EVENT_IDS = {124696, 124697}
 SCHWARZMAN_ABANDON_GAME_ID = 4152
 ADJUSTED_GAME_IDS = {SOFTWARE_ABANDON_GAME_ID, SCHWARZMAN_ABANDON_GAME_ID}
+
+
+def _sync_target_tournament_ids(session: Session) -> list[int]:
+    return list(
+        session.scalars(
+            select(TournamentRecord.id)
+            .where(TournamentRecord.is_finalized.is_(False))
+            .order_by(TournamentRecord.id)
+        )
+    )
 
 
 def _object(value: object, name: str) -> Mapping[str, Any]:
@@ -274,26 +272,13 @@ def _tournament_document(
     payload: Mapping[str, Any],
     *,
     tournament_id: int,
-    competition: str,
-    fetched_at: str,
 ) -> dict[str, object]:
     snapshot = map_tournament_snapshot(
         payload,
         expected_tournament_id=tournament_id,
     )
-    ranking_path = f"src/thufootball/notes/ranks/{tournament_id}.json"
-    if not (PROJECT_ROOT / ranking_path).is_file():
-        raise ValueError(f"missing final ranking file for tournament {tournament_id}")
     season_ids = _object(payload.get("season_ids"), "season_ids")
     return {
-        "schema_version": SCHEMA_VERSION,
-        "source": {
-            "endpoint": "GetTournInfo",
-            "tournament_id": tournament_id,
-            "fetched_at": fetched_at,
-        },
-        "competition": competition,
-        "final_ranking_source": ranking_path,
         "tournament": _tournament_info(payload.get("tourn_info")),
         "season_ids": dict(season_ids),
         "registered_teams": [
@@ -316,7 +301,6 @@ async def _read_game(
     client: AutoRefreshingTHUFootballClient,
     semaphore: asyncio.Semaphore,
     game_id: int,
-    fetched_at: str,
 ) -> tuple[int, dict[str, object]]:
     async with semaphore:
         last_error: THUFootballError | None = None
@@ -334,16 +318,7 @@ async def _read_game(
                     )
                 else:
                     detail = await client.get_game_info(game_id)
-                return game_id, {
-                    "schema_version": SCHEMA_VERSION,
-                    "source": {
-                        "endpoint": "GetGameInfo",
-                        "game_id": game_id,
-                        "tournament_id": detail.game.tournament_id,
-                        "fetched_at": fetched_at,
-                    },
-                    **_jsonable(detail),
-                }
+                return game_id, _jsonable(detail)
             except THUFootballError as exc:
                 last_error = exc
                 if not exc.retryable or attempt == 2:
@@ -354,22 +329,23 @@ async def _read_game(
         raise AssertionError("unreachable") from last_error
 
 
-def _write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    temporary.replace(path)
-
-
 async def _synchronise() -> dict[str, object]:
     load_env_file()
+    engine = create_football_engine()
+    session_factory = create_football_session_factory(engine)
+    try:
+        with session_factory() as session:
+            target_tournament_ids = _sync_target_tournament_ids(session)
+    finally:
+        engine.dispose()
+    if not target_tournament_ids:
+        raise ConfigurationError(
+            "no unfinalized tournaments are available for automatic-data synchronisation",
+            stage="configuration",
+        )
+
     credential_manager = AutomaticCredentialManager.from_environment()
     openid, session_key = await credential_manager.refresh()
-    fetched_at = datetime.now(UTC).isoformat()
     tournament_documents: dict[int, dict[str, object]] = {}
 
     async with AutoRefreshingTHUFootballClient(
@@ -378,7 +354,7 @@ async def _synchronise() -> dict[str, object]:
         load_environment=False,
         credential_refresher=credential_manager.refresh,
     ) as client:
-        for tournament_id, competition in TOURNAMENTS.items():
+        for tournament_id in target_tournament_ids:
             payload = await client._request_json(
                 "GetTournInfo",
                 {"tourn_id": tournament_id},
@@ -387,12 +363,11 @@ async def _synchronise() -> dict[str, object]:
             tournament_documents[tournament_id] = _tournament_document(
                 payload,
                 tournament_id=tournament_id,
-                competition=competition,
-                fetched_at=fetched_at,
             )
             _adjust_tournament_games(tournament_documents[tournament_id])
 
         game_tournaments: dict[int, int] = {}
+        game_summaries: dict[int, Mapping[str, Any]] = {}
         for tournament_id, document in tournament_documents.items():
             games = document["games"]
             if not isinstance(games, list):
@@ -405,11 +380,12 @@ async def _synchronise() -> dict[str, object]:
                 previous = game_tournaments.setdefault(game_id, tournament_id)
                 if previous != tournament_id:
                     raise ValueError(f"game {game_id} belongs to multiple tournaments")
+                game_summaries[game_id] = item
 
         semaphore = asyncio.Semaphore(GAME_CONCURRENCY)
         game_items = await asyncio.gather(
             *(
-                _read_game(client, semaphore, game_id, fetched_at)
+                _read_game(client, semaphore, game_id)
                 for game_id in sorted(game_tournaments)
             )
         )
@@ -418,100 +394,116 @@ async def _synchronise() -> dict[str, object]:
     if set(game_documents) != set(game_tournaments):
         raise ValueError("not every tournament game has a complete detail snapshot")
 
-    TOURNAMENT_ROOT.mkdir(parents=True, exist_ok=True)
-    GAME_ROOT.mkdir(parents=True, exist_ok=True)
-    existing_games = {int(path.stem) for path in GAME_ROOT.glob("*.json")}
-    orphan_games = sorted(existing_games - set(game_documents))
-    if orphan_games:
-        raise ValueError(f"unexpected game snapshots already exist: {orphan_games}")
+    _validate_game_documents(game_tournaments, game_summaries, game_documents)
+    _persist_documents(
+        tournament_documents,
+        game_documents,
+    )
+    return _synchronisation_summary(tournament_documents, game_documents)
 
-    for tournament_id, document in tournament_documents.items():
-        _write_json(TOURNAMENT_ROOT / f"{tournament_id}.json", document)
-    for game_id, document in game_documents.items():
-        _write_json(GAME_ROOT / f"{game_id}.json", document)
 
-    tournament_entries = []
-    total_registered_teams = 0
-    total_registered_players = 0
-    total_valid_registered_players = 0
-    total_events = 0
-    for tournament_id in TOURNAMENTS:
-        document = tournament_documents[tournament_id]
-        teams = document["registered_teams"]
-        players = document["registered_players"]
-        games = document["games"]
-        suspensions = document["suspensions"]
-        if not all(
-            isinstance(items, list) for items in (teams, players, games, suspensions)
-        ):
-            raise ValueError("tournament document arrays are invalid")
-        tournament_game_ids = [game["game_id"] for game in games]
-        event_count = sum(
-            len(game_documents[game_id]["events"]) for game_id in tournament_game_ids
-        )
-        total_registered_teams += len(teams)
-        total_registered_players += len(players)
-        total_valid_registered_players += sum(
-            player["valid"] is True for player in players
-        )
-        total_events += event_count
-        tournament_entries.append(
-            {
-                "tournament_id": tournament_id,
-                "competition": TOURNAMENTS[tournament_id],
-                "tournament_path": f"tournaments/{tournament_id}.json",
-                "final_ranking_source": document["final_ranking_source"],
-                "registered_team_count": len(teams),
-                "registered_player_count": len(players),
-                "valid_registered_player_count": sum(
-                    player["valid"] is True for player in players
-                ),
-                "game_count": len(games),
-                "game_detail_count": len(tournament_game_ids),
-                "event_count": event_count,
-                "suspension_count": len(suspensions),
-            }
-        )
+def _validate_game_documents(
+    game_tournaments: Mapping[int, int],
+    game_summaries: Mapping[int, Mapping[str, Any]],
+    game_documents: Mapping[int, Mapping[str, Any]],
+) -> None:
+    for game_id, tournament_id in game_tournaments.items():
+        document = _object(game_documents[game_id], f"game {game_id}")
+        game = _object(document.get("game"), f"game {game_id}.game")
+        if game.get("game_id") != game_id:
+            raise ValueError(f"game document ID mismatch for game {game_id}")
+        if game.get("tournament_id") != tournament_id:
+            raise ValueError(f"game tournament mismatch for game {game_id}")
+        if game != game_summaries[game_id]:
+            raise ValueError(f"game summary and detail differ for game {game_id}")
 
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": fetched_at,
-        "complete": True,
-        "tournaments": tournament_entries,
-        "totals": {
-            "tournament_count": len(tournament_documents),
-            "registered_team_count": total_registered_teams,
-            "registered_player_count": total_registered_players,
-            "valid_registered_player_count": total_valid_registered_players,
-            "game_count": len(game_documents),
-            "game_detail_count": len(game_documents),
-            "event_count": total_events,
-        },
-        "missing_tournament_ids": [],
-        "missing_game_detail_ids": [],
-        "failed_requests": [],
-        "manual_adjustments": [
-            {
-                "game_id": SOFTWARE_ABANDON_GAME_ID,
-                "decision": "away_abandon",
-                "removed_event_ids": sorted(SOFTWARE_REMOVED_EVENT_IDS),
-                "reason": "软件学院被判负；两条81分钟进球事件为错误记录。",
-            },
-            {
-                "game_id": SCHWARZMAN_ABANDON_GAME_ID,
-                "decision": "home_abandon",
-                "removed_event_ids": [],
-                "reason": "苏世民书院因球员资格问题被判负。",
-            },
-        ],
+
+def _persist_documents(
+    tournament_documents: Mapping[int, dict[str, object]],
+    game_documents: Mapping[int, dict[str, object]],
+    *,
+    session_factory: sessionmaker[Session] | None = None,
+) -> None:
+    engine = create_football_engine() if session_factory is None else None
+    factory = session_factory or create_football_session_factory(engine)
+    try:
+        with factory.begin() as session:
+            records = list(
+                session.scalars(
+                    select(TournamentRecord).where(
+                        TournamentRecord.id.in_(tournament_documents),
+                        TournamentRecord.is_finalized.is_(False),
+                    )
+                )
+            )
+            if {record.id for record in records} != set(tournament_documents):
+                raise ConfigurationError(
+                    "tournament targets changed or were finalized before "
+                    "synchronisation commit",
+                    stage="configuration",
+                )
+            for record in records:
+                record.data = tournament_documents[record.id]
+
+            for game_id, document in game_documents.items():
+                game = _object(document.get("game"), f"game {game_id}.game")
+                tournament_id = game.get("tournament_id")
+                if not isinstance(tournament_id, int):
+                    raise ValueError(
+                        f"game {game_id}.game.tournament_id must be an integer"
+                    )
+                record = session.get(GameRecord, game_id)
+                if record is None:
+                    session.add(
+                        GameRecord(
+                            id=game_id,
+                            tournament_id=tournament_id,
+                            data=document,
+                        )
+                    )
+                else:
+                    record.tournament_id = tournament_id
+                    record.data = document
+
+            stale_ids = set(
+                session.scalars(
+                    select(GameRecord.id).where(
+                        GameRecord.tournament_id.in_(tournament_documents)
+                    )
+                )
+            ) - set(game_documents)
+            if stale_ids:
+                session.execute(delete(GameRecord).where(GameRecord.id.in_(stale_ids)))
+    finally:
+        if engine is not None:
+            engine.dispose()
+
+
+def _synchronisation_summary(
+    tournament_documents: Mapping[int, dict[str, object]],
+    game_documents: Mapping[int, dict[str, object]],
+) -> dict[str, int]:
+    return {
+        "tournament_count": len(tournament_documents),
+        "registered_team_count": sum(
+            len(_array(document.get("registered_teams"), "registered_teams"))
+            for document in tournament_documents.values()
+        ),
+        "registered_player_count": sum(
+            len(_array(document.get("registered_players"), "registered_players"))
+            for document in tournament_documents.values()
+        ),
+        "game_count": len(game_documents),
+        "event_count": sum(
+            len(_array(document.get("events"), "events"))
+            for document in game_documents.values()
+        ),
     }
-    _write_json(AUTOMATIC_ROOT / "manifest.json", manifest)
-    return manifest
 
 
 def main() -> int:
-    manifest = asyncio.run(_synchronise())
-    print(json.dumps(manifest["totals"], ensure_ascii=False, indent=2))
+    summary = asyncio.run(_synchronise())
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
 

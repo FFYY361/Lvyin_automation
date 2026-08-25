@@ -1,4 +1,4 @@
-"""Assemble AI preview prompt inputs from the local data repository."""
+"""Assemble AI preview prompt inputs from canonical database records."""
 
 from __future__ import annotations
 
@@ -9,11 +9,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from thufootball.database import (
+    FootballDataRepository,
+    InstitutionRecord,
+    create_football_engine,
+    create_football_session_factory,
+)
+
 from .config import PromptConfig, load_prompt_config
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_ROOT = PROJECT_ROOT / "data" / "ai_preview"
-DEFAULT_TEAMS_PATH = PROJECT_ROOT / "src" / "thufootball" / "notes" / "teams.json"
 DEFAULT_PROMPT_ROOT = Path(__file__).with_name("prompt")
 
 _PLACEHOLDERS = {"", "待补充", "待补充。", "无", "无。"}
@@ -29,6 +33,8 @@ _COMPETITION_RULE_FILES = {
     "女足": "women.md",
     "五人制": "futsal.md",
 }
+_COMPETITION_VALUES = {"男足": "male", "女足": "female", "五人制": "futsal"}
+_COMPETITION_LABELS = {value: key for key, value in _COMPETITION_VALUES.items()}
 
 
 @dataclass(frozen=True)
@@ -76,25 +82,24 @@ class _StoredMatch:
 
 
 class _Repository:
-    def __init__(self, data_root: Path) -> None:
-        self.data_root = data_root
-        self.automatic_root = data_root / "automatic"
+    def __init__(self, database: FootballDataRepository) -> None:
+        self.database = database
         self._tournaments: dict[int, dict[str, Any]] = {}
         self._game_details: dict[int, dict[str, Any]] = {}
-        manifest = _read_object(self.automatic_root / "manifest.json")
-        entries = _array(manifest.get("tournaments"), "manifest.tournaments")
         self.entries: dict[int, dict[str, Any]] = {}
-        for index, raw in enumerate(entries):
-            entry = _object(raw, f"manifest.tournaments[{index}]")
-            tournament_id = _integer(entry.get("tournament_id"), "tournament_id")
-            self.entries[tournament_id] = entry
+        for record in database.list_tournaments():
+            self.entries[record.id] = {
+                "tournament_id": record.id,
+                "competition": _COMPETITION_LABELS[record.competition],
+            }
 
     def tournament(self, tournament_id: int) -> dict[str, Any]:
         cached = self._tournaments.get(tournament_id)
         if cached is not None:
             return cached
-        path = self.automatic_root / "tournaments" / f"{tournament_id}.json"
-        document = _read_object(path)
+        record = self.database.get_tournament(tournament_id)
+        document = dict(record.data)
+        document["_final_rankings"] = record.final_rankings
         self._tournaments[tournament_id] = document
         return document
 
@@ -102,25 +107,41 @@ class _Repository:
         cached = self._game_details.get(game_id)
         if cached is not None:
             return cached
-        path = self.automatic_root / "games" / f"{game_id}.json"
-        document = _read_object(path)
+        document = dict(self.database.get_game(game_id).data)
         self._game_details[game_id] = document
         return document
+
+    def institution(self, team_id: int, competition: str) -> InstitutionRecord:
+        return self.database.find_institution(
+            team_id, _COMPETITION_VALUES[competition]
+        )
 
 
 def build_prompt_bundle(
     match_id: int,
     *,
     config: PromptConfig | None = None,
-    data_root: Path = DEFAULT_DATA_ROOT,
-    teams_path: Path = DEFAULT_TEAMS_PATH,
+    repository: FootballDataRepository | None = None,
     prompt_root: Path = DEFAULT_PROMPT_ROOT,
 ) -> PromptBundle:
     if isinstance(match_id, bool) or not isinstance(match_id, int) or match_id <= 0:
         raise ValueError("MATCH_ID 必须是正整数")
+    if repository is None:
+        engine = create_football_engine()
+        factory = create_football_session_factory(engine)
+        try:
+            with factory() as session:
+                return build_prompt_bundle(
+                    match_id,
+                    config=config,
+                    repository=FootballDataRepository(session),
+                    prompt_root=prompt_root,
+                )
+        finally:
+            engine.dispose()
     resolved_config = config or load_prompt_config()
-    repository = _Repository(data_root)
-    target_detail = repository.game_detail(match_id)
+    stored = _Repository(repository)
+    target_detail = stored.game_detail(match_id)
     target_game = _object(target_detail.get("game"), "game")
     if _integer(target_game.get("game_id"), "game.game_id") != match_id:
         raise ValueError(f"比赛文件与 MATCH_ID 不一致：{match_id}")
@@ -128,11 +149,11 @@ def build_prompt_bundle(
     target_tournament_id = _integer(
         target_game.get("tournament_id"), "game.tournament_id"
     )
-    target_tournament = repository.tournament(target_tournament_id)
+    target_tournament = stored.tournament(target_tournament_id)
     target_info = _object(target_tournament.get("tournament"), "tournament")
-    target_entry = repository.entries.get(target_tournament_id)
+    target_entry = stored.entries.get(target_tournament_id)
     if target_entry is None:
-        raise ValueError(f"manifest 缺少赛事 {target_tournament_id}")
+        raise ValueError(f"数据库缺少赛事 {target_tournament_id}")
 
     competition_kind = _text(target_entry.get("competition"), "competition")
     target_season = _canonical_season(target_info.get("season"))
@@ -141,21 +162,20 @@ def build_prompt_bundle(
     home_team_id = _integer(target_game.get("home_team_id"), "home_team_id")
     away_team_id = _integer(target_game.get("away_team_id"), "away_team_id")
 
-    teams = _read_object(teams_path)
-    home_institution = _find_institution(teams, competition_kind, home_team_id)
-    away_institution = _find_institution(teams, competition_kind, away_team_id)
-    home_team_ids = _institution_team_ids(teams, home_institution, competition_kind)
-    away_team_ids = _institution_team_ids(teams, away_institution, competition_kind)
+    home_record = stored.institution(home_team_id, competition_kind)
+    away_record = stored.institution(away_team_id, competition_kind)
+    home_institution = home_record.name
+    away_institution = away_record.name
+    home_team_ids = _institution_team_ids(home_record, competition_kind)
+    away_team_ids = _institution_team_ids(away_record, competition_kind)
     manual_context = {
         "home_team": _manual_team_context(
-            data_root,
-            home_institution,
+            home_record,
             competition_kind,
             _text(target_game.get("home_team_name"), "home_team_name"),
         ),
         "away_team": _manual_team_context(
-            data_root,
-            away_institution,
+            away_record,
             competition_kind,
             _text(target_game.get("away_team_name"), "away_team_name"),
         ),
@@ -163,10 +183,10 @@ def build_prompt_bundle(
 
     selected_tournaments: list[tuple[dict[str, Any], str, str]] = []
     minimum_season = target_season_start - resolved_config.history_seasons + 1
-    for tournament_id, entry in repository.entries.items():
+    for tournament_id, entry in stored.entries.items():
         if entry.get("competition") != competition_kind:
             continue
-        document = repository.tournament(tournament_id)
+        document = stored.tournament(tournament_id)
         info = _object(document.get("tournament"), "tournament")
         season = _canonical_season(info.get("season"))
         if minimum_season <= _season_start(season) <= target_season_start:
@@ -193,7 +213,7 @@ def build_prompt_bundle(
     }
 
     home_context = _automatic_team_context(
-        repository,
+        stored,
         selected_tournaments,
         prior_matches,
         direct_ids,
@@ -206,7 +226,7 @@ def build_prompt_bundle(
         resolved_config,
     )
     away_context = _automatic_team_context(
-        repository,
+        stored,
         selected_tournaments,
         prior_matches,
         direct_ids,
@@ -223,7 +243,7 @@ def build_prompt_bundle(
         "away_team": away_context,
         "head_to_head": [
             _head_to_head_match(
-                repository,
+                stored,
                 item,
                 home_team_ids,
                 away_team_ids,
@@ -261,15 +281,13 @@ def build_user_message(
     match_id: int,
     *,
     config: PromptConfig | None = None,
-    data_root: Path = DEFAULT_DATA_ROOT,
-    teams_path: Path = DEFAULT_TEAMS_PATH,
+    repository: FootballDataRepository | None = None,
     prompt_root: Path = DEFAULT_PROMPT_ROOT,
 ) -> str:
     return build_prompt_bundle(
         match_id,
         config=config,
-        data_root=data_root,
-        teams_path=teams_path,
+        repository=repository,
         prompt_root=prompt_root,
     ).render_user_message()
 
@@ -785,101 +803,40 @@ def _collect_matches(
 
 
 def _manual_team_context(
-    data_root: Path, institution: str, competition: str, team_name: str
+    institution: InstitutionRecord, competition: str, team_name: str
 ) -> dict[str, object]:
-    path = data_root / "institutions" / f"{institution}.md"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError(f"无法读取院系资料：{path}") from exc
-    sections = _markdown_sections(text)
-    team_description = next(
-        (
-            body
-            for parent, title, body in sections
-            if parent == "球队" and title == competition
-        ),
-        None,
-    )
-    players = []
-    for parent, title, body in sections:
-        if parent != "球员" or body in _PLACEHOLDERS:
-            continue
-        match = re.fullmatch(r"(.+?)[（(](.+?)[）)]", title)
-        if not match:
-            continue
-        categories = {item.strip() for item in re.split(r"[、,，]", match.group(2))}
-        if competition in categories:
-            players.append({"name": match.group(1).strip(), "description": body})
+    value = _COMPETITION_VALUES[competition]
+    team_description = getattr(institution, f"{value}_description")
+    players = [
+        {"name": name, "description": raw["description"]}
+        for name, raw in institution.player_descriptions.items()
+        if isinstance(raw, dict)
+        and isinstance(raw.get("competitions"), list)
+        and value in raw["competitions"]
+        and isinstance(raw.get("description"), str)
+        and raw["description"] not in _PLACEHOLDERS
+    ]
     return {
         "name": team_name,
-        "institution": institution,
+        "institution": institution.name,
         "team_description": team_description,
         "player_descriptions": players,
     }
 
 
-def _markdown_sections(text: str) -> list[tuple[str, str, str]]:
-    sections: list[tuple[str, str, str]] = []
-    parent = ""
-    title: str | None = None
-    body: list[str] = []
-
-    def flush() -> None:
-        nonlocal body
-        if title is not None:
-            sections.append((parent, title, _paragraph(body)))
-        body = []
-
-    for line in text.splitlines():
-        if line.startswith("## ") and not line.startswith("### "):
-            flush()
-            parent = line[3:].strip()
-            title = None
-        elif line.startswith("### "):
-            flush()
-            title = line[4:].strip()
-        elif title is not None:
-            body.append(line)
-    flush()
-    return sections
-
-
-def _paragraph(lines: list[str]) -> str:
-    return " ".join(line.strip() for line in lines if line.strip())
-
-
-def _find_institution(teams: dict[str, Any], competition: str, team_id: int) -> str:
-    matches = []
-    for institution, raw in teams.items():
-        if not isinstance(institution, str) or not isinstance(raw, dict):
-            continue
-        values = raw.get(competition)
-        if isinstance(values, list) and team_id in values:
-            matches.append(institution)
-    if len(matches) != 1:
-        raise ValueError(
-            f"无法唯一定位球队的院系资料：team_id={team_id}, competition={competition}"
-        )
-    return matches[0]
-
-
 def _institution_team_ids(
-    teams: dict[str, Any], institution: str, competition: str
+    institution: InstitutionRecord, competition: str
 ) -> set[int]:
-    raw = teams.get(institution)
-    if not isinstance(raw, dict):
-        raise ValueError(f"teams.json 缺少院系：{institution}")
-    values = raw.get(competition)
-    if not isinstance(values, list):
-        raise ValueError(f"teams.json 缺少球队清单：{institution}/{competition}")
+    values = getattr(
+        institution, f"{_COMPETITION_VALUES[competition]}_team_ids"
+    )
     team_ids = {
         value
         for value in values
         if isinstance(value, int) and not isinstance(value, bool) and value > 0
     }
     if not team_ids:
-        raise ValueError(f"teams.json 球队清单为空：{institution}/{competition}")
+        raise ValueError(f"数据库球队清单为空：{institution.name}/{competition}")
     return team_ids
 
 
@@ -889,13 +846,9 @@ def _final_result(
     competition: str,
     team_ids: set[int],
 ) -> str | None:
-    raw_path = tournament.get("final_ranking_source")
-    if not isinstance(raw_path, str) or not raw_path:
+    ranks = tournament.get("_final_rankings")
+    if not isinstance(ranks, dict):
         return None
-    path = PROJECT_ROOT / raw_path
-    if not path.is_file():
-        return None
-    ranks = _read_object(path)
     exact = ranks.get(f"{institution}{competition}")
     if isinstance(exact, str):
         return exact
@@ -1058,14 +1011,6 @@ def _game_time(game: dict[str, Any]) -> datetime:
 
 def _format_kickoff(value: datetime) -> str:
     return f"{value.year} 年 {value.month} 月 {value.day} 日 {value:%H:%M}"
-
-
-def _read_object(path: Path) -> dict[str, Any]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"无法读取 JSON：{path}") from exc
-    return _object(raw, str(path))
 
 
 def _read_text(path: Path) -> str:
