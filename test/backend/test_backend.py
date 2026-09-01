@@ -1378,6 +1378,24 @@ def test_app_refreshes_automatic_credentials_at_startup(
     assert calls == ["refresh"]
 
 
+def test_report_factory_uses_automatic_credential_refresh(
+    session_factory,
+    settings: WebsiteSettings,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TAFA_USERNAME", "user@example.com")
+    monkeypatch.setenv("TAFA_PASSWORD", "secret")
+    monkeypatch.setenv("THUFOOTBALL_OPENID", "old-openid")
+    monkeypatch.setenv("THUFOOTBALL_SESSION_KEY", "old-session")
+    app = create_app(settings=settings, session_factory=session_factory)
+
+    async def report_client_type() -> type[object]:
+        async with app.state.external_factories.reports() as reports:
+            return type(reports._client)
+
+    assert asyncio.run(report_client_type()) is AutoRefreshingTHUFootballClient
+
+
 class _FakeCredentialClient:
     user_registered = True
     calls: list[str] = []
