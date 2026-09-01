@@ -252,30 +252,39 @@ def create_app(
         with session_factory() as session:
             return FootballDataRepository(session).load_outcome_catalog()
 
-    @asynccontextmanager
-    async def process_environment_queries():
+    def create_environment_client() -> THUFootballClient:
         client_options: dict[str, Any] = {
             "openid": os.environ.get("THUFOOTBALL_OPENID") or None,
             "session_key": os.environ.get("THUFOOTBALL_SESSION_KEY") or None,
             "load_environment": False,
         }
         if automatic_credentials.configured:
-            client = AutoRefreshingTHUFootballClient(
+            return AutoRefreshingTHUFootballClient(
                 **client_options,
                 credential_refresher=automatic_credentials.refresh,
                 authentication_retries=2,
             )
-        else:
-            client = THUFootballClient(**client_options)
+        return THUFootballClient(**client_options)
+
+    @asynccontextmanager
+    async def process_environment_queries():
+        client = create_environment_client()
         async with client:
             async with THUFootballQueryService(
                 client, outcome_catalog=load_outcome_catalog()
             ) as service:
                 yield service
 
+    @asynccontextmanager
+    async def process_environment_reports():
+        async with WebsiteReportSession(
+            load_outcome_catalog(), client=create_environment_client()
+        ) as service:
+            yield service
+
     base_factories = external_factories or ExternalFactories(
         queries=process_environment_queries,
-        reports=lambda: WebsiteReportSession(load_outcome_catalog()),
+        reports=process_environment_reports,
     )
     thufootball_lock = asyncio.Lock()
 

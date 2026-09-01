@@ -1220,24 +1220,30 @@ def _render_html_to_png(
     browser = _find_browser()
     try:
         with tempfile.TemporaryDirectory(
-            prefix="thufootball-report-"
+            prefix="thufootball-report-",
+            ignore_cleanup_errors=True,
         ) as directory:
             temporary = Path(directory)
             html_path = temporary / "report.html"
             profile_path = temporary / "browser-profile"
             html_path.write_text(html_source, encoding="utf-8")
-            command = [
-                str(browser),
-                "--headless",
-                "--hide-scrollbars",
-                "--no-first-run",
-                "--disable-extensions",
-                "--disable-dev-shm-usage",
-                f"--user-data-dir={profile_path}",
-                "--virtual-time-budget=30000",
-                "--dump-dom",
-                html_path.resolve().as_uri(),
-            ]
+            command = [str(browser)]
+            if os.name == "nt":
+                command.append("--edge-skip-compat-layer-relaunch")
+            command.extend(
+                [
+                    "--headless",
+                    "--hide-scrollbars",
+                    "--no-first-run",
+                    "--noerrdialogs",
+                    "--disable-extensions",
+                    "--disable-dev-shm-usage",
+                    f"--user-data-dir={profile_path}",
+                    "--virtual-time-budget=30000",
+                    "--dump-dom",
+                    html_path.resolve().as_uri(),
+                ]
+            )
             run_options: dict[str, Any] = {}
             if os.name == "nt":
                 run_options["creationflags"] = subprocess.CREATE_NO_WINDOW

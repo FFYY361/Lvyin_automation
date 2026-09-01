@@ -139,8 +139,13 @@ class ExternalFactories:
 class WebsiteReportSession:
     """Share one authenticated THUFootball client while rendering reports."""
 
-    def __init__(self, outcome_catalog: StaticOutcomeCatalog | None = None) -> None:
-        self._client = THUFootballClient()
+    def __init__(
+        self,
+        outcome_catalog: StaticOutcomeCatalog | None = None,
+        *,
+        client: THUFootballClient | None = None,
+    ) -> None:
+        self._client = client or THUFootballClient()
         self._reports = THUFootballReportService(self._client, outcome_catalog)
 
     async def __aenter__(self) -> "WebsiteReportSession":
