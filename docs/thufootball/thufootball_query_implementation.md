@@ -91,7 +91,7 @@ class GameSummary:
     kickoff_local: datetime
     status: GameStatus
     record_active: bool
-    valid: bool
+    valid: bool | None
     stage: str | None
     group_name: str | None
     round: int | None
@@ -104,7 +104,6 @@ class GameSummary:
     home_score: int | None
     away_score: int | None
     result_text: str | None
-    penalty_shootout: bool
     home_penalty: int | None
     away_penalty: int | None
     home_abandon: bool | None
@@ -112,7 +111,7 @@ class GameSummary:
     field_name: str | None
 ```
 
-`penalty_shootout` 保留远端字段的真实语义：表示该场是否启用“打平后点球决胜”的规则，不表示比赛实际进入了点球大战。`GameSummary.decided_by_penalty_shootout` 要求该标记为真，并同时满足完赛、常规比分打平和有效点球比分不相等；标记为真不能单独证明实际点球决胜，标记为假则直接否定。
+远端比赛级 `penalty_shootout` 与实际点球结果存在冲突，运行时不读取、不保存该字段。`GameSummary.decided_by_penalty_shootout` 根据完赛、无判负、常规比分打平以及双方有效点球比分不相等共同判断。
 
 字段映射固定为：
 
@@ -315,22 +314,24 @@ kickoff_local = kickoff_utc.astimezone(ZoneInfo("Asia/Shanghai"))
 
 状态映射顺序固定为：
 
-1. `raw.status` 为假或 `raw.valid` 不为有效值：`UNKNOWN`，默认排除出统计。
+1. `raw.status` 为假：`UNKNOWN`。
 2. `raw.end is True`：`FINISHED`。
 3. `raw.start is True`：`STARTED`。
 4. 尚未开始且本地开球时间在当前时间之后：`SCHEDULED`。
 5. 其余情况：`UNKNOWN`。
 
+`raw.valid` 表示比赛数据是否录入完成：`1` 为完成，`0` 或 `null` 为未完成。它会保留在领域对象中，但不参与上述状态映射。
+
 判断是否完赛不得依赖 `game_time_metadata`、`minute` 或 `stoppage_minute`。只有 `FINISHED` 且能够按下列顺序归一化的比赛才进入球队赛果和交锋汇总：
 
 1. 单方弃赛：五人制将未弃赛方判为 `5:0`，其他人数判为 `3:0`；返回的 `GameSummary` 副本覆盖比分和 `result_text`，保留弃赛标记，并清除点球字段。
-2. 双方弃赛或完赛比分缺失：映射时直接返回带字段路径的 `SchemaError`。
-3. 常规比分不同：无论是否启用点球决胜规则，都按常规比分判断胜负，使用普通 `主队比分:客队比分` 文本，并清除无实际意义的点球比分；规则开关本身保持不变。
-4. 常规比分相同，但 `penalty_shootout` 为假，或者点球比分缺失、相等：判为平局并清除点球比分；服务端常用 `0:0` 表示启用了规则但没有实际进行点球大战。即使标记为假时出现不相等的点球比分，也以标记的明确否定为准。
-5. 常规比分相同、`penalty_shootout` 为真，且双方点球比分均为合法非负整数并不相等：`decided_by_penalty_shootout` 为真，按点球判断胜负，主客视角文本规范为 `2(3):2(4)`；`TeamGameResult` 再将比分和点球字段转换为目标球队视角。
-6. 点球比分字段为负数或错误类型：映射时返回 `SchemaError`；不会因为 `penalty_shootout=true` 而把缺失或相等的点球比分视为错误。
+2. 录入完成且未标记判负的比赛若完赛比分缺失，映射时直接返回带字段路径的 `SchemaError`；`valid=0/null` 的未完成记录允许暂时缺少比分，并仅保留在普通比赛查询中。
+3. 常规比分不同：按常规比分判断胜负，使用普通 `主队比分:客队比分` 文本，并清除无实际意义的点球比分。
+4. 常规比分相同，但点球比分缺失或相等：判为平局并清除点球比分；服务端常用 `0:0` 表示没有实际进行点球大战。
+5. 常规比分相同，且双方点球比分均为合法非负整数并不相等：`decided_by_penalty_shootout` 为真，按点球判断胜负，主客视角文本规范为 `2(3):2(4)`；`TeamGameResult` 再将比分和点球字段转换为目标球队视角。
+6. 点球比分字段为负数或错误类型：映射时返回 `SchemaError`。
 
-`include_unfinished=True` 时，有效未完赛比赛可进入返回列表，但不进入交锋汇总。`valid=false` 或 `status=false` 的记录继续按无效领域状态过滤；`valid=null`、`penalty_shootout=null`、缺失嵌套球队对象、负数计数和其他不符合当前响应契约的数据直接返回 `SchemaError`，不修复、不回填也不跳过。
+普通比赛查询不会因为 `valid=0/null` 排除记录。球队近期战绩和直接交锋只使用 `valid=1` 的比赛；`include_unfinished=True` 时，其中录入完成的未完赛比赛可进入返回列表，但不进入交锋胜负汇总。`status=false` 的记录仍为 `UNKNOWN`。缺失嵌套球队对象、负数计数和其他不符合当前响应契约的数据直接返回 `SchemaError`，不修复、不回填也不跳过。
 
 ### 4.3 球队身份与赛事范围
 

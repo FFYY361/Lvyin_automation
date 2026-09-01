@@ -206,6 +206,7 @@ class FootballDataRepository:
                 "data": record.data,
             }
             for record in self.list_tournaments()
+            if record.is_finalized
         ]
         return build_outcome_catalog(institutions, tournaments)
 

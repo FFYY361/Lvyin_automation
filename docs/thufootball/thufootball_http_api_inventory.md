@@ -241,12 +241,12 @@ Python 函数使用参数名 `game_type`，发送 HTTP 请求时会映射为接�
 | `round` | `int \| null` | 轮次；不适用时为 `null` |
 | `home_goal` | `int` | 主队进球数 |
 | `away_goal` | `int` | 客队进球数 |
-| `penalty_shootout` | `int` | 是否启用“常规比分打平后点球决胜”规则的整数标记；不能单独用于判断是否实际进入点球大战 |
+| `penalty_shootout` | `int \| null` | 远端比赛规则标记，存在空值及与实际点球结果冲突的记录；运行时忽略 |
 | `home_penalty` | `int \| null` | 主队点球大战进球数；不适用时可能为 `null` |
 | `away_penalty` | `int \| null` | 客队点球大战进球数；不适用时可能为 `null` |
 | `home_abandon` | `int \| null` | 主队是否弃赛的整数标记；无弃赛信息时为 `null` |
 | `away_abandon` | `int \| null` | 客队是否弃赛的整数标记；无弃赛信息时为 `null` |
-| `valid` | `int` | 比赛是否有效的整数标记，实测为 `0` 或 `1` |
+| `valid` | `int \| null` | 比赛数据是否录入完成；`1` 表示完成，`0` 或 `null` 表示未完成 |
 | `status` | `bool` | 比赛记录状态 |
 | `tourn_info` | `object` | 所属赛事信息 |
 | `home_tourn_team_info` | `object` | 主队在该赛事中的信息及统计 |
