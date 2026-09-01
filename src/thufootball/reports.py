@@ -241,7 +241,6 @@ def prepare_game_report(
             home_score=score[0],
             away_score=score[1],
             result_text=f"{score[0]}:{score[1]}",
-            penalty_shootout=False,
             home_penalty=None,
             away_penalty=None,
             home_abandon=False,

@@ -999,7 +999,7 @@ def _head_to_head_result_type(game: dict[str, Any], home_side: str) -> str:
 def _is_finished_game(game: dict[str, Any]) -> bool:
     return (
         game.get("status") == "finished"
-        and game.get("valid") is not False
+        and game.get("valid") is True
         and isinstance(game.get("home_score"), int)
         and isinstance(game.get("away_score"), int)
     )

@@ -323,7 +323,6 @@ def _core_game_fields(game: GameSummary) -> tuple[object, ...]:
         game.away_team_id,
         game.home_score,
         game.away_score,
-        game.penalty_shootout,
         game.home_penalty,
         game.away_penalty,
         game.home_abandon,
@@ -557,7 +556,7 @@ class THUFootballQueryService:
         for game in batch.games:
             if team_id not in {game.home_team_id, game.away_team_id}:
                 continue
-            if not game.record_active or not game.valid:
+            if not game.record_active or game.valid is not True:
                 continue
             if game.home_abandon is True and game.away_abandon is True:
                 continue
@@ -681,7 +680,7 @@ class THUFootballQueryService:
                 team_a_is_home = False
             else:
                 continue
-            if not game.record_active or not game.valid:
+            if not game.record_active or game.valid is not True:
                 continue
             if game.home_abandon is True and game.away_abandon is True:
                 continue

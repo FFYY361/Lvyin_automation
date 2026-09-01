@@ -58,7 +58,7 @@ class GameSummary:
     kickoff_local: datetime
     status: GameStatus
     record_active: bool
-    valid: bool
+    valid: bool | None
     stage: str | None
     group_name: str | None
     round: int | None
@@ -71,7 +71,6 @@ class GameSummary:
     home_score: int | None
     away_score: int | None
     result_text: str | None
-    penalty_shootout: bool  # Rule enabled; not proof that a shootout occurred.
     home_penalty: int | None
     away_penalty: int | None
     home_abandon: bool | None
@@ -89,7 +88,6 @@ class GameSummary:
 
         return (
             self.status is GameStatus.FINISHED
-            and self.penalty_shootout
             and self.home_abandon is not True
             and self.away_abandon is not True
             and self.home_score is not None

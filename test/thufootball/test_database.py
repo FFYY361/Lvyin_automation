@@ -82,11 +82,11 @@ def test_repository_and_data_baseline(football_engine) -> None:
         assert repository.get_game(4245).tournament_id == 122
         assert len(repository.list_games([122])) == 35
         assert [item.id for item in repository.list_tournaments()[:5]] == [
+            138,
             122,
             123,
             124,
             126,
-            128,
         ]
 
         counts = (
@@ -94,7 +94,7 @@ def test_repository_and_data_baseline(football_engine) -> None:
             session.scalar(select(func.count()).select_from(TournamentRecord)),
             session.scalar(select(func.count()).select_from(GameRecord)),
         )
-        assert counts == (53, 14, 590)
+        assert counts == (53, 15, 591)
         assert len(repository.load_outcome_catalog().tournaments_by_id) == 14
 
 
@@ -155,10 +155,11 @@ def test_game_summaries_and_manual_adjustments(seeded_engine) -> None:
 def test_automatic_sync_updates_and_removes_stale_games_atomically(
     transactional_factory,
 ) -> None:
-    with transactional_factory() as session:
+    with transactional_factory.begin() as session:
         tournament = session.get(TournamentRecord, 122)
         kept = session.get(GameRecord, 4245)
         assert tournament is not None and kept is not None
+        tournament.is_finalized = False
         original_name = tournament.name
         original_rankings = deepcopy(tournament.final_rankings)
         tournament_document = deepcopy(tournament.data)
@@ -208,10 +209,11 @@ def test_automatic_sync_excludes_and_protects_finalized_tournaments(
 def test_automatic_sync_rolls_back_the_whole_transaction(
     transactional_factory,
 ) -> None:
-    with transactional_factory() as session:
+    with transactional_factory.begin() as session:
         tournament = session.get(TournamentRecord, 123)
         game = session.get(GameRecord, 4246)
         assert tournament is not None and game is not None
+        tournament.is_finalized = False
         original_tournament = deepcopy(tournament.data)
         original_game = deepcopy(game.data)
         original_count = len(FootballDataRepository(session).list_games([123]))

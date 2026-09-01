@@ -107,14 +107,13 @@ def _game(
     started: bool = False,
     ended: bool = False,
     active: bool = True,
-    valid: int = 1,
+    valid: int | None = 1,
     home_team_id: int = 101,
     away_team_id: int = 202,
     home_tournament_team_id: int = 1101,
     away_tournament_team_id: int = 1202,
     home_goal: object = 2,
     away_goal: object = 1,
-    penalty_shootout: int = 0,
     home_penalty: object = None,
     away_penalty: object = None,
     home_abandon: object = None,
@@ -153,7 +152,6 @@ def _game(
         "home_goal": home_goal,
         "away_goal": away_goal,
         "result": f"{home_goal}:{away_goal}",
-        "penalty_shootout": penalty_shootout,
         "home_penalty": home_penalty,
         "away_penalty": away_penalty,
         "home_abandon": home_abandon,
@@ -423,10 +421,20 @@ class MapperTests(unittest.TestCase):
     def test_maps_time_ids_scores_and_all_statuses(self) -> None:
         now = datetime(2026, 7, 14, 0, 0, tzinfo=UTC)
         scheduled = map_game_summary(
-            _game(kickoff="2026-07-15 00:00:00"), "game", now=now
+            _game(kickoff="2026-07-15 00:00:00", valid=None), "game", now=now
         )
-        started = map_game_summary(_game(started=True), "game", now=now)
-        finished = map_game_summary(_game(started=True, ended=True), "game", now=now)
+        started = map_game_summary(_game(started=True, valid=0), "game", now=now)
+        finished = map_game_summary(
+            _game(
+                started=True,
+                ended=True,
+                valid=None,
+                home_goal=None,
+                away_goal=None,
+            ),
+            "game",
+            now=now,
+        )
         unknown = map_game_summary(
             _game(active=False, started=True, ended=True), "game", now=now
         )
@@ -435,6 +443,11 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(started.status, GameStatus.STARTED)
         self.assertEqual(finished.status, GameStatus.FINISHED)
         self.assertEqual(unknown.status, GameStatus.UNKNOWN)
+        self.assertIsNone(scheduled.valid)
+        self.assertFalse(started.valid)
+        self.assertIsNone(finished.valid)
+        self.assertIsNone(finished.home_score)
+        self.assertIsNone(finished.away_score)
         self.assertEqual(scheduled.kickoff_local.utcoffset().total_seconds(), 8 * 3600)
         self.assertEqual(scheduled.home_tournament_team_id, 1101)
         self.assertEqual(scheduled.home_team_id, 101)
@@ -442,15 +455,13 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(scheduled.away_team_brief_name, "客202")
         self.assertEqual(scheduled.tournament_name, "赛事10")
         self.assertEqual(scheduled.home_score, 2)
-        self.assertFalse(scheduled.penalty_shootout)
         self.assertIsNone(scheduled.away_abandon)
 
     def test_invalid_and_legacy_game_fields_fail_strictly(self) -> None:
         cases = (
             ("game.home_goal", {"home_goal": -1}),
             ("game.away_goal", {"away_goal": "2"}),
-            ("game.valid", {"valid": None}),
-            ("game.penalty_shootout", {"penalty_shootout": None}),
+            ("game.valid", {"valid": 2}),
             ("game.home_penalty", {"home_penalty": -1}),
             ("game.away_penalty", {"away_penalty": "3"}),
             ("game.home_abandon", {"home_abandon": 2}),
@@ -481,64 +492,44 @@ class MapperTests(unittest.TestCase):
         self.assertTrue(game.home_abandon)
         self.assertTrue(game.away_abandon)
 
-    def test_penalty_shootout_is_rule_flag_not_occurrence_flag(self) -> None:
+    def test_penalty_shootout_is_inferred_from_scores(self) -> None:
         non_draw = map_game_summary(
             _game(
                 started=True,
                 ended=True,
                 home_goal=5,
                 away_goal=0,
-                penalty_shootout=1,
-                home_penalty=0,
-                away_penalty=0,
-            ),
-            "game",
-        )
-        enabled_without_shootout = map_game_summary(
-            _game(
-                started=True,
-                ended=True,
-                home_goal=1,
-                away_goal=1,
-                penalty_shootout=1,
-                home_penalty=0,
-                away_penalty=0,
-            ),
-            "game",
-        )
-        disabled_with_penalty_scores = map_game_summary(
-            _game(
-                started=True,
-                ended=True,
-                home_goal=1,
-                away_goal=1,
-                penalty_shootout=0,
                 home_penalty=4,
                 away_penalty=3,
             ),
             "game",
         )
-        decided_on_penalties = map_game_summary(
+        draw_without_shootout = map_game_summary(
             _game(
                 started=True,
                 ended=True,
                 home_goal=1,
                 away_goal=1,
-                penalty_shootout=1,
-                home_penalty=4,
-                away_penalty=3,
+                home_penalty=0,
+                away_penalty=0,
             ),
             "game",
         )
+        raw_decided = _game(
+            started=True,
+            ended=True,
+            home_goal=1,
+            away_goal=1,
+            home_penalty=4,
+            away_penalty=3,
+        )
+        raw_decided["penalty_shootout"] = None
+        decided_on_penalties = map_game_summary(raw_decided, "game")
 
-        self.assertTrue(non_draw.penalty_shootout)
         self.assertFalse(non_draw.decided_by_penalty_shootout)
-        self.assertTrue(enabled_without_shootout.penalty_shootout)
-        self.assertFalse(enabled_without_shootout.decided_by_penalty_shootout)
-        self.assertFalse(disabled_with_penalty_scores.penalty_shootout)
-        self.assertFalse(disabled_with_penalty_scores.decided_by_penalty_shootout)
-        self.assertTrue(decided_on_penalties.penalty_shootout)
+        self.assertFalse(draw_without_shootout.decided_by_penalty_shootout)
         self.assertTrue(decided_on_penalties.decided_by_penalty_shootout)
+        self.assertFalse(hasattr(decided_on_penalties, "penalty_shootout"))
 
     def test_used_tournament_game_team_still_fails_strictly(self) -> None:
         game = _game(
@@ -902,7 +893,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     ended=True,
                     home_goal=2,
                     away_goal=1,
-                    penalty_shootout=0,
                 )
             ],
             20: [
@@ -916,7 +906,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     away_team_id=101,
                     home_goal=1,
                     away_goal=0,
-                    penalty_shootout=0,
                 )
             ],
         }
@@ -986,7 +975,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     await call
 
     async def test_unresolved_legacy_game_fails_the_query(self) -> None:
-        game = _game(91, 10, penalty_shootout=None)
+        game = _game(91, 10)
         game["home_tourn_team_id"] = None
         game["away_tourn_team_id"] = None
         game["home_tourn_team_info"] = None
@@ -1118,7 +1107,11 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_tournament_snapshot_is_reused_across_query_methods(self) -> None:
         calls = 0
-        games = [_game(1, 10, started=True, ended=True)]
+        games = [
+            _game(1, 10, started=True, ended=True),
+            _game(2, 10, started=True, ended=True, valid=0),
+            _game(3, 10, started=True, ended=True, valid=None),
+        ]
 
         async def handler(request: httpx.Request) -> httpx.Response:
             nonlocal calls
@@ -1144,7 +1137,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(service._tournament_tasks, {})
 
         self.assertEqual(calls, 1)
-        self.assertEqual([game.game_id for game in queried_games], [1])
+        self.assertEqual([game.game_id for game in queried_games], [1, 2, 3])
         self.assertEqual([result.game.game_id for result in team_matches], [1])
         self.assertEqual([game.game_id for game in head_to_head.matches], [1])
         self.assertEqual(repeated_games, queried_games)
@@ -1308,7 +1301,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 ended=True,
                 home_goal=1,
                 away_goal=1,
-                penalty_shootout=0,
                 home_penalty=3,
                 away_penalty=4,
             ),
@@ -1322,7 +1314,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 away_team_id=101,
                 home_goal=2,
                 away_goal=1,
-                penalty_shootout=0,
             ),
             _game(
                 1,
@@ -1332,7 +1323,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 ended=True,
                 home_goal=3,
                 away_goal=1,
-                penalty_shootout=1,
                 home_penalty=0,
                 away_penalty=0,
             ),
@@ -1346,7 +1336,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 away_team_id=101,
                 home_goal=2,
                 away_goal=2,
-                penalty_shootout=1,
                 home_penalty=3,
                 away_penalty=4,
             ),
@@ -1358,7 +1347,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 ended=True,
                 home_goal=8,
                 away_goal=8,
-                penalty_shootout=0,
                 home_penalty=None,
                 away_penalty=None,
                 away_abandon=1,
@@ -1369,7 +1357,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 kickoff="2026-07-14 11:00:00",
                 started=True,
                 ended=False,
-                penalty_shootout=0,
                 home_penalty=0,
                 away_penalty=0,
             ),
@@ -1401,12 +1388,10 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         by_game_id = {item.game.game_id: item for item in results}
         self.assertEqual(by_game_id[9].score_text, "1:2")
         self.assertEqual(by_game_id[9].result, MatchResult.LOSS)
-        self.assertEqual(by_game_id[10].score_text, "1:1")
-        self.assertEqual(by_game_id[10].result, MatchResult.DRAW)
-        self.assertFalse(by_game_id[10].game.penalty_shootout)
-        self.assertFalse(by_game_id[10].game.decided_by_penalty_shootout)
+        self.assertEqual(by_game_id[10].score_text, "1(3):1(4)")
+        self.assertEqual(by_game_id[10].result, MatchResult.LOSS)
+        self.assertTrue(by_game_id[10].game.decided_by_penalty_shootout)
         self.assertEqual(by_game_id[1].score_text, "3:1")
-        self.assertTrue(by_game_id[1].game.penalty_shootout)
         self.assertFalse(by_game_id[1].game.decided_by_penalty_shootout)
         self.assertIsNone(by_game_id[1].penalty_goals_for)
         self.assertEqual(results[0].score_text, "3:0")
@@ -1415,7 +1400,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[1].venue, "away")
         self.assertEqual(results[1].score_text, "2(4):2(3)")
         self.assertEqual(results[1].game.result_text, "2(3):2(4)")
-        self.assertTrue(results[1].game.penalty_shootout)
         self.assertTrue(results[1].game.decided_by_penalty_shootout)
         self.assertEqual(results[1].penalty_goals_for, 4)
         self.assertEqual(results[1].penalty_goals_against, 3)
@@ -1438,7 +1422,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                         ended=True,
                         home_goal=0,
                         away_goal=0,
-                        penalty_shootout=0,
                         away_abandon=1,
                     ),
                     _game(
@@ -1448,7 +1431,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                         ended=True,
                         home_goal=0,
                         away_goal=0,
-                        penalty_shootout=0,
                         home_abandon=1,
                     ),
                 ]
@@ -1484,7 +1466,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     ended=True,
                     home_goal=1,
                     away_goal=0,
-                    penalty_shootout=0,
                 ),
                 _game(
                     12,
@@ -1496,7 +1477,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     away_team_id=101,
                     home_goal=2,
                     away_goal=2,
-                    penalty_shootout=0,
                 ),
             ],
             20: [
@@ -1510,7 +1490,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     away_team_id=101,
                     home_goal=2,
                     away_goal=2,
-                    penalty_shootout=1,
                     home_penalty=3,
                     away_penalty=4,
                 ),
@@ -1520,7 +1499,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     kickoff="2026-07-14 11:00:00",
                     started=True,
                     ended=True,
-                    penalty_shootout=0,
                     away_abandon=1,
                 ),
                 _game(
@@ -1529,7 +1507,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     kickoff="2026-07-14 12:00:00",
                     started=True,
                     ended=False,
-                    penalty_shootout=0,
                 ),
             ],
             30: [],
@@ -1582,7 +1559,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 away_team_id=48,
                 home_goal=1,
                 away_goal=0,
-                penalty_shootout=0,
             ),
             _game(
                 2,
@@ -1593,7 +1569,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 away_team_id=80,
                 home_goal=0,
                 away_goal=2,
-                penalty_shootout=0,
             ),
             _game(
                 3,
@@ -1604,7 +1579,6 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 away_team_id=48,
                 home_goal=3,
                 away_goal=0,
-                penalty_shootout=0,
             ),
         ]
 

@@ -21,6 +21,15 @@ class PromptBuilderTests(unittest.TestCase):
             _game(11, "2025-10-20T13:00:00+08:00", 1, 3, 0, 3),
             _game(12, "2025-10-22T13:00:00+08:00", 3, 2, 1, 1),
             _game(
+                13,
+                "2025-10-25T13:00:00+08:00",
+                1,
+                2,
+                4,
+                0,
+                valid=None,
+            ),
+            _game(
                 20,
                 "2025-11-01T13:00:00+08:00",
                 1,
@@ -64,7 +73,7 @@ class PromptBuilderTests(unittest.TestCase):
                 "game": game,
                 "events": [_event("START", "home", player)],
             }
-        game_documents[20] = {"game": games[3], "events": []}
+        game_documents[20] = {"game": games[-1], "events": []}
         institutions = {
             1: SimpleNamespace(
                 name="甲学院",
@@ -193,6 +202,7 @@ def _game(
     *,
     status: str = "finished",
     stage: str = "小组赛",
+    valid: bool | None = True,
 ) -> dict[str, object]:
     names = {
         1: "甲学院男子足球队",
@@ -205,7 +215,7 @@ def _game(
         "tournament_id": 7,
         "kickoff_local": kickoff,
         "status": status,
-        "valid": True,
+        "valid": valid,
         "stage": stage,
         "group_name": None,
         "round": None,

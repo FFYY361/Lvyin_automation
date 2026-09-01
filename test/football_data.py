@@ -35,7 +35,7 @@ def clone_football_data(source_engine: Engine, target_engine: Engine) -> None:
                 "competition": row.competition,
                 "final_rankings": deepcopy(row.final_rankings),
                 "data": deepcopy(row.data),
-                "is_finalized": False,
+                "is_finalized": row.is_finalized,
             }
             for row in source.scalars(select(TournamentRecord))
         ]

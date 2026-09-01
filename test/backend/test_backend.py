@@ -279,7 +279,6 @@ def _finished_detail(game_id: int, *, home_score: int = 2) -> GameDetail:
             home_score=home_score,
             away_score=1,
             result_text=f"{home_score}:1",
-            penalty_shootout=False,
             home_penalty=None,
             away_penalty=None,
             home_abandon=False,

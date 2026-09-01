@@ -143,13 +143,12 @@ def _kickoff(value: object, path: str) -> datetime:
 def _game_status(
     *,
     record_active: bool,
-    valid: bool,
     started: bool,
     ended: bool,
     kickoff_local: datetime,
     now: datetime,
 ) -> GameStatus:
-    if not record_active or not valid:
+    if not record_active:
         return GameStatus.UNKNOWN
     if ended:
         return GameStatus.FINISHED
@@ -209,7 +208,7 @@ def map_game_summary(
     kickoff_utc = _kickoff(item.get("time"), f"{path}.time")
     kickoff_local = kickoff_utc.astimezone(SHANGHAI)
     record_active = _bool(item.get("status"), f"{path}.status")
-    valid = _binary_flag(item.get("valid"), f"{path}.valid")
+    valid = _optional_binary_flag(item.get("valid"), f"{path}.valid")
     started = _bool(item.get("start"), f"{path}.start")
     ended = _bool(item.get("end"), f"{path}.end")
     home_team = _mapping(
@@ -229,9 +228,6 @@ def map_game_summary(
     if resolved_now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
 
-    penalty_shootout = _binary_flag(
-        item.get("penalty_shootout"), f"{path}.penalty_shootout"
-    )
     game = GameSummary(
         game_id=game_id,
         tournament_id=tournament_id,
@@ -240,7 +236,6 @@ def map_game_summary(
         kickoff_local=kickoff_local,
         status=_game_status(
             record_active=record_active,
-            valid=valid,
             started=started,
             ended=ended,
             kickoff_local=kickoff_local,
@@ -272,7 +267,6 @@ def map_game_summary(
             item.get("away_goal"), f"{path}.away_goal"
         ),
         result_text=_optional_text(item.get("result")),
-        penalty_shootout=penalty_shootout,
         home_penalty=_optional_non_negative_int(
             item.get("home_penalty"), f"{path}.home_penalty"
         ),
@@ -297,7 +291,7 @@ def map_game_summary(
 
 
 def _validate_finished_game(game: GameSummary, path: str) -> None:
-    if game.status is not GameStatus.FINISHED:
+    if game.status is not GameStatus.FINISHED or game.valid is not True:
         return
     if game.home_abandon is True or game.away_abandon is True:
         return
