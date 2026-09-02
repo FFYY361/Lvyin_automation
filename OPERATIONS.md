@@ -86,14 +86,10 @@ curl https://media.thufootball.tech/api/health
 - `current_tournament_names`：这些赛事在网页上的名称；
 - `historical_seasons`：将上一赛季加入历史赛季。
 
-最终排名整理完成后，更新 `src/thufootball/notes/`：
-
-- `teams.json`：新增球队 ID、院系改名或合并；
-- `tourns.json`：加入已经产生最终排名的赛事；
-- `ranks/<赛事ID>.json`：记录该赛事各球队的最终名次；
-- `identity_audit.json`：球队合并或 ID 共用关系变化时更新。
-
-`tourns.json` 中的每个赛事都必须有同名 ID 的排名文件。新赛季刚开始、还没有最终排名时，
-只修改 `current_tournament_ids`，不要提前加入 `tourns.json`。
+球队、赛事、比赛和最终排名统一维护在 PostgreSQL 的 `institutions`、`tournaments` 和
+`games` 表中，不再维护 notes 文件。新赛季赛事先写入 `tournaments` 并保持
+`is_finalized = false`，再运行 `scripts/sync_ai_preview_automatic.py` 抓取报名、赛程和比赛。
+赛季结束并完成排名、比赛详情和人工修正审计后，更新 `final_rankings`，最后将赛事设置为
+`is_finalized = true`；封存赛事不会再参与同步。
 
 修改完成后在本地运行测试和前端构建，再按照第 2 节更新服务器。数据库不需要按赛季重建。

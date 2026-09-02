@@ -23,7 +23,7 @@ _PENALTY_SHOOTOUT_EVENTS = frozenset(
 )
 
 _Side = Literal["home", "away"]
-_TimeKey = tuple[_Side, bool, int, int]
+_TimeKey = tuple[_Side, bool, int | None, int]
 
 
 def _issue(

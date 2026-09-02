@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BookOpen, CalendarPlus, ClipboardList, FileText, Layers3, LogOut, Menu, Settings, UserCog, UserRound, X } from "lucide-react";
+import { BookOpen, CalendarPlus, ClipboardList, Database, FileText, Layers3, LogOut, Menu, UserCog, UserRound, X } from "lucide-react";
 import { Navigate, NavLink, Outlet, createHashRouter, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
 import { Button, LoadingScreen, cx } from "./components";
@@ -8,6 +8,7 @@ import { BatchDetailPage } from "./pages/BatchDetailPage";
 import { BatchesPage } from "./pages/BatchesPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
+import { InstitutionPage } from "./pages/InstitutionPage";
 import { MatchPage } from "./pages/MatchPage";
 import { PreviewPage } from "./pages/PreviewPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -27,7 +28,7 @@ const adminNavigation = [
   { to: "/wechat-drafts", label: "微信草稿", icon: FileText },
   { to: "/tutorial", label: "使用教程", icon: BookOpen },
   { to: "/users", label: "用户管理", icon: UserCog },
-  { to: "/settings", label: "系统设置", icon: Settings },
+  { to: "/settings", label: "资料管理", icon: Database },
 ];
 const userNavigation = [
   { to: "/tasks", label: "任务中心", icon: ClipboardList },
@@ -91,6 +92,7 @@ export const router = createHashRouter([
       { path: "wechat-drafts", element: <AdminOnly><WechatDraftPage /></AdminOnly> },
       { path: "users", element: <AdminOnly><UsersPage /></AdminOnly> },
       { path: "settings", element: <AdminOnly><SettingsPage /></AdminOnly> },
+      { path: "settings/institutions/:institutionName", element: <AdminOnly><InstitutionPage /></AdminOnly> },
     ],
   },
   { path: "*", element: <Navigate to="/" replace /> },

@@ -21,6 +21,10 @@ thufootball       weather          preview                    wechat_official
 - `PreviewService`：校验 `PreviewSourceData`，渲染模板并返回 `Article`。
 - `WechatOfficialService`：处理 Article 正文图片和封面，创建公众号草稿。
 
+球队身份、人工描述、赛事和历史比赛统一保存在 PostgreSQL 的 `institutions`、
+`tournaments`、`games`；`FootballDataRepository` 接收既有 SQLAlchemy Session。网站复用
+backend Session，CLI 使用短生命周期 Session，数据库不可用或数据缺失时明确失败。
+
 文章可以在 Python 内存中直接传递，也可以通过版本化文章目录落盘：
 
 ```text

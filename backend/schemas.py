@@ -131,6 +131,76 @@ class UpdateBodyRequest(BaseModel):
     body: str = Field(max_length=100_000)
 
 
+def _description(value: str, *, maximum: int) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(normalized) > maximum:
+        raise ValueError(f"description cannot exceed {maximum} characters")
+    return normalized
+
+
+class AIPreviewGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_profile: str = Field(min_length=1, max_length=64)
+
+
+class MatchManualSideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    team_description: str
+    player_descriptions: dict[str, str]
+
+    @field_validator("team_description")
+    @classmethod
+    def normalize_team_description(cls, value: str) -> str:
+        return _description(value, maximum=20_000)
+
+    @field_validator("player_descriptions")
+    @classmethod
+    def validate_player_descriptions(
+        cls, values: dict[str, str]
+    ) -> dict[str, str]:
+        if len(values) > 500:
+            raise ValueError("player_descriptions cannot contain more than 500 players")
+        normalized: dict[str, str] = {}
+        for raw_name, raw_description in values.items():
+            name = raw_name.strip()
+            if not name or len(name) > 200 or name in normalized:
+                raise ValueError("player names must be unique non-empty strings")
+            normalized[name] = _description(raw_description, maximum=10_000)
+        return normalized
+
+
+class MatchManualDescriptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    home_team: MatchManualSideRequest
+    away_team: MatchManualSideRequest
+
+
+class InstitutionDescriptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    male_description: str
+    female_description: str
+    futsal_description: str
+    player_descriptions: dict[str, str]
+
+    @field_validator(
+        "male_description", "female_description", "futsal_description"
+    )
+    @classmethod
+    def normalize_team_descriptions(cls, value: str) -> str:
+        return _description(value, maximum=20_000)
+
+    @field_validator("player_descriptions")
+    @classmethod
+    def validate_all_player_descriptions(
+        cls, values: dict[str, str]
+    ) -> dict[str, str]:
+        return MatchManualSideRequest.validate_player_descriptions(values)
+
+
 class THUFootballCredentialsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

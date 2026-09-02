@@ -43,7 +43,6 @@ def _summary() -> GameSummary:
         home_score=1,
         away_score=0,
         result_text="1:0",
-        penalty_shootout=False,
         home_penalty=0,
         away_penalty=0,
         home_abandon=False,
