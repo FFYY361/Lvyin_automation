@@ -151,6 +151,8 @@ describe("batch and match pages", () => {
     expect(await screen.findByRole("heading", { name: "环境 vs 探微" })).toBeInTheDocument();
     expect(screen.getByText("2024~2025 · 甲｜八强")).toBeInTheDocument();
     expect(screen.getByText("无")).toBeInTheDocument();
+    expect(screen.getByText(/建议采用三段式结构/)).toBeInTheDocument();
+    expect(screen.getByText(/除决赛外，正文不应出现球员真实姓名/)).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("粘贴或填写本场比赛的前瞻正文……"), { target: { value: "尚未保存" } });
     fireEvent.click(screen.getByRole("link", { name: "返回批次" }));
     expect(await screen.findByRole("dialog", { name: "有未保存的正文" })).toBeInTheDocument();
@@ -184,6 +186,10 @@ describe("batch and match pages", () => {
     renderRoute("/previews/1/matches/11", "/previews/:batchId/matches/:gameId", <MatchPage />);
 
     expect(await screen.findByRole("heading", { name: "AI 写作" })).toBeInTheDocument();
+    expect(screen.getByText("AI 内容必须人工复核")).toBeInTheDocument();
+    expect(screen.getByText(/请检查高频词和重复表达/)).toBeInTheDocument();
+    expect(screen.getByText("及时维护可复用的人工资料")).toBeInTheDocument();
+    expect(screen.getByText(/随球队长期保存并用于组装 AI Prompt/)).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /DeepSeek V4 Flash Thinking · 约 115 秒 · 86.3 分/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成前瞻" }));
     expect(await screen.findByDisplayValue("这是 AI 生成的前瞻。")).toBeInTheDocument();

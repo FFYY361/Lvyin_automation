@@ -239,6 +239,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .match-overview span { color: var(--muted); font-size: 11px; }
 .match-overview strong { font-size: 13px; }
 .match-writing-panel, .match-history-panel, .ai-writing-panel, .manual-description-panel, .data-management-panel { margin-top: 20px; }
+.match-writing-panel .alert { margin-top: 12px; }
 .history-team-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .history-team-card, .head-to-head-card { border: 1px solid var(--border); border-radius: 9px; padding: 16px; background: var(--surface-subtle); }
 .history-team-card h3 { margin: 0 0 14px; font-size: 15px; }
