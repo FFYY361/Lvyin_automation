@@ -31,6 +31,7 @@ from thufootball import (
     THUFootballReportService,
     resolve_report_team_name,
 )
+from thufootball.rankings import load_outcome_catalog
 from wechat_official import (
     Article,
     CoverFile,
@@ -113,7 +114,13 @@ class _DefaultFootballSession:
     def __init__(self) -> None:
         self._client = THUFootballClient()
         self._queries = THUFootballQueryService(self._client)
-        self._reports = THUFootballReportService(self._client)
+        self._reports = THUFootballReportService(
+            self._client, self._queries.outcome_catalog
+        )
+
+    @property
+    def outcome_catalog(self):
+        return self._queries.outcome_catalog
 
     async def __aenter__(self) -> "_DefaultFootballSession":
         await self._client.__aenter__()
@@ -476,6 +483,9 @@ class AutoReportPipeline:
         items: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         expected_files: set[Path] = set()
+        outcome_catalog = getattr(football, "outcome_catalog", None)
+        if outcome_catalog is None:
+            outcome_catalog = load_outcome_catalog()
 
         for game in selected:
             if game.status is not GameStatus.FINISHED:
@@ -494,8 +504,8 @@ class AutoReportPipeline:
                 )
                 continue
 
-            home_name = resolve_report_team_name(game, "home")
-            away_name = resolve_report_team_name(game, "away")
+            home_name = resolve_report_team_name(game, "home", outcome_catalog)
+            away_name = resolve_report_team_name(game, "away", outcome_catalog)
             common = {
                 "game_id": game.game_id,
                 "tournament_id": game.tournament_id,

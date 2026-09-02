@@ -6,7 +6,7 @@ import { BatchDetailPage } from "../pages/BatchDetailPage";
 import { BatchesPage } from "../pages/BatchesPage";
 import { MatchPage } from "../pages/MatchPage";
 import { PreviewPage } from "../pages/PreviewPage";
-import type { Article, PreviewBatch, User } from "../types";
+import type { AIPreviewContext, Article, PreviewBatch, User } from "../types";
 
 const admin: User = { id: 99, username: "admin", display_name: "管理员", role: "admin", is_active: true };
 
@@ -151,9 +151,52 @@ describe("batch and match pages", () => {
     expect(await screen.findByRole("heading", { name: "环境 vs 探微" })).toBeInTheDocument();
     expect(screen.getByText("2024~2025 · 甲｜八强")).toBeInTheDocument();
     expect(screen.getByText("无")).toBeInTheDocument();
+    expect(screen.getByText(/建议采用三段式结构/)).toBeInTheDocument();
+    expect(screen.getByText(/除决赛外，正文不应出现球员真实姓名/)).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("粘贴或填写本场比赛的前瞻正文……"), { target: { value: "尚未保存" } });
     fireEvent.click(screen.getByRole("link", { name: "返回批次" }));
     expect(await screen.findByRole("dialog", { name: "有未保存的正文" })).toBeInTheDocument();
+  });
+
+  it("generates AI copy and saves the current roster descriptions", async () => {
+    const context: AIPreviewContext = {
+      models: [
+        { profile: "deepseek_v4_flash_thinking", label: "DeepSeek V4 Flash Thinking", estimated_seconds: 115, score: 86.3, recommended: true, available: true },
+        { profile: "qwen38_thinking", label: "Qwen 3.8 2.4T Thinking", estimated_seconds: 140, score: 90, recommended: false, available: true },
+      ],
+      manual: {
+        competition: "male",
+        home_team: { institution_name: "环境学院", institution_short_name: "环境", team_name: "环境学院", team_description: "主队描述", sort_basis: "minutes", players: [{ name: "主队球员", kit_number: 7, minutes: 180, description: "速度快" }] },
+        away_team: { institution_name: "探微书院", institution_short_name: "探微", team_name: "探微书院", team_description: "客队描述", sort_basis: "kit_number", players: [{ name: "客队球员", kit_number: 1, minutes: null, description: "门将" }] },
+      },
+      results: {},
+    };
+    const generated = {
+      model_profile: "deepseek_v4_flash_thinking", status: "succeeded", content: "这是 AI 生成的前瞻。", is_stale: false,
+      error: null, requested_at: "2026-08-08T00:00:00Z", started_at: "2026-08-08T00:00:01Z", finished_at: "2026-08-08T00:00:02Z", reused: false,
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith("/ai-preview-context")) return Promise.resolve(json(context));
+      if (path.endsWith("/ai-preview-generations")) return Promise.resolve(json(generated));
+      if (path.endsWith("/manual-descriptions") && init?.method === "PUT") return Promise.resolve(json(context.manual));
+      return Promise.resolve(json(batch));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/previews/1/matches/11", "/previews/:batchId/matches/:gameId", <MatchPage />);
+
+    expect(await screen.findByRole("heading", { name: "AI 写作" })).toBeInTheDocument();
+    expect(screen.getByText("AI 内容必须人工复核")).toBeInTheDocument();
+    expect(screen.getByText(/请检查高频词和重复表达/)).toBeInTheDocument();
+    expect(screen.getByText("及时维护可复用的人工资料")).toBeInTheDocument();
+    expect(screen.getByText(/随球队长期保存并用于组装 AI Prompt/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /DeepSeek V4 Flash Thinking · 约 115 秒 · 86.3 分/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "生成前瞻" }));
+    expect(await screen.findByDisplayValue("这是 AI 生成的前瞻。")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("主队球员的描述"), { target: { value: "速度快，前插积极" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存双方资料" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith("/manual-descriptions") && init?.method === "PUT")).toBe(true));
   });
 
   it("reports an invalid match id reached by a direct URL", async () => {

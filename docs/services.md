@@ -1,12 +1,48 @@
 # Service 说明
 
-本页面向二次开发，说明四个可组合的中层 Service。普通使用者优先使用 README 中的
+本页面向二次开发，说明五个可组合的中层 Service。普通使用者优先使用 README 中的
 `auto_preview` 和 `auto_report`。
+
+## ai_service
+
+`AIChatService` 通过 OpenAI-compatible Chat Completions 接口提供通用 AI 对话，
+不包含足球或前瞻业务逻辑。`src/ai_service/config.json` 可配置多个模型 profile 的
+`base_url`、`model`、密钥环境变量、温度、输出上限、超时和供应商特有请求参数；真实密钥只写入
+`.env`。Qwen 和 DeepSeek profile 均通过 `request_options` 关闭默认思考模式，避免普通写作
+请求将输出额度消耗在推理过程。
+
+```powershell
+ai-chat --profile qwen --system "只回答一句话" "你好"
+```
+
+```python
+from ai_service import AIChatService, ChatMessage
+
+messages = [
+    ChatMessage("system", "你是一个严谨的中文编辑。"),
+    ChatMessage("user", "请改写这句话。"),
+]
+async with AIChatService.from_config("qwen") as service:
+    result = await service.chat(messages)
+    print(result.content)
+```
+
+内置 `qwen`、`deepseek`、`deepseek_v4_pro_thinking`、`glm`、`doubao_turbo`、
+`doubao_pro`、`kimi_k2_6`、`kimi_k2_6_no_thinking` 和 `kimi_k3` profile。豆包 profile 读取
+`AI_SERVICE_DOUBAO_API_KEY`；Kimi K2.6 使用 Moonshot 官方接口并读取
+`AI_SERVICE_KIMI_API_KEY`，Kimi K3 通过百炼月之暗面直供服务调用并复用
+`AI_SERVICE_QWEN_API_KEY`。服务不自动重试生成请求，避免失败状态不明时产生重复费用。
 
 ## thufootball
 
 `THUFootballQueryService` 查询比赛、球队赛果、赛事成绩和交锋记录；
 `THUFootballReportService` 生成单场 PNG 战报。
+
+球队身份、简称、最终排名和历史比赛来自 PostgreSQL。部署前执行：
+
+```powershell
+python -m alembic upgrade head
+```
 
 ```powershell
 thufootball games --match-date 2026-07-15 --tournament-id 122

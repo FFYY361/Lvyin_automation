@@ -1,52 +1,22 @@
-"""Validated static final-outcome data for supported THUFootball tournaments."""
+"""Validated final-outcome catalog for supported THUFootball tournaments."""
 
 from __future__ import annotations
 
-import json
 import re
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 from .errors import ConfigurationError
 
-_NOTES_ROOT = Path(__file__).with_name("notes")
 _SEASON_PATTERN = re.compile(r"(20\d{2}~20\d{2})$")
-_TEAM_CATEGORIES = ("男足", "女足", "五人制")
-_TEAM_FIELDS = frozenset((*_TEAM_CATEGORIES, "简称"))
-
-
-class _DuplicateKeyError(ValueError):
-    pass
-
-
 def _configuration_error(location: str) -> ConfigurationError:
     return ConfigurationError(
         f"Static THUFootball outcome data is invalid at {location}",
         stage="configuration",
     )
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateKeyError(key)
-        result[key] = value
-    return result
-
-
-def _read_json(path: Path, location: str) -> object:
-    try:
-        return json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object
-        )
-    except (OSError, UnicodeError, json.JSONDecodeError, _DuplicateKeyError) as exc:
-        raise _configuration_error(location) from exc
 
 
 def _positive_int(value: object, location: str) -> int:
@@ -81,269 +51,122 @@ class StaticOutcomeCatalog:
     tournaments_by_id: Mapping[int, StaticTournamentRanking]
 
 
-def _load_teams(
-    notes_root: Path,
-) -> tuple[
-    dict[str, tuple[int, ...]],
-    dict[int, tuple[str, ...]],
-    dict[str, StaticTeamIdentity],
-]:
-    raw = _read_json(notes_root / "teams.json", "teams.json")
-    if not isinstance(raw, dict) or not raw:
-        raise _configuration_error("teams.json")
+_DATABASE_COMPETITIONS = (
+    ("male_team_ids", "男足"),
+    ("female_team_ids", "女足"),
+    ("futsal_team_ids", "五人制"),
+)
 
+
+def build_outcome_catalog(
+    institutions: list[Mapping[str, Any]],
+    tournaments: list[Mapping[str, Any]],
+) -> StaticOutcomeCatalog:
+    """Validate database rows and build an immutable outcome catalog."""
+
+    if not institutions:
+        raise _configuration_error("institutions")
     teams: dict[str, tuple[int, ...]] = {}
     identities: dict[str, StaticTeamIdentity] = {}
     reverse: dict[int, list[str]] = defaultdict(list)
     institution_by_id: dict[int, str] = {}
-    for institution_name, raw_team in raw.items():
+    for raw in institutions:
+        name = raw.get("name")
+        brief_name = raw.get("short_name")
         if (
-            not isinstance(institution_name, str)
-            or not institution_name.strip()
-            or institution_name != institution_name.strip()
-            or not isinstance(raw_team, dict)
-            or set(raw_team) != _TEAM_FIELDS
-        ):
-            raise _configuration_error("teams.json")
-        brief_name = raw_team["简称"]
-        if (
-            not isinstance(brief_name, str)
+            not isinstance(name, str)
+            or not name.strip()
+            or name != name.strip()
+            or not isinstance(brief_name, str)
             or not brief_name.strip()
             or brief_name != brief_name.strip()
         ):
-            raise _configuration_error(f"teams.json.{institution_name}.简称")
-
-        for category in _TEAM_CATEGORIES:
-            raw_ids = raw_team[category]
-            if not isinstance(raw_ids, list):
-                raise _configuration_error(f"teams.json.{institution_name}.{category}")
+            raise _configuration_error("institutions")
+        for field, category in _DATABASE_COMPETITIONS:
+            raw_ids = raw.get(field)
+            if not isinstance(raw_ids, (list, tuple)):
+                raise _configuration_error(f"institutions.{name}.{field}")
             team_ids = tuple(
-                _positive_int(team_id, f"teams.json.{institution_name}.{category}")
+                _positive_int(team_id, f"institutions.{name}.{field}")
                 for team_id in raw_ids
             )
             if len(set(team_ids)) != len(team_ids):
-                raise _configuration_error(f"teams.json.{institution_name}.{category}")
+                raise _configuration_error(f"institutions.{name}.{field}")
             if not team_ids:
                 continue
-
-            team_name = f"{institution_name}{category}"
+            team_name = f"{name}{category}"
             teams[team_name] = team_ids
             identities[team_name] = StaticTeamIdentity(
                 team_name=team_name,
-                institution_name=institution_name,
+                institution_name=name,
                 category=category,
                 brief_name=brief_name,
                 team_ids=team_ids,
             )
             for team_id in team_ids:
-                owner = institution_by_id.setdefault(team_id, institution_name)
-                if owner != institution_name:
-                    raise _configuration_error(f"teams.json.team_id.{team_id}")
+                owner = institution_by_id.setdefault(team_id, name)
+                if owner != name:
+                    raise _configuration_error(f"institutions.team_id.{team_id}")
                 reverse[team_id].append(team_name)
 
-    return (
-        teams,
-        {team_id: tuple(team_names) for team_id, team_names in reverse.items()},
-        identities,
-    )
-
-
-def _validate_shared_team_ids(
-    raw_items: list[object],
-    teams: Mapping[str, tuple[int, ...]],
-    team_names_by_id: Mapping[int, tuple[str, ...]],
-) -> None:
-    audited: dict[int, tuple[str, ...]] = {}
-    for item in raw_items:
-        if not isinstance(item, dict) or set(item) != {
-            "team_id",
-            "institution",
-            "team_names",
-        }:
-            raise _configuration_error("identity_audit.json.shared_team_ids")
-        team_id = _positive_int(
-            item["team_id"], "identity_audit.json.shared_team_ids.team_id"
-        )
-        institution = item["institution"]
-        team_names = item["team_names"]
-        if (
-            not isinstance(institution, str)
-            or not institution.strip()
-            or not isinstance(team_names, list)
-            or len(team_names) < 2
-            or any(name not in teams for name in team_names)
-            or team_id in audited
-        ):
-            raise _configuration_error("identity_audit.json.shared_team_ids")
-        audited[team_id] = tuple(team_names)
-
-    actual = {
-        team_id: team_names
-        for team_id, team_names in team_names_by_id.items()
-        if len(team_names) > 1
-    }
-    if audited != actual:
-        raise _configuration_error("identity_audit.json.shared_team_ids")
-
-
-def _validate_merged_teams(
-    raw_items: list[object],
-    teams: Mapping[str, tuple[int, ...]],
-) -> None:
-    audited_merged: set[str] = set()
-    for item in raw_items:
-        if not isinstance(item, dict) or set(item) != {
-            "team_name",
-            "team_ids",
-            "observations",
-        }:
-            raise _configuration_error("identity_audit.json.merged_teams")
-        team_name = item["team_name"]
-        team_ids = item["team_ids"]
-        observations = item["observations"]
-        if (
-            not isinstance(team_name, str)
-            or team_name not in teams
-            or team_name in audited_merged
-            or not isinstance(team_ids, list)
-            or not team_ids
-            or not isinstance(observations, list)
-            or not observations
-        ):
-            raise _configuration_error("identity_audit.json.merged_teams")
-        audited_ids = tuple(
-            _positive_int(team_id, "identity_audit.json.merged_teams.team_ids")
-            for team_id in team_ids
-        )
-        if len(set(audited_ids)) != len(audited_ids) or audited_ids != tuple(
-            team_id for team_id in teams[team_name] if team_id in audited_ids
-        ):
-            raise _configuration_error("identity_audit.json.merged_teams")
-
-        observed_ids: set[int] = set()
-        for observation in observations:
-            if not isinstance(observation, dict) or set(observation) != {
-                "source_names",
-                "team_id",
-                "tournament_ids",
-            }:
-                raise _configuration_error("identity_audit.json.merged_teams")
-            source_names = observation["source_names"]
-            observed_team_id = _positive_int(
-                observation["team_id"],
-                "identity_audit.json.merged_teams.observations.team_id",
-            )
-            observed_tournament_ids = observation["tournament_ids"]
-            if (
-                observed_team_id not in audited_ids
-                or observed_team_id in observed_ids
-                or not isinstance(source_names, list)
-                or not source_names
-                or any(
-                    not isinstance(source_name, str) or not source_name.strip()
-                    for source_name in source_names
-                )
-                or not isinstance(observed_tournament_ids, list)
-                or not observed_tournament_ids
-            ):
-                raise _configuration_error("identity_audit.json.merged_teams")
-            validated_tournament_ids = tuple(
-                _positive_int(
-                    tournament_id,
-                    "identity_audit.json.merged_teams.observations.tournament_ids",
-                )
-                for tournament_id in observed_tournament_ids
-            )
-            if len(set(validated_tournament_ids)) != len(validated_tournament_ids):
-                raise _configuration_error("identity_audit.json.merged_teams")
-            observed_ids.add(observed_team_id)
-        if observed_ids != set(audited_ids):
-            raise _configuration_error("identity_audit.json.merged_teams")
-        audited_merged.add(team_name)
-
-    if {
-        team_name for team_name, team_ids in teams.items() if len(team_ids) > 1
-    } - audited_merged:
-        raise _configuration_error("identity_audit.json.merged_teams")
-
-
-def _validate_identity_audit(
-    notes_root: Path,
-    teams: Mapping[str, tuple[int, ...]],
-    team_names_by_id: Mapping[int, tuple[str, ...]],
-) -> None:
-    raw = _read_json(notes_root / "identity_audit.json", "identity_audit.json")
-    if not isinstance(raw, dict) or set(raw) != {"merged_teams", "shared_team_ids"}:
-        raise _configuration_error("identity_audit.json")
-    if not isinstance(raw["merged_teams"], list) or not isinstance(
-        raw["shared_team_ids"], list
-    ):
-        raise _configuration_error("identity_audit.json")
-
-    _validate_shared_team_ids(raw["shared_team_ids"], teams, team_names_by_id)
-    _validate_merged_teams(raw["merged_teams"], teams)
-
-
-def _load_tournaments(
-    notes_root: Path, teams: Mapping[str, tuple[int, ...]]
-) -> tuple[tuple[int, ...], dict[int, StaticTournamentRanking]]:
-    raw_tournaments = _read_json(notes_root / "tourns.json", "tourns.json")
-    if not isinstance(raw_tournaments, dict) or not raw_tournaments:
-        raise _configuration_error("tourns.json")
-
+    if not tournaments:
+        raise _configuration_error("tournaments")
     tournament_ids: list[int] = []
-    metadata: dict[int, tuple[str, str]] = {}
-    for name, raw_tournament_id in raw_tournaments.items():
-        if not isinstance(name, str) or not name.strip():
-            raise _configuration_error("tourns.json")
-        tournament_id = _positive_int(raw_tournament_id, "tourns.json")
+    tournament_rankings: dict[int, StaticTournamentRanking] = {}
+    for raw in tournaments:
+        tournament_id = _positive_int(raw.get("id"), "tournaments.id")
+        name = raw.get("name")
+        raw_ranks = raw.get("final_rankings")
+        if (
+            tournament_id in tournament_rankings
+            or not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(raw_ranks, dict)
+            or not raw_ranks
+        ):
+            raise _configuration_error(f"tournaments.{tournament_id}")
         season_match = _SEASON_PATTERN.search(name)
-        if tournament_id in metadata or season_match is None:
-            raise _configuration_error("tourns.json")
-        tournament_ids.append(tournament_id)
-        metadata[tournament_id] = (name, season_match.group(1))
-
-    ranks_root = notes_root / "ranks"
-    try:
-        rank_paths = tuple(ranks_root.glob("*.json"))
-    except OSError as exc:
-        raise _configuration_error("ranks") from exc
-    if any(not path.stem.isdecimal() for path in rank_paths):
-        raise _configuration_error("ranks")
-    rank_file_ids = {int(path.stem) for path in rank_paths}
-    if rank_file_ids != set(tournament_ids):
-        raise _configuration_error("ranks")
-
-    tournaments: dict[int, StaticTournamentRanking] = {}
-    for tournament_id in tournament_ids:
-        location = f"ranks/{tournament_id}.json"
-        raw_ranks = _read_json(ranks_root / f"{tournament_id}.json", location)
-        if not isinstance(raw_ranks, dict) or not raw_ranks:
-            raise _configuration_error(location)
+        if season_match is None:
+            raise _configuration_error(f"tournaments.{tournament_id}.name")
         ranks: dict[str, str] = {}
         for team_name, rank in raw_ranks.items():
             if team_name not in teams or not isinstance(rank, str) or not rank.strip():
-                raise _configuration_error(location)
+                raise _configuration_error(
+                    f"tournaments.{tournament_id}.final_rankings"
+                )
             ranks[team_name] = rank
-        name, season = metadata[tournament_id]
-        tournaments[tournament_id] = StaticTournamentRanking(
+        season = season_match.group(1)
+        tournament_ids.append(tournament_id)
+        tournament_rankings[tournament_id] = StaticTournamentRanking(
             tournament_id=tournament_id,
             name=name,
             season=season,
             ranks=MappingProxyType(ranks),
         )
-    return tuple(tournament_ids), tournaments
-
-
-@lru_cache(maxsize=1)
-def load_static_outcome_catalog() -> StaticOutcomeCatalog:
-    teams, team_names_by_id, identities = _load_teams(_NOTES_ROOT)
-    _validate_identity_audit(_NOTES_ROOT, teams, team_names_by_id)
-    tournament_ids, tournaments = _load_tournaments(_NOTES_ROOT, teams)
     return StaticOutcomeCatalog(
-        tournament_ids=tournament_ids,
+        tournament_ids=tuple(tournament_ids),
         teams_by_name=MappingProxyType(identities),
         team_ids_by_name=MappingProxyType(teams),
-        team_names_by_id=MappingProxyType(team_names_by_id),
-        tournaments_by_id=MappingProxyType(tournaments),
+        team_names_by_id=MappingProxyType(
+            {team_id: tuple(names) for team_id, names in reverse.items()}
+        ),
+        tournaments_by_id=MappingProxyType(tournament_rankings),
     )
+
+
+def load_outcome_catalog() -> StaticOutcomeCatalog:
+    """Load the canonical outcome catalog from PostgreSQL."""
+
+    from .database import (
+        FootballDataRepository,
+        create_football_engine,
+        create_football_session_factory,
+    )
+
+    engine = create_football_engine()
+    factory = create_football_session_factory(engine)
+    try:
+        with factory() as session:
+            return FootballDataRepository(session).load_outcome_catalog()
+    finally:
+        engine.dispose()

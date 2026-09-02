@@ -67,12 +67,12 @@ COMPETITIONS = MappingProxyType(
             competition=Competition.FEMALE,
             full_name="马约翰杯女子足球赛",
             short_name="马杯女足",
-            current_tournament_ids=(123,),
-            current_tournament_names=MappingProxyType({123: "女足"}),
+            current_tournament_ids=(138,),
+            current_tournament_names=MappingProxyType({138: "女足"}),
             historical_seasons=(
+                HistoricalSeason("2025~2026", (123,), True),
                 HistoricalSeason("2024~2025", (102,), True),
                 HistoricalSeason("2023~2024", (90,), True),
-                HistoricalSeason("2022~2023", (74,), False),
             ),
         ),
         Competition.FUTSAL: CompetitionConfig(

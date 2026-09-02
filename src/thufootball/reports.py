@@ -35,7 +35,7 @@ from .models import (
     PreparedGameReport,
     ReportSettings,
 )
-from .rankings import load_static_outcome_catalog
+from .rankings import StaticOutcomeCatalog, load_outcome_catalog
 from .report_validation import validate_game_events
 
 _REPORT_WIDTH = 1600
@@ -115,11 +115,12 @@ def _validate_settings(settings: object) -> ReportSettings:
 def resolve_report_team_name(
     game: GameSummary,
     side: Literal["home", "away"],
+    outcome_catalog: StaticOutcomeCatalog | None = None,
 ) -> str:
-    """Resolve the displayed report name, preferring the static full name."""
+    """Resolve the displayed report name, preferring the canonical full name."""
 
     team_id = game.home_team_id if side == "home" else game.away_team_id
-    catalog = load_static_outcome_catalog()
+    catalog = outcome_catalog or load_outcome_catalog()
     static_names = catalog.team_names_by_id.get(team_id)
     if static_names:
         return catalog.teams_by_name[static_names[0]].institution_name
@@ -162,11 +163,12 @@ def _single_abandon_text(
     detail: GameDetail,
     *,
     awarded_loss: bool,
+    outcome_catalog: StaticOutcomeCatalog,
     score: tuple[int, int] | None = None,
 ) -> str:
     game = detail.game
-    home_name = resolve_report_team_name(game, "home")
-    away_name = resolve_report_team_name(game, "away")
+    home_name = resolve_report_team_name(game, "home", outcome_catalog)
+    away_name = resolve_report_team_name(game, "away", outcome_catalog)
     abandoned_name = home_name if game.home_abandon is True else away_name
     reason = "被判负" if awarded_loss else "弃赛"
     home_score, away_score = score or (
@@ -180,15 +182,20 @@ def _single_abandon_text(
     )
 
 
-def prepare_game_report(detail: GameDetail) -> PreparedGameReport:
+def prepare_game_report(
+    detail: GameDetail,
+    *,
+    outcome_catalog: StaticOutcomeCatalog | None = None,
+) -> PreparedGameReport:
     """Apply shared event-validation and abandonment rules to one report."""
 
     game = detail.game
+    catalog = outcome_catalog or load_outcome_catalog()
     home_abandon = game.home_abandon is True
     away_abandon = game.away_abandon is True
     if home_abandon and away_abandon:
-        home_name = resolve_report_team_name(game, "home")
-        away_name = resolve_report_team_name(game, "away")
+        home_name = resolve_report_team_name(game, "home", catalog)
+        away_name = resolve_report_team_name(game, "away", catalog)
         warning = GameEventIssue(
             severity="warning",
             code="both_sides_abandoned",
@@ -209,11 +216,13 @@ def prepare_game_report(detail: GameDetail) -> PreparedGameReport:
                 detail=detail,
                 warnings=(),
                 render_image=False,
-                text=_single_abandon_text(detail, awarded_loss=False),
+                text=_single_abandon_text(
+                    detail, awarded_loss=False, outcome_catalog=catalog
+                ),
             )
 
         side = "home" if home_abandon else "away"
-        team_name = resolve_report_team_name(game, side)
+        team_name = resolve_report_team_name(game, side, catalog)
         warning = GameEventIssue(
             severity="warning",
             code="abandon_with_events_awarded_loss",
@@ -232,7 +241,6 @@ def prepare_game_report(detail: GameDetail) -> PreparedGameReport:
             home_score=score[0],
             away_score=score[1],
             result_text=f"{score[0]}:{score[1]}",
-            penalty_shootout=False,
             home_penalty=None,
             away_penalty=None,
             home_abandon=False,
@@ -244,7 +252,10 @@ def prepare_game_report(detail: GameDetail) -> PreparedGameReport:
             warnings=(warning, *warnings),
             render_image=True,
             text=_single_abandon_text(
-                detail, awarded_loss=True, score=score
+                detail,
+                awarded_loss=True,
+                outcome_catalog=catalog,
+                score=score,
             ),
         )
 
@@ -261,8 +272,9 @@ def prepare_game_report(detail: GameDetail) -> PreparedGameReport:
 def _report_team_name(
     detail: GameDetail,
     side: Literal["home", "away"],
+    outcome_catalog: StaticOutcomeCatalog,
 ) -> str:
-    return resolve_report_team_name(detail.game, side)
+    return resolve_report_team_name(detail.game, side, outcome_catalog)
 
 
 def _report_subtitle(detail: GameDetail) -> str:
@@ -295,7 +307,7 @@ def _event_name(event: GameEvent) -> str:
 
 def _event_time(event: GameEvent) -> str:
     if event.during_penalty_shootout:
-        return f"{event.minute}'P"
+        return "P" if event.minute is None else f"{event.minute}'P"
     if event.stoppage_minute > 0:
         return f"{event.minute}'+{event.stoppage_minute}'"
     return f"{event.minute}'"
@@ -403,8 +415,10 @@ def _report_payload(
     settings: ReportSettings,
     assets: Mapping[str, bytes],
     qr_code: bytes | None,
+    outcome_catalog: StaticOutcomeCatalog | None = None,
 ) -> dict[str, Any]:
     game_id = detail.game.game_id
+    catalog = outcome_catalog or load_outcome_catalog()
     if not isinstance(assets, Mapping):
         raise QueryValidationError(
             "assets must be a mapping",
@@ -437,8 +451,8 @@ def _report_payload(
 
     return {
         "game_id": game_id,
-        "home_name": _report_team_name(detail, "home"),
-        "away_name": _report_team_name(detail, "away"),
+        "home_name": _report_team_name(detail, "home", catalog),
+        "away_name": _report_team_name(detail, "away", catalog),
         "home_score": detail.game.home_score or 0,
         "away_score": detail.game.away_score or 0,
         "subtitle": _report_subtitle(detail),
@@ -1206,24 +1220,30 @@ def _render_html_to_png(
     browser = _find_browser()
     try:
         with tempfile.TemporaryDirectory(
-            prefix="thufootball-report-"
+            prefix="thufootball-report-",
+            ignore_cleanup_errors=True,
         ) as directory:
             temporary = Path(directory)
             html_path = temporary / "report.html"
             profile_path = temporary / "browser-profile"
             html_path.write_text(html_source, encoding="utf-8")
-            command = [
-                str(browser),
-                "--headless",
-                "--hide-scrollbars",
-                "--no-first-run",
-                "--disable-extensions",
-                "--disable-dev-shm-usage",
-                f"--user-data-dir={profile_path}",
-                "--virtual-time-budget=30000",
-                "--dump-dom",
-                html_path.resolve().as_uri(),
-            ]
+            command = [str(browser)]
+            if os.name == "nt":
+                command.append("--edge-skip-compat-layer-relaunch")
+            command.extend(
+                [
+                    "--headless",
+                    "--hide-scrollbars",
+                    "--no-first-run",
+                    "--noerrdialogs",
+                    "--disable-extensions",
+                    "--disable-dev-shm-usage",
+                    f"--user-data-dir={profile_path}",
+                    "--virtual-time-budget=30000",
+                    "--dump-dom",
+                    html_path.resolve().as_uri(),
+                ]
+            )
             run_options: dict[str, Any] = {}
             if os.name == "nt":
                 run_options["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -1285,10 +1305,12 @@ def render_game_report(
     settings: ReportSettings,
     assets: Mapping[str, bytes],
     qr_code: bytes | None = None,
+    outcome_catalog: StaticOutcomeCatalog | None = None,
 ) -> tuple[bytes, int, int]:
     """Run TAFA's jCanvas layout in Chromium and return its canvas PNG."""
 
     settings = _validate_settings(settings)
+    catalog = outcome_catalog or load_outcome_catalog()
     game_id = detail.game.game_id
     if settings.include_qr_code and qr_code is None:
         raise InvalidResponse(
@@ -1301,6 +1323,7 @@ def render_game_report(
         settings=settings,
         assets=assets,
         qr_code=qr_code,
+        outcome_catalog=catalog,
     )
     png = _render_html_to_png(
         _build_report_html(payload),
@@ -1334,7 +1357,9 @@ def render_game_report(
     return output.getvalue(), width, height
 
 
-def _safe_filename(detail: GameDetail) -> str:
+def _safe_filename(
+    detail: GameDetail, outcome_catalog: StaticOutcomeCatalog
+) -> str:
     game = detail.game
     score = (
         f"{game.home_score}-{game.away_score}"
@@ -1343,8 +1368,8 @@ def _safe_filename(detail: GameDetail) -> str:
     )
     filename = (
         f"game_{game.game_id}_"
-        f"{_report_team_name(detail, 'home')}_{score}_"
-        f"{_report_team_name(detail, 'away')}.png"
+        f"{_report_team_name(detail, 'home', outcome_catalog)}_{score}_"
+        f"{_report_team_name(detail, 'away', outcome_catalog)}.png"
     )
     filename = _INVALID_FILENAME.sub("_", filename)
     filename = re.sub(r"\s+", "_", filename).strip(" ._")
@@ -1354,12 +1379,13 @@ def _safe_filename(detail: GameDetail) -> str:
 def _output_path(
     output: str | os.PathLike[str] | None,
     detail: GameDetail,
+    outcome_catalog: StaticOutcomeCatalog,
 ) -> Path:
     if output is None:
-        return Path.cwd() / _safe_filename(detail)
+        return Path.cwd() / _safe_filename(detail, outcome_catalog)
     target = Path(output).expanduser()
     if target.exists() and target.is_dir():
-        return target / _safe_filename(detail)
+        return target / _safe_filename(detail, outcome_catalog)
     if target.suffix.casefold() != ".png":
         target = target.with_suffix(".png")
     return target
@@ -1368,8 +1394,19 @@ def _output_path(
 class THUFootballReportService:
     """Read game data and save a PNG drawn by TAFA's browser canvas code."""
 
-    def __init__(self, client: THUFootballClient) -> None:
+    def __init__(
+        self,
+        client: THUFootballClient,
+        outcome_catalog: StaticOutcomeCatalog | None = None,
+    ) -> None:
         self._client = client
+        self._outcome_catalog = outcome_catalog
+
+    @property
+    def outcome_catalog(self) -> StaticOutcomeCatalog:
+        if self._outcome_catalog is None:
+            self._outcome_catalog = load_outcome_catalog()
+        return self._outcome_catalog
 
     async def _get_report_assets(self) -> Mapping[str, bytes]:
         with _REPORT_ASSET_CACHE_LOCK:
@@ -1400,7 +1437,10 @@ class THUFootballReportService:
     async def get_prepared_game_report(self, game_id: int) -> PreparedGameReport:
         """Read one match and apply the shared report rules."""
 
-        return prepare_game_report(await self.load_game_detail(game_id))
+        return prepare_game_report(
+            await self.load_game_detail(game_id),
+            outcome_catalog=self.outcome_catalog,
+        )
 
     async def get_game_detail(
         self, game_id: int
@@ -1434,6 +1474,7 @@ class THUFootballReportService:
             settings=settings,
             assets=assets,
             qr_code=qr_code,
+            outcome_catalog=self.outcome_catalog,
         )
 
     async def download_game_report(
@@ -1467,7 +1508,7 @@ class THUFootballReportService:
         detail, warnings = await self.get_game_detail(game_id)
         png, width, height = await self.render_game_detail(detail, settings=settings)
 
-        target = _output_path(output, detail).resolve()
+        target = _output_path(output, detail, self.outcome_catalog).resolve()
         if target.exists() and not overwrite:
             raise ConfigurationError(
                 "output file already exists; pass --override in the CLI "

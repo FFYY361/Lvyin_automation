@@ -29,7 +29,22 @@ from thufootball import (
     THUFootballError,
     THUFootballQueryService,
 )
+from thufootball.database import FootballDataRepository
 
+from .ai_preview import (
+    ai_preview_context,
+    configured_website_profile,
+    institution_detail_payload,
+    institution_summary_payload,
+    model_config_hash,
+    prepare_generation,
+    recover_interrupted_generations,
+    require_match_access,
+    result_payload,
+    run_generation,
+    update_institution_descriptions,
+    update_match_manual_descriptions,
+)
 from .auth import (
     get_session,
     hash_password,
@@ -48,6 +63,7 @@ from .credentials import (
 )
 from .database import create_database_engine, create_session_factory
 from .models import (
+    AIPreviewResult,
     ArticleRecord,
     Batch,
     EditorialDefaults,
@@ -56,6 +72,7 @@ from .models import (
     WechatDraft,
 )
 from .schemas import (
+    AIPreviewGenerationRequest,
     AssignMatchRequest,
     BatchStatus,
     ChangePasswordRequest,
@@ -64,7 +81,9 @@ from .schemas import (
     CreateBatchesRequest,
     CreateWechatDraftRequest,
     EditorialRequest,
+    InstitutionDescriptionsRequest,
     LoginRequest,
+    MatchManualDescriptionsRequest,
     RegisterRequest,
     ResetPasswordRequest,
     THUFootballCredentialsRequest,
@@ -77,6 +96,7 @@ from .schemas import (
 )
 from .workflow import (
     ExternalFactories,
+    WebsiteReportSession,
     WorkflowError,
     article_payload,
     batch_payload,
@@ -228,27 +248,43 @@ def create_app(
     resolved_credential_env_path = Path(credential_env_path)
     automatic_credentials = AutomaticCredentialManager.from_environment()
 
-    @asynccontextmanager
-    async def process_environment_queries():
+    def load_outcome_catalog():
+        with session_factory() as session:
+            return FootballDataRepository(session).load_outcome_catalog()
+
+    def create_environment_client() -> THUFootballClient:
         client_options: dict[str, Any] = {
             "openid": os.environ.get("THUFOOTBALL_OPENID") or None,
             "session_key": os.environ.get("THUFOOTBALL_SESSION_KEY") or None,
             "load_environment": False,
         }
         if automatic_credentials.configured:
-            client = AutoRefreshingTHUFootballClient(
+            return AutoRefreshingTHUFootballClient(
                 **client_options,
                 credential_refresher=automatic_credentials.refresh,
                 authentication_retries=2,
             )
-        else:
-            client = THUFootballClient(**client_options)
+        return THUFootballClient(**client_options)
+
+    @asynccontextmanager
+    async def process_environment_queries():
+        client = create_environment_client()
         async with client:
-            async with THUFootballQueryService(client) as service:
+            async with THUFootballQueryService(
+                client, outcome_catalog=load_outcome_catalog()
+            ) as service:
                 yield service
 
+    @asynccontextmanager
+    async def process_environment_reports():
+        async with WebsiteReportSession(
+            load_outcome_catalog(), client=create_environment_client()
+        ) as service:
+            yield service
+
     base_factories = external_factories or ExternalFactories(
-        queries=process_environment_queries
+        queries=process_environment_queries,
+        reports=process_environment_reports,
     )
     thufootball_lock = asyncio.Lock()
 
@@ -270,9 +306,12 @@ def create_app(
         reports=locked_reports,
     )
     resolved_settings.artifact_root.mkdir(parents=True, exist_ok=True)
+    ai_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if hasattr(session_factory, "begin"):
+            recover_interrupted_generations(session_factory)
         if automatic_credentials.configured:
             try:
                 await automatic_credentials.refresh()
@@ -283,6 +322,11 @@ def create_app(
                     exc,
                 )
         yield
+        pending_tasks = list(ai_tasks)
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         if engine is not None:
             engine.dispose()
 
@@ -299,6 +343,7 @@ def create_app(
     app.state.external_factories = resolved_factories
     app.state.thufootball_lock = thufootball_lock
     app.state.automatic_credentials = automatic_credentials
+    app.state.ai_tasks = ai_tasks
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=list(resolved_settings.allowed_hosts),
@@ -451,6 +496,49 @@ def create_app(
                 _admin_user_payload(user, counts.get(user.id, 0)) for user in users
             ]
         }
+
+    @app.get("/api/admin/institutions")
+    def list_institutions(
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        repository = FootballDataRepository(session)
+        return {
+            "items": [
+                institution_summary_payload(record)
+                for record in repository.list_institutions()
+            ]
+        }
+
+    @app.get("/api/admin/institutions/{institution_name}")
+    def get_institution(
+        institution_name: str,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        try:
+            record = FootballDataRepository(session).get_institution(
+                institution_name
+            )
+        except ConfigurationError as exc:
+            raise _not_found("institution") from exc
+        return institution_detail_payload(record)
+
+    @app.put("/api/admin/institutions/{institution_name}")
+    def put_institution(
+        institution_name: str,
+        payload: InstitutionDescriptionsRequest,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        return update_institution_descriptions(
+            session,
+            institution_name,
+            male_description=payload.male_description,
+            female_description=payload.female_description,
+            futsal_description=payload.futsal_description,
+            player_descriptions=payload.player_descriptions,
+        )
 
     @app.get("/api/admin/users/{user_id}")
     def get_user_summary(
@@ -1005,6 +1093,89 @@ def create_app(
             expected_version=payload.expected_version,
             writers=current.writers,
             body=payload.body,
+        )
+
+    @app.get("/api/matches/{game_id}/ai-preview-context")
+    def get_ai_preview_context(
+        game_id: int,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        require_match_access(session, game_id, user)
+        return ai_preview_context(session, game_id)
+
+    @app.post("/api/matches/{game_id}/ai-preview-generations")
+    async def create_ai_preview_generation(
+        game_id: int,
+        payload: AIPreviewGenerationRequest,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        require_match_access(session, game_id, user)
+        result, material = prepare_generation(
+            session,
+            game_id=game_id,
+            model_profile=payload.model_profile,
+            requested_by_user_id=user.id,
+        )
+        if material is not None:
+            config_hash = result.model_config_hash
+            task = asyncio.create_task(
+                run_generation(
+                    app.state.session_factory,
+                    app.state.external_factories.ai,
+                    game_id=game_id,
+                    model_profile=result.model_profile,
+                    material=material,
+                    request_token=result.request_token,
+                    config_hash=config_hash,
+                )
+            )
+            ai_tasks.add(task)
+            task.add_done_callback(ai_tasks.discard)
+        status_code = 202 if result.status in {"queued", "running"} else 200
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                **result_payload(result),
+                "reused": material is None,
+            },
+        )
+
+    @app.get(
+        "/api/matches/{game_id}/ai-preview-results/{model_profile}"
+    )
+    def get_ai_preview_result(
+        game_id: int,
+        model_profile: str,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        require_match_access(session, game_id, user)
+        profile = configured_website_profile(model_profile)
+        result = session.get(AIPreviewResult, (game_id, model_profile))
+        if result is None:
+            raise _not_found("AI preview result")
+        return result_payload(
+            result,
+            current_config_hash=model_config_hash(profile),
+        )
+
+    @app.put("/api/matches/{game_id}/manual-descriptions")
+    def put_match_manual_descriptions(
+        game_id: int,
+        payload: MatchManualDescriptionsRequest,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        require_match_access(session, game_id, user)
+        return update_match_manual_descriptions(
+            session,
+            game_id,
+            home_team_description=payload.home_team.team_description,
+            home_player_descriptions=payload.home_team.player_descriptions,
+            away_team_description=payload.away_team.team_description,
+            away_player_descriptions=payload.away_team.player_descriptions,
         )
 
     @app.put("/api/weather/{target_date}")

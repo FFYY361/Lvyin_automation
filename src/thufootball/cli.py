@@ -88,7 +88,7 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     team_outcomes = commands.add_parser(
-        "team-outcomes", help="read static final tournament outcomes for one team"
+        "team-outcomes", help="read final tournament outcomes for one team"
     )
     team_outcomes.add_argument("team_id", type=_positive_id)
     team_outcomes.add_argument(

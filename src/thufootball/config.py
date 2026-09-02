@@ -6,7 +6,14 @@ import os
 from pathlib import Path
 
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
-CREDENTIAL_ENV_NAMES = ("THUFOOTBALL_OPENID", "THUFOOTBALL_SESSION_KEY")
+CREDENTIAL_ENV_NAMES = (
+    "THUFOOTBALL_OPENID",
+    "THUFOOTBALL_SESSION_KEY",
+)
+ENV_NAMES = (
+    *CREDENTIAL_ENV_NAMES,
+    "WEBSITE_DATABASE_URL",
+)
 
 
 def load_env_file(path: Path = DEFAULT_ENV_FILE) -> None:
@@ -21,7 +28,7 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> None:
             continue
         name, value = stripped.split("=", 1)
         name = name.strip()
-        if name not in CREDENTIAL_ENV_NAMES:
+        if name not in ENV_NAMES:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":

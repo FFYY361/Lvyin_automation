@@ -24,8 +24,8 @@ describe("role-aware tutorial", () => {
   it("shows both role tutorials to administrators", () => {
     renderPage(<TutorialPage />, admin, "/tutorial");
     expect(screen.getByText("管理员工作流")).toBeInTheDocument();
-    expect(screen.getAllByRole("img")).toHaveLength(12);
-    expect(screen.getAllByRole("figure")).toHaveLength(12);
+    expect(screen.getAllByRole("img")).toHaveLength(14);
+    expect(screen.getAllByRole("figure")).toHaveLength(14);
     for (const item of screen.getAllByRole("figure")) {
       expect(item.querySelector("img")?.getAttribute("alt")).toBeTruthy();
       expect(item.querySelectorAll(".tutorial-figure__marker").length).toBeGreaterThan(0);
@@ -34,14 +34,16 @@ describe("role-aware tutorial", () => {
     expect(screen.getByText(/缺项页面故意保留未填写内容用于教学/)).toBeInTheDocument();
     expect(screen.getByText(/有缺项的批次仍然可以渲染文章并预览/)).toBeInTheDocument();
     expect(screen.getByText(/只有已完善的批次/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "使用 AI 辅助写作" })).toBeInTheDocument();
+    expect(screen.getByText(/“复制正文”只写入剪贴板/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "普通用户教程" }));
     expect(screen.getByText("普通用户工作流")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "额外功能" })).toBeInTheDocument();
-    expect(screen.getByText("7 个步骤")).toBeInTheDocument();
+    expect(screen.getByText("8 个步骤")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "进入已领取的比赛" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "查看前瞻文章" })).toBeInTheDocument();
     expect(screen.queryByText(/只有已完善的批次/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("img")).toHaveLength(8);
+    expect(screen.getAllByRole("img")).toHaveLength(10);
   });
 
   it("never renders administrator tutorial controls for normal users", () => {
@@ -49,14 +51,16 @@ describe("role-aware tutorial", () => {
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByText("管理员工作流")).not.toBeInTheDocument();
     expect(screen.getByText("普通用户工作流")).toBeInTheDocument();
-    expect(screen.getByText("7 个步骤")).toBeInTheDocument();
+    expect(screen.getByText("8 个步骤")).toBeInTheDocument();
     expect(screen.getByText(/关闭只禁止继续领取，不会清空内容/)).toBeInTheDocument();
     expect(screen.getByText(/按钮变回不可用且页面显示“已保存”后/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "使用 AI 辅助写作" })).toBeInTheDocument();
+    expect(screen.getByText(/生成在服务器后台继续，可以关闭或切换页面/)).toBeInTheDocument();
     expect(screen.getByText(/可以查看批次内的比赛，并打开管理员最近一次渲染的前瞻文章/)).toBeInTheDocument();
     expect(screen.queryByText(/存在缺项|只有已完善|微信公众号草稿箱|文章会过期/)).not.toBeInTheDocument();
     expect(screen.queryByText(/4 月 18|4 月 19/)).not.toBeInTheDocument();
     expect(document.querySelectorAll(".tutorial-figure__marker--badge-right")).toHaveLength(2);
-    expect(screen.getAllByRole("img")).toHaveLength(8);
+    expect(screen.getAllByRole("img")).toHaveLength(10);
   });
 });
 
