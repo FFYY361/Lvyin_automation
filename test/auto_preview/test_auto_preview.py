@@ -160,7 +160,7 @@ class _FakeQueries:
     def __init__(self) -> None:
         self.target = _game(
             500,
-            138,
+            123,
             datetime(2026, 4, 11, 15, 30, tzinfo=SHANGHAI),
             status=GameStatus.SCHEDULED,
         )
@@ -179,7 +179,7 @@ class _FakeQueries:
             for index, kickoff in enumerate(before_times, start=1):
                 game = _game(
                     600 + team_id * 10 + index,
-                    138,
+                    123,
                     kickoff,
                     status=GameStatus.FINISHED,
                     home_score=2,
@@ -188,7 +188,7 @@ class _FakeQueries:
                 self.results[team_id].append(_team_result(game, team_id))
             after = _game(
                 690 + team_id,
-                138,
+                123,
                 datetime(2026, 4, 12, 12, 0, tzinfo=SHANGHAI),
                 status=GameStatus.FINISHED,
                 home_score=1,
@@ -208,17 +208,17 @@ class _FakeQueries:
             )
             for index, (tournament_id, season_name) in enumerate(
                 (
-                    (123, "2025~2026马杯女足"),
                     (102, "2024~2025马杯女足"),
                     (90, "2023~2024马杯女足"),
-                    (90, "2023~2024马杯女足"),
+                    (74, "2022~2023马杯女足"),
+                    (74, "2022~2023马杯女足"),
                 )
             )
         )
         self.history = HeadToHeadHistory(
             team_a_id=1,
             team_b_id=2,
-            tournament_ids=(138, 123, 102, 90),
+            tournament_ids=(123, 102, 90, 74),
             matches=history_games,
             summary=HeadToHeadSummary(0, 4, 0),
             by_tournament=MappingProxyType({}),
@@ -249,9 +249,6 @@ class _FakeQueries:
             )
         team_name = "社会科学学院女足" if team_id == 1 else "经济管理学院女足"
         return [
-            TeamTournamentOutcome(
-                team_name, 123, "马杯女足2025~2026", "2025~2026", "亚军"
-            ),
             TeamTournamentOutcome(
                 team_name, 102, "马杯女足2024~2025", "2024~2025", "八强"
             ),
@@ -320,7 +317,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         queries.targets.append(
             _game(
                 501,
-                138,
+                123,
                 datetime(2026, 4, 11, 19, 0, tzinfo=SHANGHAI),
                 status=GameStatus.SCHEDULED,
             )
@@ -328,25 +325,25 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         source = await builder.build(datetime(2026, 4, 11).date())
 
-        self.assertEqual(queries.game_queries[0].tournament_ids, (138,))
+        self.assertEqual(queries.game_queries[0].tournament_ids, (123,))
         self.assertEqual(
             queries.team_match_calls,
-            [(1, 138, False), (2, 138, False)],
+            [(1, 123, False), (2, 123, False)],
         )
         self.assertEqual(
             queries.outcome_calls,
-            [(1, (123, 102, 90)), (2, (123, 102, 90))],
+            [(1, (102, 90)), (2, (102, 90))],
         )
-        self.assertEqual(queries.h2h_calls, [(1, 2, (138, 123, 102, 90))])
+        self.assertEqual(queries.h2h_calls, [(1, 2, (123, 102, 90, 74))])
         self.assertEqual(len(source.matches), 2)
         self.assertEqual(source.matches[0].competition_name, "女足")
         self.assertEqual(len(source.matches[0].home.previous_outcomes), 3)
         self.assertEqual(
             source.matches[0].home.previous_outcomes[-1],
             SeasonOutcome(
-                season="23-24",
-                competition_label="女足",
-                outcome="四强",
+                season="22-23",
+                competition_label=None,
+                outcome="未参赛",
             ),
         )
         self.assertEqual(len(source.matches[0].home.current_results), 6)
@@ -401,7 +398,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             dict(competition_config(Competition.FEMALE).current_tournament_names),
-            {138: "女足"},
+            {123: "女足"},
         )
         self.assertEqual(
             dict(competition_config(Competition.FUTSAL).current_tournament_names),
@@ -463,7 +460,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         queries = _FakeQueries()
         queries.target = _game(
             500,
-            138,
+            123,
             datetime(2026, 4, 11, 15, 30, tzinfo=SHANGHAI),
             status=GameStatus.FINISHED,
             home_score=2,
@@ -487,7 +484,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         queries = _FakeQueries()
         queries.target = _game(
             500,
-            138,
+            123,
             datetime(2026, 4, 11, 15, 30, tzinfo=SHANGHAI),
             status=GameStatus.SCHEDULED,
             home_short_name="社科女足",
@@ -1413,7 +1410,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             root = self._root(directory)
             queries = _BatchQueries()
             day = date(2026, 4, 11)
-            queries.no_games.add((day, (138,)))
+            queries.no_games.add((day, (123,)))
             runner, _, _ = self._pipeline(root, queries=queries)
             request = PipelineRequest(
                 (day,),
@@ -1439,7 +1436,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             config = competition_config(Competition.FEMALE)
             changed_scope = replace(
                 config,
-                current_tournament_ids=(138, 999),
+                current_tournament_ids=(123, 999),
             )
             queries.no_games.add((day, changed_scope.current_tournament_ids))
             with patch(
@@ -1466,7 +1463,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             queries = _BatchQueries()
             wechat = _FakeWechat()
             day = date(2026, 4, 11)
-            queries.no_games.add((day, (138,)))
+            queries.no_games.add((day, (123,)))
             runner, _, _ = self._pipeline(root, queries=queries, wechat=wechat)
 
             result = await runner.run(
@@ -2510,7 +2507,7 @@ class PipelineStateTests(unittest.IsolatedAsyncioTestCase):
             queries.targets.append(
                 _game(
                     501,
-                    138,
+                    123,
                     datetime(2026, 4, 11, 19, 0, tzinfo=SHANGHAI),
                     status=GameStatus.SCHEDULED,
                 )
