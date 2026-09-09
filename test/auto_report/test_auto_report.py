@@ -358,7 +358,7 @@ async def test_report_queries_each_competition_once_and_caches_skips(
     football = FakeFootball(
         {
             (122, 124, 126): male_games,
-            (138,): [],
+            (123,): [],
         },
         warning_game_ids={1},
     )
@@ -375,7 +375,7 @@ async def test_report_queries_each_competition_once_and_caches_skips(
 
     assert [query.tournament_ids for query in football.queries] == [
         (122, 124, 126),
-        (138,),
+        (123,),
     ]
     assert len(football.reports) == 1
     assert football.reports[0]["refresh_stats"] is False
@@ -610,16 +610,16 @@ async def test_publish_orders_articles_shares_receipt_and_reuses_it(
             _game(40, datetime(2026, 4, 11, 9, tzinfo=UTC)),
             _game(41, datetime(2026, 4, 12, 9, tzinfo=UTC)),
         ],
-        (138,): [
+        (123,): [
             _game(
                 42,
                 datetime(2026, 4, 11, 10, tzinfo=UTC),
-                tournament_id=138,
+                tournament_id=123,
             ),
             _game(
                 43,
                 datetime(2026, 4, 12, 10, tzinfo=UTC),
-                tournament_id=138,
+                tournament_id=123,
             ),
         ],
     }
@@ -730,11 +730,11 @@ async def test_report_error_blocks_all_articles_and_wechat(tmp_path: Path) -> No
             (122, 124, 126): [
                 _game(60, datetime(2026, 4, 11, 9, tzinfo=UTC))
             ],
-            (138,): [
+            (123,): [
                 _game(
                     61,
                     datetime(2026, 4, 11, 10, tzinfo=UTC),
-                    tournament_id=138,
+                    tournament_id=123,
                 )
             ],
         },
