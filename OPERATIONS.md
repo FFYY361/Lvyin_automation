@@ -41,10 +41,15 @@ tail -n 100 /home/xfy/lvyin_media/logs/web.log
 
 ## 2. 更新网站代码
 
-先在本地提交并推送代码。如果前端有变化，再构建和上传：
+先在本地提交并推送代码，运行后端测试；前端运行测试、类型检查和构建后再上传。
+生产使用固定提交的 detached HEAD，更新时显式指定已验证的完整提交号，不直接 `git pull`。
+停站前准备好新制品和旧版本安装包；停站后备份数据库、Artifacts、`.env`、旧前端及提交号，
+并验证备份。与每日备份共用 `ops/backup.lock`，只停止 `lvyin-web`。
+现有 `ops/backup.sh` 会自动启动网站，不直接用它维持更新期间的停站窗口。
 
 ```powershell
 pnpm --dir frontend test
+pnpm --dir frontend typecheck
 pnpm --dir frontend build
 tar.exe -czf frontend-dist.tar.gz -C frontend/dist .
 scp .\frontend-dist.tar.gz xfy@服务器地址:/home/xfy/lvyin_media/
@@ -56,7 +61,9 @@ scp .\frontend-dist.tar.gz xfy@服务器地址:/home/xfy/lvyin_media/
 cd /home/xfy/lvyin_media/repo
 CONF=/home/xfy/lvyin_media/ops/supervisord.conf
 supervisorctl -c "$CONF" stop lvyin-web
-git pull
+git fetch origin main
+# 将下方占位符替换为本次已验证的完整提交号
+git switch --detach <release-commit>
 conda activate lvyin
 python -m pip install '.[website]'
 python -m alembic upgrade head
@@ -78,6 +85,17 @@ curl https://media.thufootball.tech/api/health
 
 如果只改了 `.env`，不需要重新安装，只需重启 `lvyin-web`。
 
+AI 前瞻的网站模型需要 `AI_SERVICE_DEEPSEEK_API_KEY` 和 `AI_SERVICE_QWEN_API_KEY`。
+通过 SSH 补充这两项，保留其他生产配置，保持 `.env` 权限为 600；不在命令输出、Git
+或前端制品中保存密钥。首次升级到 `v2_football_data` 只会建表，必须另行导入
+`institutions`、`tournaments`、`games` 三张资料表。使用一致性快照导出，在单事务中
+导入并校验完整内容；不覆盖生产用户、任务、文章，不导入本地 AI 生成记录。
+
+回滚时停止网站，切回备份中的旧提交，用 `--no-deps --force-reinstall` 安装备份的
+旧 wheel，恢复旧前端和 `.env`，再启动并检查健康接口。此次 v2 为新增表，回滚应用
+时保留资料和 AI 结果表，不运行会删除它们的 downgrade。仅数据库确有损坏时才从
+停站备份恢复；恢复前保留失败现场及上线后新增数据。
+
 ## 3. 赛季更迭
 
 新赛季开始时，修改 `src/auto_preview/config.py`：
@@ -93,3 +111,18 @@ curl https://media.thufootball.tech/api/health
 `is_finalized = true`；封存赛事不会再参与同步。
 
 修改完成后在本地运行测试和前端构建，再按照第 2 节更新服务器。数据库不需要按赛季重建。
+
+## 4. 2026-09-09 AI 功能上线记录
+
+- 发布提交：`dde9a33d3f330ff0d44ef7e30fc2abc76c6463f9`；上一版本：`bdfaf08`。
+- 数据库：`v1_initial` → `v2_football_data`；导入 53 个院系、14 届赛事、590 场比赛。
+- 资料快照 SHA-256：`0d3a716b3dc312a5d61dea91d0573008e04acb4c9ce021b475e87fbe6822eedd`。
+- 独立回滚备份：`/home/xfy/lvyin_media/deploy-backups/20260909-dde9a33`，各文件 SHA-256 校验通过。
+- 发布与验收记录：`/home/xfy/lvyin_media/releases/20260909-dde9a33`。
+- 停站备份至健康恢复约 10 秒；PostgreSQL 全程保持运行。
+- 本地验证：后端 273 项及 115 个子测试通过，1 项真实外部接口测试按设计跳过；前端 32 项测试、类型检查和构建通过。
+- 上线后原有业务表逐行内容与停站备份一致；公网 HTTPS、前端资源、管理员会话、资料页、任务列表及现有 18 篇文章预览通过。
+- 普通用户权限、真实密码登录流程及生成错误分支由本地集成测试覆盖；线上验证了无效登录及未登录访问受限。
+- 正式比赛 `4257`：DeepSeek 生成成功（846 字符，验收约 89 秒），Qwen 生成成功（894 字符，验收约 179 秒），重复请求均复用缓存；结果保留在各自 AI 槽位，人工正文未改动。
+- 生产环境重新渲染前瞻 HTML 及 Chrome 战报 PNG（1600 × 1670）成功，验证产物保存在发布目录；未写入业务文章、未创建微信草稿。
+- 当前赛事配置为 `122、123、124、126、128`；未删除生产历史任务，未新增资料同步定时任务。
