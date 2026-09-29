@@ -240,6 +240,49 @@ class AIPreviewResult(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class PromptTemplate(Base):
+    __tablename__ = "prompt_templates"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AITitleResult(Base):
+    __tablename__ = "ai_title_results"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed')",
+            name="ck_ai_title_results_status",
+        ),
+    )
+
+    batch_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("batches.id", ondelete="CASCADE"), primary_key=True
+    )
+    model_profile: Mapped[str] = mapped_column(String(64), primary_key=True)
+    prompt_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    model_config_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    request_token: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="queued", server_default="queued"
+    )
+    candidates: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    requested_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Weather(Base):
     __tablename__ = "weather"
     __table_args__ = (

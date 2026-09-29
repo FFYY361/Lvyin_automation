@@ -262,6 +262,38 @@ export interface AIPreviewContext {
   results: Record<string, AIPreviewResult>;
 }
 
+export interface PromptTemplate {
+  key: string;
+  label: string;
+  content: string;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export interface AITitleCandidate {
+  idiom_1: string;
+  idiom_2: string;
+  title?: string;
+}
+
+export interface AITitleResult {
+  model_profile: string;
+  status: AIPreviewStatus;
+  candidates: AITitleCandidate[] | null;
+  is_stale: boolean;
+  error: { code: string; message: string } | null;
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  reused?: boolean;
+}
+
+export interface AITitleContext {
+  prefix: string;
+  models: AIPreviewModelOption[];
+  results: Record<string, AITitleResult>;
+}
+
 export interface InstitutionSummary {
   name: string;
   short_name: string;

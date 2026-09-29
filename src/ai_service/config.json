@@ -25,19 +25,6 @@
         }
       }
     },
-    "deepseek_v4_flash_thinking": {
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-flash",
-      "api_key_env": "AI_SERVICE_DEEPSEEK_API_KEY",
-      "temperature": 0.6,
-      "max_tokens": 16000,
-      "timeout_seconds": 300,
-      "request_options": {
-        "thinking": {
-          "type": "enabled"
-        }
-      }
-    },
     "qwen38_thinking": {
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "model": "qwen3.8-2.4t-a95b",
@@ -132,6 +119,30 @@
       "timeout_seconds": 600,
       "request_options": {
         "reasoning_effort": "max"
+      }
+    },
+    "deepseek_v41_flash_thinking": {
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-flash",
+      "api_key_env": "AI_SERVICE_DEEPSEEK_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 16000,
+      "timeout_seconds": 360,
+      "request_options": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    },
+    "qwen38_max_thinking": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.8-max-0902",
+      "api_key_env": "AI_SERVICE_QWEN_API_KEY",
+      "temperature": 0.6,
+      "max_tokens": 16000,
+      "timeout_seconds": 360,
+      "request_options": {
+        "enable_thinking": true
       }
     }
   }

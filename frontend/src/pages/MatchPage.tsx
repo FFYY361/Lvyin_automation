@@ -79,6 +79,7 @@ export function MatchPage() {
   const [savingManual, setSavingManual] = useState(false);
   const [startingAI, setStartingAI] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictValue | null>(null);
@@ -218,6 +219,15 @@ export function MatchPage() {
     }
   };
 
+  const copyPrompt = async () => {
+    if (!match) return;
+    try {
+      const prompt = await api<{ copy_text: string }>(`/api/matches/${match.game_id}/ai-preview-prompt`);
+      await navigator.clipboard.writeText(prompt.copy_text);
+      setPromptCopied(true); window.setTimeout(() => setPromptCopied(false), 1800);
+    } catch { setError("无法复制 Prompt，请稍后重试。"); }
+  };
+
   const updateManualTeam = (side: ManualSide, value: string) => {
     setManual((current) => current ? { ...current, [side]: { ...current[side], team_description: value } } : current);
   };
@@ -305,7 +315,7 @@ export function MatchPage() {
       <Panel className="ai-writing-panel">
         <SectionTitle title="AI 写作" description="根据当前比赛资料和人工描述生成一篇完整前瞻。" actions={<Sparkles size={20} />} />
         {aiContext ? <>
-          <div className="ai-controls"><Field label="生成模型" htmlFor="ai-model"><select id="ai-model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setCopied(false); }}>{aiContext.models.map((model) => <option key={model.profile} value={model.profile} disabled={!model.available}>{model.label} · 约 {model.estimated_seconds} 秒 · {model.score.toFixed(1)} 分{model.recommended ? " · 推荐" : ""}{model.available ? "" : " · 未配置"}</option>)}</select></Field><Button variant="primary" loading={startingAI} disabled={!selectedModelOption?.available || aiRunning} onClick={() => void startGeneration()}><Sparkles size={16} />{selectedResult?.status === "failed" || selectedResult?.is_stale ? "重新生成" : "生成前瞻"}</Button></div>
+          <div className="ai-controls"><Field label="生成模型" htmlFor="ai-model"><select id="ai-model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setCopied(false); }}>{aiContext.models.map((model) => <option key={model.profile} value={model.profile} disabled={!model.available}>{model.label} · 约 {model.estimated_seconds} 秒 · {model.score.toFixed(1)} 分{model.recommended ? " · 推荐" : ""}{model.available ? "" : " · 未配置"}</option>)}</select></Field><div className="button-row"><Button variant="primary" loading={startingAI} disabled={!selectedModelOption?.available || aiRunning} onClick={() => void startGeneration()}><Sparkles size={16} />{selectedResult?.status === "failed" || selectedResult?.is_stale ? "重新生成" : "生成前瞻"}</Button><Button onClick={() => void copyPrompt()}><Copy size={16} />{promptCopied ? "Prompt 已复制" : "复制 Prompt"}</Button></div></div>
           {selectedModelOption ? <p className="ai-model-note">{selectedModelOption.label}：评测 {selectedModelOption.score.toFixed(1)} 分，通常约需 {selectedModelOption.estimated_seconds} 秒，实际耗时会随文章和服务负载变化。</p> : null}
           <Alert tone="warning">
             <strong>AI 内容必须人工复核</strong>

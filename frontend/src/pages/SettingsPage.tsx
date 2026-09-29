@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { ChevronRight, Database, KeyRound, Save, Search, Users } from "lucide-react";
+import { ChevronRight, Database, Expand, KeyRound, Save, Search, Users, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, errorMessage, jsonBody } from "../api";
 import { Alert, Badge, Button, Field, LoadingScreen, NameInput, PageHeader, Panel, SectionTitle } from "../components";
-import { competitionLabels, type CredentialStatus, type EditorialDefaults, type InstitutionSummary } from "../types";
+import { competitionLabels, type CredentialStatus, type EditorialDefaults, type InstitutionSummary, type PromptTemplate } from "../types";
 import { namesText, parseNames } from "../utils";
 
 const competitionIdFields = [
@@ -16,6 +16,7 @@ export function SettingsPage() {
   const [credentials, setCredentials] = useState<CredentialStatus | null>(null);
   const [defaults, setDefaults] = useState<EditorialDefaults | null>(null);
   const [institutions, setInstitutions] = useState<InstitutionSummary[]>([]);
+  const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
   const [query, setQuery] = useState("");
   const [openid, setOpenid] = useState("");
   const [sessionKey, setSessionKey] = useState("");
@@ -26,6 +27,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState<"credentials" | "defaults" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [expandedPromptKey, setExpandedPromptKey] = useState<string | null>(null);
 
   useEffect(() => {
     document.title = "资料管理 · 绿茵宣传部";
@@ -33,10 +35,12 @@ export function SettingsPage() {
       api<CredentialStatus>("/api/settings/thufootball-credentials"),
       api<EditorialDefaults>("/api/editorial-defaults"),
       api<{ items: InstitutionSummary[] }>("/api/admin/institutions"),
-    ]).then(([credentialValue, defaultValue, institutionValue]) => {
+      api<{ items: PromptTemplate[] }>("/api/admin/prompts"),
+    ]).then(([credentialValue, defaultValue, institutionValue, promptValue]) => {
       setCredentials(credentialValue);
       setDefaults(defaultValue);
       setInstitutions(institutionValue.items);
+      setPrompts(promptValue.items);
       setEditors(namesText(defaultValue.editors));
       setReviewers(namesText(defaultValue.reviewers));
       setApprovers(namesText(defaultValue.approvers));
@@ -65,12 +69,30 @@ export function SettingsPage() {
     } catch (value) { setError(errorMessage(value)); } finally { setSaving(null); }
   };
 
+  const savePrompt = async (item: PromptTemplate) => {
+    setError(null); setSuccess(null);
+    try {
+      const value = await api<PromptTemplate>(`/api/admin/prompts/${item.key}`, { method: "PUT", ...jsonBody({ content: item.content, expected_updated_at: item.updated_at }) });
+      setPrompts((current) => current.map((entry) => entry.key === value.key ? value : entry));
+      setSuccess(`${item.label}已保存`);
+    } catch (value) { setError(errorMessage(value)); }
+  };
+
   if (loading) return <LoadingScreen label="正在读取资料管理" />;
   return (
     <>
       <PageHeader eyebrow="系统" title="资料管理" description="维护默认人员、球队与球员人工资料，以及底层查询凭据。" />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
+
+      <Panel className="data-management-panel">
+        <SectionTitle title="AI Prompt 规则" description="当前版本直接用于后续 AI 生成；修改后已有结果会标记为过期。" actions={<Database size={20} />} />
+        <div className="prompt-editor-list">
+          {prompts.map((item) => <div className="prompt-editor" key={item.key}><Field label={item.label}><textarea rows={9} value={item.content} onChange={(event) => setPrompts((current) => current.map((entry) => entry.key === item.key ? { ...entry, content: event.target.value } : entry))} /></Field><div className="editor-actions"><Button onClick={() => setExpandedPromptKey(item.key)}><Expand size={16} />放大编辑</Button><Button variant="primary" onClick={() => void savePrompt(item)}><Save size={16} />保存</Button><span className="footnote">更新于 {new Date(item.updated_at).toLocaleString("zh-CN")}</span></div></div>)}
+        </div>
+      </Panel>
+
+      {expandedPromptKey ? (() => { const item = prompts.find((entry) => entry.key === expandedPromptKey); if (!item) return null; return <div className="prompt-modal" role="dialog" aria-modal="true" aria-label={`编辑${item.label}`}><div className="prompt-modal__card"><div className="prompt-modal__heading"><div><p className="eyebrow">AI PROMPT</p><h2>{item.label}</h2></div><button className="icon-button" aria-label="关闭放大编辑" onClick={() => setExpandedPromptKey(null)}><X size={20} /></button></div><textarea autoFocus value={item.content} onChange={(event) => setPrompts((current) => current.map((entry) => entry.key === item.key ? { ...entry, content: event.target.value } : entry))} /><div className="prompt-modal__actions"><span className="footnote">编辑完成后保存当前分区</span><Button onClick={() => setExpandedPromptKey(null)}>关闭</Button><Button variant="primary" onClick={() => { void savePrompt(item); setExpandedPromptKey(null); }}><Save size={16} />保存</Button></div></div></div>; })() : null}
 
       <Panel className="data-management-panel">
         <SectionTitle title="默认人员" description="只影响后续新建批次。" actions={<Users size={20} />} />

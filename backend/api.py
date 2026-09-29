@@ -32,16 +32,24 @@ from thufootball import (
 from thufootball.database import FootballDataRepository
 
 from .ai_preview import (
+    _title_prefix,
     ai_preview_context,
+    build_title_material,
     configured_website_profile,
     institution_detail_payload,
     institution_summary_payload,
     model_config_hash,
+    model_options_payload,
     prepare_generation,
+    prepare_title_generation,
+    prompt_copy_payload,
+    prompt_templates_payload,
     recover_interrupted_generations,
     require_match_access,
     result_payload,
     run_generation,
+    run_title_generation,
+    title_result_payload,
     update_institution_descriptions,
     update_match_manual_descriptions,
 )
@@ -64,15 +72,18 @@ from .credentials import (
 from .database import create_database_engine, create_session_factory
 from .models import (
     AIPreviewResult,
+    AITitleResult,
     ArticleRecord,
     Batch,
     EditorialDefaults,
     Match,
+    PromptTemplate,
     User,
     WechatDraft,
 )
 from .schemas import (
     AIPreviewGenerationRequest,
+    AITitleGenerationRequest,
     AssignMatchRequest,
     BatchStatus,
     ChangePasswordRequest,
@@ -84,6 +95,7 @@ from .schemas import (
     InstitutionDescriptionsRequest,
     LoginRequest,
     MatchManualDescriptionsRequest,
+    PromptUpdateRequest,
     RegisterRequest,
     ResetPasswordRequest,
     THUFootballCredentialsRequest,
@@ -496,6 +508,32 @@ def create_app(
                 _admin_user_payload(user, counts.get(user.id, 0)) for user in users
             ]
         }
+
+    @app.get("/api/admin/prompts")
+    def list_prompts(
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        return prompt_templates_payload(session)
+
+    @app.put("/api/admin/prompts/{prompt_key}")
+    def update_prompt(
+        prompt_key: str,
+        payload: PromptUpdateRequest,
+        user: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        row = session.get(PromptTemplate, prompt_key)
+        if row is None:
+            raise _not_found("prompt")
+        if payload.expected_updated_at and row.updated_at.isoformat() != payload.expected_updated_at:
+            raise WorkflowError(409, "prompt_updated", "Prompt 已被其他管理员修改，请刷新后重试。")
+        row.content = payload.content.replace("\r\n", "\n").replace("\r", "\n").strip()
+        row.updated_by_user_id = user.id
+        row.updated_at = datetime.now(UTC)
+        session.commit()
+        session.refresh(row)
+        return {"key": row.key, "content": row.content, "updated_at": row.updated_at.isoformat(), "updated_by": user.display_name}
 
     @app.get("/api/admin/institutions")
     def list_institutions(
@@ -1104,6 +1142,15 @@ def create_app(
         require_match_access(session, game_id, user)
         return ai_preview_context(session, game_id)
 
+    @app.get("/api/matches/{game_id}/ai-preview-prompt")
+    def get_ai_preview_prompt(
+        game_id: int,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        require_match_access(session, game_id, user)
+        return prompt_copy_payload(session, game_id)
+
     @app.post("/api/matches/{game_id}/ai-preview-generations")
     async def create_ai_preview_generation(
         game_id: int,
@@ -1160,6 +1207,72 @@ def create_app(
             result,
             current_config_hash=model_config_hash(profile),
         )
+
+    @app.get("/api/batches/{batch_id}/ai-title-context")
+    def get_ai_title_context(
+        batch_id: int,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        batch = session.get(Batch, batch_id)
+        if batch is None:
+            raise _not_found("batch")
+        material = build_title_material(session, batch)
+        models, hashes = model_options_payload()
+        results = {
+            result.model_profile: title_result_payload(result, material.prompt_hash, hashes.get(result.model_profile))
+            for result in session.scalars(select(AITitleResult).where(AITitleResult.batch_id == batch_id))
+        }
+        return {"prefix": _title_prefix(batch), "models": models, "results": results}
+
+    @app.get("/api/batches/{batch_id}/ai-title-prompt")
+    def get_ai_title_prompt(
+        batch_id: int,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        batch = session.get(Batch, batch_id)
+        if batch is None:
+            raise _not_found("batch")
+        material = build_title_material(session, batch)
+        return {
+            "prompt_hash": material.prompt_hash,
+            "messages": [{"role": item.role, "content": item.content} for item in material.messages],
+            "copy_text": "\n\n".join(f"【{item.role}】\n{item.content}" for item in material.messages),
+        }
+
+    @app.post("/api/batches/{batch_id}/ai-title-generations")
+    async def create_ai_title_generation(
+        batch_id: int,
+        payload: AITitleGenerationRequest,
+        user: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        result, material = prepare_title_generation(session, batch_id=batch_id, model_profile=payload.model_profile, requested_by_user_id=user.id)
+        if material is not None:
+            task = asyncio.create_task(run_title_generation(app.state.session_factory, app.state.external_factories.ai, batch_id=batch_id, model_profile=result.model_profile, material=material, request_token=result.request_token, config_hash=result.model_config_hash))
+            ai_tasks.add(task)
+            task.add_done_callback(ai_tasks.discard)
+        return JSONResponse(
+            status_code=202 if result.status in {"queued", "running"} else 200,
+            content={**title_result_payload(result), "reused": material is None},
+        )
+
+    @app.get("/api/batches/{batch_id}/ai-title-results/{model_profile}")
+    def get_ai_title_result(
+        batch_id: int,
+        model_profile: str,
+        _: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        result = session.get(AITitleResult, (batch_id, model_profile))
+        if result is None:
+            raise _not_found("AI title result")
+        batch = session.get(Batch, batch_id)
+        if batch is None:
+            raise _not_found("batch")
+        profile = configured_website_profile(model_profile)
+        return title_result_payload(result, current_prompt_hash=build_title_material(session, batch).prompt_hash, current_config_hash=model_config_hash(profile))
 
     @app.put("/api/matches/{game_id}/manual-descriptions")
     def put_match_manual_descriptions(
