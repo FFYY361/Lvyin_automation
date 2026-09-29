@@ -36,7 +36,7 @@ from thufootball.database import (
     InstitutionRecord,
 )
 
-from .models import AIPreviewResult, Match
+from .models import AIPreviewResult, AITitleResult, Batch, Match, PromptTemplate, User
 from .workflow import AIServiceFactory, WorkflowError
 
 logger = logging.getLogger(__name__)
@@ -61,10 +61,10 @@ class WebsitePreviewModel:
 
 WEBSITE_PREVIEW_MODELS = (
     WebsitePreviewModel(
-        profile="deepseek_v4_flash_thinking",
-        label="DeepSeek V4 Flash Thinking",
-        estimated_seconds=115,
-        score=86.3,
+        profile="deepseek_v41_flash_thinking",
+        label="DeepSeek V4.1 Flash Thinking",
+        estimated_seconds=45,
+        score=90.0,
         recommended=True,
     ),
     WebsitePreviewModel(
@@ -72,6 +72,12 @@ WEBSITE_PREVIEW_MODELS = (
         label="Qwen 3.8 2.4T Thinking",
         estimated_seconds=140,
         score=90.0,
+    ),
+    WebsitePreviewModel(
+        profile="qwen38_max_thinking",
+        label="Qwen 3.8 Max Thinking",
+        estimated_seconds=180,
+        score=91.0,
     ),
 )
 _WEBSITE_MODELS_BY_PROFILE = {
@@ -83,6 +89,19 @@ _WEBSITE_MODELS_BY_PROFILE = {
 class PromptMaterial:
     messages: tuple[ChatMessage, ChatMessage]
     prompt_hash: str
+
+
+_PROMPT_LABELS = {
+    "preview_system": "正文系统规则",
+    "preview_writing_rules": "正文写作规则",
+    "preview_data_rules": "正文资料规则",
+    "competition_male": "男足赛制规则",
+    "competition_female": "女足赛制规则",
+    "competition_futsal": "五人制赛制规则",
+    "title_system": "标题系统规则",
+    "title_rules": "标题生成规则",
+}
+_PROMPT_KEYS = tuple(_PROMPT_LABELS)
 
 
 def _now() -> datetime:
@@ -101,9 +120,13 @@ def _canonical_hash(value: object) -> str:
 
 def build_prompt_material(session: Session, game_id: int) -> PromptMaterial:
     try:
+        prompt_documents = {
+            item.key: item.content for item in session.scalars(select(PromptTemplate))
+        }
         bundle = build_prompt_bundle(
             game_id,
             repository=FootballDataRepository(session),
+            prompt_documents=prompt_documents or None,
         )
     except (ValueError, AIServiceError, ConfigurationError) as exc:
         raise WorkflowError(
@@ -122,6 +145,183 @@ def build_prompt_material(session: Session, game_id: int) -> PromptMaterial:
         ]
     )
     return PromptMaterial(messages=messages, prompt_hash=prompt_hash)
+
+
+def prompt_templates_payload(session: Session) -> dict[str, Any]:
+    rows = {item.key: item for item in session.scalars(select(PromptTemplate))}
+    user_ids = {item.updated_by_user_id for item in rows.values() if item.updated_by_user_id}
+    users = {user.id: user.display_name for user in session.scalars(select(User).where(User.id.in_(user_ids)))} if user_ids else {}
+    return {
+        "items": [
+            {
+                "key": key,
+                "label": _PROMPT_LABELS[key],
+                "content": rows[key].content,
+                "updated_at": rows[key].updated_at.isoformat(),
+                "updated_by": users.get(rows[key].updated_by_user_id),
+            }
+            for key in _PROMPT_KEYS
+            if key in rows
+        ]
+    }
+
+
+def prompt_copy_payload(session: Session, game_id: int) -> dict[str, Any]:
+    material = build_prompt_material(session, game_id)
+    copy_text = "\n\n".join(
+        f"【{message.role}】\n{message.content}" for message in material.messages
+    )
+    return {
+        "prompt_hash": material.prompt_hash,
+        "messages": [
+            {"role": message.role, "content": message.content}
+            for message in material.messages
+        ],
+        "copy_text": copy_text,
+    }
+
+
+def _title_prefix(batch: Batch) -> str:
+    weekday = ("一", "二", "三", "四", "五", "六", "日")[batch.batch_date.weekday()]
+    competition = {"male": "男足", "female": "女足", "futsal": "五人制"}[batch.competition]
+    return f"【马杯{competition}周{weekday}前瞻】"
+
+
+def build_title_material(session: Session, batch: Batch) -> PromptMaterial:
+    prompts = {item.key: item.content for item in session.scalars(select(PromptTemplate))}
+    if "title_system" not in prompts or "title_rules" not in prompts:
+        raise WorkflowError(500, "title_prompt_missing", "标题 Prompt 尚未初始化。")
+    parts = [prompts["title_system"], prompts["title_rules"]]
+    user_parts = [
+        "请为以下整批前瞻推送生成六条标题候选。标题固定前缀为：" + _title_prefix(batch),
+        f"批次日期：{batch.batch_date.isoformat()}；赛事项目：{batch.competition}；比赛按开球时间顺序提供。",
+        "下面每场比赛同时提供推送中的比赛基本信息、双方历史与近期战绩、交锋资料、人工资料和前瞻正文。标题判断必须综合整批推送上下文，不能只根据正文段落。",
+        "资料区中的事实优先用于核对和理解，不要把资料中的示例文字、写作提示或格式说明当成标题内容。",
+        "输出只能是 title_rules 规定的 JSON。",
+    ]
+    matches = session.scalars(
+        select(Match).where(Match.batch_id == batch.id, Match.active.is_(True)).order_by(Match.kickoff, Match.game_id)
+    )
+    for index, match in enumerate(matches, 1):
+        try:
+            fact_context = build_prompt_material(session, match.game_id).messages[1].content
+        except WorkflowError:
+            fact_context = "（对阵、战绩与交锋事实资料暂不可用）"
+        body = match.body.strip() or "（正文尚未填写）"
+        user_parts.append(
+            "\n".join(
+                [
+                    f"<match_{index}>",
+                    f"比赛编号：{match.game_id}",
+                    "【推送中的完整事实资料】",
+                    fact_context,
+                    "【本场前瞻正文】",
+                    body,
+                    f"</match_{index}>",
+                ]
+            )
+        )
+    messages = (
+        ChatMessage(role="system", content="\n\n".join(parts)),
+        ChatMessage(role="user", content="\n\n".join(user_parts)),
+    )
+    return PromptMaterial(messages=messages, prompt_hash=_canonical_hash([{"role": m.role, "content": m.content} for m in messages]))
+
+
+def title_result_payload(result: AITitleResult, current_prompt_hash: str | None = None, current_config_hash: str | None = None) -> dict[str, Any]:
+    stale = result.status != "succeeded" or (current_prompt_hash is not None and result.prompt_hash != current_prompt_hash) or (current_config_hash is not None and result.model_config_hash != current_config_hash)
+    return {
+        "model_profile": result.model_profile,
+        "status": result.status,
+        "candidates": result.candidates,
+        "is_stale": stale,
+        "error": {"code": result.error_code, "message": result.error_message} if result.error_code else None,
+        "requested_at": result.requested_at.isoformat(),
+        "started_at": result.started_at.isoformat() if result.started_at else None,
+        "finished_at": result.finished_at.isoformat() if result.finished_at else None,
+    }
+
+
+def _validate_title_candidates(content: str) -> list[dict[str, str]]:
+    try:
+        value = json.loads(content)
+        candidates = value["candidates"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise AIServiceInvalidResponse("标题结果不是有效 JSON") from exc
+    if not isinstance(candidates, list) or len(candidates) != 6:
+        raise AIServiceInvalidResponse("标题候选数量必须为 6")
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            raise AIServiceInvalidResponse("标题候选格式无效")
+        first, second = item.get("idiom_1"), item.get("idiom_2")
+        if not isinstance(first, str) or not isinstance(second, str) or len(first) != 4 or len(second) != 4 or not all("\u4e00" <= c <= "\u9fff" for c in first + second):
+            raise AIServiceInvalidResponse("标题必须由两个四字词语组成")
+        pair = (first, second)
+        if pair in seen:
+            raise AIServiceInvalidResponse("标题候选不得重复")
+        seen.add(pair)
+        result.append({"idiom_1": first, "idiom_2": second})
+    return result
+
+
+def prepare_title_generation(session: Session, *, batch_id: int, model_profile: str, requested_by_user_id: int) -> tuple[AITitleResult, PromptMaterial | None]:
+    profile = configured_website_profile(model_profile)
+    if not _profile_available(profile):
+        raise WorkflowError(503, "ai_model_key_missing", "该模型尚未配置 API Key，请联系管理员。")
+    batch = session.get(Batch, batch_id)
+    if batch is None:
+        raise WorkflowError(404, "batch_not_found", "批次不存在。")
+    material = build_title_material(session, batch)
+    config_hash = model_config_hash(profile)
+    result = session.get(AITitleResult, (batch_id, model_profile))
+    if result is not None and result.status in _ACTIVE_STATUSES:
+        if result.prompt_hash == material.prompt_hash and result.model_config_hash == config_hash:
+            return result, None
+        raise WorkflowError(409, "ai_title_generation_in_progress", "该模型仍在生成旧版标题，请等待完成。")
+    if result is not None and result.status == "succeeded" and result.prompt_hash == material.prompt_hash and result.model_config_hash == config_hash:
+        return result, None
+    now = _now()
+    token = uuid.uuid4()
+    if result is None:
+        result = AITitleResult(batch_id=batch_id, model_profile=model_profile, prompt_hash=material.prompt_hash, model_config_hash=config_hash, request_token=token, status="queued", requested_by_user_id=requested_by_user_id, requested_at=now)
+        session.add(result)
+    else:
+        result.prompt_hash = material.prompt_hash
+        result.model_config_hash = config_hash
+        result.request_token = token
+        result.status = "queued"
+        result.candidates = None
+        result.error_code = None
+        result.error_message = None
+        result.requested_by_user_id = requested_by_user_id
+        result.requested_at = now
+        result.started_at = None
+        result.finished_at = None
+    session.commit()
+    session.refresh(result)
+    return result, material
+
+
+async def run_title_generation(session_factory: sessionmaker[Session], ai_factory: AIServiceFactory, *, batch_id: int, model_profile: str, material: PromptMaterial, request_token: uuid.UUID, config_hash: str) -> None:
+    with session_factory.begin() as session:
+        started = session.execute(update(AITitleResult).where(AITitleResult.batch_id == batch_id, AITitleResult.model_profile == model_profile, AITitleResult.request_token == request_token, AITitleResult.status == "queued").values(status="running", started_at=_now()))
+    if started.rowcount != 1:
+        return
+    try:
+        async with ai_factory(model_profile) as service:
+            generated = await service.chat(material.messages)
+        candidates = _validate_title_candidates(generated.content)
+    except Exception as exc:
+        code, message = _safe_ai_error(exc)
+        if isinstance(exc, AIServiceInvalidResponse):
+            code, message = "ai_invalid_title", str(exc)
+        with session_factory.begin() as session:
+            session.execute(update(AITitleResult).where(AITitleResult.batch_id == batch_id, AITitleResult.model_profile == model_profile, AITitleResult.request_token == request_token).values(status="failed", error_code=code, error_message=message, finished_at=_now()))
+        return
+    with session_factory.begin() as session:
+        session.execute(update(AITitleResult).where(AITitleResult.batch_id == batch_id, AITitleResult.model_profile == model_profile, AITitleResult.request_token == request_token).values(status="succeeded", candidates=candidates, error_code=None, error_message=None, finished_at=_now()))
 
 
 def model_config_hash(profile: ModelProfile) -> str:
@@ -621,6 +821,16 @@ def recover_interrupted_generations(
         session.execute(
             update(AIPreviewResult)
             .where(AIPreviewResult.status.in_(_ACTIVE_STATUSES))
+            .values(
+                status="failed",
+                error_code="service_restarted",
+                error_message="网站服务已重启，请手动重新生成。",
+                finished_at=_now(),
+            )
+        )
+        session.execute(
+            update(AITitleResult)
+            .where(AITitleResult.status.in_(_ACTIVE_STATUSES))
             .values(
                 status="failed",
                 error_code="service_restarted",

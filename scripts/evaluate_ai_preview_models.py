@@ -25,6 +25,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_name")
     parser.add_argument("--profile", action="append", required=True)
+    parser.add_argument("--config", type=Path, help="temporary model config")
+    parser.add_argument("--env", type=Path, help="credential env file")
     parser.add_argument(
         "--match-id",
         action="append",
@@ -55,7 +57,7 @@ async def _run(args: argparse.Namespace) -> int:
     prompts_directory.mkdir()
 
     prompt_config = load_prompt_config()
-    service_config = load_ai_service_config()
+    service_config = load_ai_service_config(args.config) if args.config else load_ai_service_config()
     candidates = []
     for name in args.profile:
         profile = service_config.get_profile(name)
@@ -105,7 +107,12 @@ async def _run(args: argparse.Namespace) -> int:
             bundle = bundles[match_id]
             started = time.perf_counter()
             try:
-                async with AIChatService.from_config(profile_name) as service:
+                service_kwargs = {}
+                if args.config:
+                    service_kwargs["config_path"] = args.config
+                if args.env:
+                    service_kwargs["env_path"] = args.env
+                async with AIChatService.from_config(profile_name, **service_kwargs) as service:
                     result = await service.chat(
                         [
                             ChatMessage("system", bundle.system_message),

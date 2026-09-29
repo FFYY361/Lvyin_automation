@@ -123,6 +123,7 @@ def build_prompt_bundle(
     config: PromptConfig | None = None,
     repository: FootballDataRepository | None = None,
     prompt_root: Path = DEFAULT_PROMPT_ROOT,
+    prompt_documents: dict[str, str] | None = None,
 ) -> PromptBundle:
     if isinstance(match_id, bool) or not isinstance(match_id, int) or match_id <= 0:
         raise ValueError("MATCH_ID 必须是正整数")
@@ -136,6 +137,7 @@ def build_prompt_bundle(
                     config=config,
                     repository=FootballDataRepository(session),
                     prompt_root=prompt_root,
+                    prompt_documents=prompt_documents,
                 )
         finally:
             engine.dispose()
@@ -270,7 +272,11 @@ def build_prompt_bundle(
         "venue": target_game.get("field_name") or "未标注",
     }
     return PromptBundle(
-        system_message=build_system_message(competition_kind, prompt_root=prompt_root),
+        system_message=build_system_message(
+            competition_kind,
+            prompt_root=prompt_root,
+            prompt_documents=prompt_documents,
+        ),
         match_context=match_context,
         manual_context=manual_context,
         automatic_context=automatic_context,
@@ -293,17 +299,21 @@ def build_user_message(
 
 
 def build_system_message(
-    competition_kind: str, *, prompt_root: Path = DEFAULT_PROMPT_ROOT
+    competition_kind: str,
+    *,
+    prompt_root: Path = DEFAULT_PROMPT_ROOT,
+    prompt_documents: dict[str, str] | None = None,
 ) -> str:
     rule_file = _COMPETITION_RULE_FILES.get(competition_kind)
     if rule_file is None:
         raise ValueError(f"不支持的比赛项目：{competition_kind}")
-    paths = (
-        prompt_root / "system.md",
-        prompt_root / "competition_rules" / rule_file,
-        prompt_root / "writing_rules.md",
-        prompt_root / "data_rules.md",
-    )
+    keys = ("preview_system", f"competition_{_COMPETITION_VALUES[competition_kind]}", "preview_writing_rules", "preview_data_rules")
+    if prompt_documents is not None:
+        try:
+            return "\n\n".join(prompt_documents[key] for key in keys)
+        except KeyError as exc:
+            raise ValueError(f"缺少 Prompt 分区：{exc.args[0]}") from exc
+    paths = (prompt_root / "system.md", prompt_root / "competition_rules" / rule_file, prompt_root / "writing_rules.md", prompt_root / "data_rules.md")
     return "\n\n".join(_read_text(path) for path in paths)
 
 

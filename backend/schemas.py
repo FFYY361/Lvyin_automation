@@ -144,6 +144,19 @@ class AIPreviewGenerationRequest(BaseModel):
     model_profile: str = Field(min_length=1, max_length=64)
 
 
+class PromptUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=50_000)
+    expected_updated_at: str | None = None
+
+
+class AITitleGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_profile: str = Field(min_length=1, max_length=64)
+
+
 class MatchManualSideRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

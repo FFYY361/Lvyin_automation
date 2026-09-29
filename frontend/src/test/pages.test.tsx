@@ -161,8 +161,9 @@ describe("batch and match pages", () => {
   it("generates AI copy and saves the current roster descriptions", async () => {
     const context: AIPreviewContext = {
       models: [
-        { profile: "deepseek_v4_flash_thinking", label: "DeepSeek V4 Flash Thinking", estimated_seconds: 115, score: 86.3, recommended: true, available: true },
+        { profile: "deepseek_v41_flash_thinking", label: "DeepSeek V4.1 Flash Thinking", estimated_seconds: 45, score: 90, recommended: true, available: true },
         { profile: "qwen38_thinking", label: "Qwen 3.8 2.4T Thinking", estimated_seconds: 140, score: 90, recommended: false, available: true },
+        { profile: "qwen38_max_thinking", label: "Qwen 3.8 Max Thinking", estimated_seconds: 180, score: 91, recommended: false, available: true },
       ],
       manual: {
         competition: "male",
@@ -172,7 +173,7 @@ describe("batch and match pages", () => {
       results: {},
     };
     const generated = {
-      model_profile: "deepseek_v4_flash_thinking", status: "succeeded", content: "这是 AI 生成的前瞻。", is_stale: false,
+      model_profile: "deepseek_v41_flash_thinking", status: "succeeded", content: "这是 AI 生成的前瞻。", is_stale: false,
       error: null, requested_at: "2026-08-08T00:00:00Z", started_at: "2026-08-08T00:00:01Z", finished_at: "2026-08-08T00:00:02Z", reused: false,
     };
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -190,7 +191,7 @@ describe("batch and match pages", () => {
     expect(screen.getByText(/请检查高频词和重复表达/)).toBeInTheDocument();
     expect(screen.getByText("及时维护可复用的人工资料")).toBeInTheDocument();
     expect(screen.getByText(/随球队长期保存并用于组装 AI Prompt/)).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /DeepSeek V4 Flash Thinking · 约 115 秒 · 86.3 分/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /DeepSeek V4.1 Flash Thinking · 约 45 秒 · 90.0 分 · 推荐/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成前瞻" }));
     expect(await screen.findByDisplayValue("这是 AI 生成的前瞻。")).toBeInTheDocument();
 
