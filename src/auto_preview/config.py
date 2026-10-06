@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from thufootball.errors import ConfigurationError
+
 from .models import Competition
 
 
@@ -24,6 +26,14 @@ class CompetitionConfig:
     current_tournament_ids: tuple[int, ...]
     current_tournament_names: Mapping[int, str]
     historical_seasons: tuple[HistoricalSeason, ...]
+    season: str = "2026-2027"
+
+    def require_current_tournaments(self) -> None:
+        if not self.current_tournament_ids:
+            raise ConfigurationError(
+                f"{self.short_name}尚未接入 {self.season} 赛季",
+                stage="configuration",
+            )
 
     @property
     def historical_tournament_ids(self) -> tuple[int, ...]:
@@ -49,39 +59,40 @@ COMPETITIONS = MappingProxyType(
             competition=Competition.MALE,
             full_name="马约翰杯男子足球赛",
             short_name="马杯男足",
-            current_tournament_ids=(122, 124, 126),
+            current_tournament_ids=(139, 140, 141),
             current_tournament_names=MappingProxyType(
                 {
-                    122: "男足甲级",
-                    124: "男足乙级",
-                    126: "男足丙级",
+                    139: "男足甲级",
+                    140: "男足乙级",
+                    141: "男足丙级",
                 }
             ),
             historical_seasons=(
+                HistoricalSeason("2025~2026", (122, 124, 126), True),
                 HistoricalSeason("2024~2025", (99, 100, 101), True),
                 HistoricalSeason("2023~2024", (89, 88), True),
-                HistoricalSeason("2022~2023", (72, 73), False),
             ),
         ),
         Competition.FEMALE: CompetitionConfig(
             competition=Competition.FEMALE,
             full_name="马约翰杯女子足球赛",
             short_name="马杯女足",
-            current_tournament_ids=(123,),
-            current_tournament_names=MappingProxyType({123: "女足"}),
+            current_tournament_ids=(142,),
+            current_tournament_names=MappingProxyType({142: "女足"}),
             historical_seasons=(
+                HistoricalSeason("2025~2026", (123,), True),
                 HistoricalSeason("2024~2025", (102,), True),
                 HistoricalSeason("2023~2024", (90,), True),
-                HistoricalSeason("2022~2023", (74,), False),
             ),
         ),
         Competition.FUTSAL: CompetitionConfig(
             competition=Competition.FUTSAL,
             full_name="马约翰杯五人制足球赛",
             short_name="马杯五人制",
-            current_tournament_ids=(128,),
-            current_tournament_names=MappingProxyType({128: "五人制"}),
+            current_tournament_ids=(),
+            current_tournament_names=MappingProxyType({}),
             historical_seasons=(
+                HistoricalSeason("2025~2026", (128,), True),
                 HistoricalSeason("2024~2025", (111,), True),
                 HistoricalSeason("2023~2024", (93,), True),
             ),

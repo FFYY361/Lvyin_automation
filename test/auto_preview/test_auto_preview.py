@@ -41,6 +41,7 @@ from auto_preview.source import PreviewSourceBuilder, preview_data_to_dict
 from auto_preview.state import sha256_bytes
 from preview import PreviewValidationError, SeasonOutcome
 from preview.template import _head_to_head_line
+from test.season_scope import CURRENT_SCOPE, legacy_scope  # noqa: F401
 from thufootball import (
     BatchQueryError,
     GameQuery,
@@ -54,10 +55,11 @@ from thufootball import (
     TeamTournamentOutcome,
     Timeout,
 )
-from thufootball.rankings import build_outcome_catalog
 from thufootball import (
     PermissionError as THUFootballPermissionError,
 )
+from thufootball.errors import ConfigurationError
+from thufootball.rankings import build_outcome_catalog
 from weather import DailyWeather, WeatherNetworkError
 from wechat_official import Article, CoverMediaId, DraftReceipt
 
@@ -316,6 +318,14 @@ class _BatchQueries(_FakeQueries):
 
 
 class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_current_scope_refuses_without_query(self) -> None:
+        queries = _FakeQueries()
+        logger, _ = _logger()
+        builder = PreviewSourceBuilder(queries, CURRENT_SCOPE[Competition.FUTSAL], logger=logger)
+        with self.assertRaises(ConfigurationError):
+            await builder.query_current_games()
+        self.assertEqual(queries.game_queries, [])
+
     async def test_queries_only_configured_ids_and_keeps_all_pre_match_results(
         self,
     ) -> None:
@@ -405,16 +415,16 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
     def test_current_tournament_names_are_fixed_short_labels(self) -> None:
         self.assertEqual(
-            dict(competition_config(Competition.MALE).current_tournament_names),
-            {122: "男足甲级", 124: "男足乙级", 126: "男足丙级"},
+            dict(CURRENT_SCOPE[Competition.MALE].current_tournament_names),
+            {139: "男足甲级", 140: "男足乙级", 141: "男足丙级"},
         )
         self.assertEqual(
-            dict(competition_config(Competition.FEMALE).current_tournament_names),
-            {123: "女足"},
+            dict(CURRENT_SCOPE[Competition.FEMALE].current_tournament_names),
+            {142: "女足"},
         )
         self.assertEqual(
-            dict(competition_config(Competition.FUTSAL).current_tournament_names),
-            {128: "五人制"},
+            dict(CURRENT_SCOPE[Competition.FUTSAL].current_tournament_names),
+            {},
         )
 
     def test_head_to_head_uses_configured_season_when_name_omits_year(

@@ -81,12 +81,11 @@ def test_repository_and_data_baseline(football_engine) -> None:
         assert repository.find_institution(48, "futsal").name == "车辆与运载学院"
         assert repository.get_game(4245).tournament_id == 122
         assert len(repository.list_games([122])) == 35
-        assert [item.id for item in repository.list_tournaments()[:5]] == [
-            122,
-            123,
-            124,
-            126,
-            128,
+        assert [item.id for item in repository.list_tournaments()[:4]] == [
+            139,
+            140,
+            141,
+            142,
         ]
 
         counts = (
@@ -94,7 +93,9 @@ def test_repository_and_data_baseline(football_engine) -> None:
             session.scalar(select(func.count()).select_from(TournamentRecord)),
             session.scalar(select(func.count()).select_from(GameRecord)),
         )
-        assert counts == (52, 14, 590)
+        assert counts[:2] == (52, 18)
+        assert counts[2] >= 666
+        assert session.scalar(select(func.count()).select_from(GameRecord).where(GameRecord.tournament_id < 139)) == 590
         assert len(repository.load_outcome_catalog().tournaments_by_id) == 14
 
 

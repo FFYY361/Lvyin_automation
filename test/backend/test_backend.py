@@ -7,6 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from io import BytesIO
@@ -24,8 +25,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import backend.api as backend_api
 import backend.credentials as backend_credentials
+from ai_preview import build_prompt_bundle
 from ai_service import ChatResult, TokenUsage
-from backend.ai_preview import prepare_generation
+from backend.ai_preview import match_manual_payload, prepare_generation
 from backend.api import create_app
 from backend.artifacts import (
     parse_report_storage_descriptor,
@@ -61,6 +63,7 @@ from backend.workflow import (
     batch_status,
     create_wechat_draft,
     match_payload,
+    refresh_batch,
     render_batch,
     save_batch_cover,
     set_batch_cover_media_id,
@@ -78,7 +81,7 @@ from thufootball import (
     ReportValidationError,
     UserProbe,
 )
-from thufootball.database import FootballDataBase
+from thufootball.database import FootballDataBase, FootballDataRepository, GameRecord
 from wechat_official import CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -1555,6 +1558,118 @@ class _FailingExternalService:
 
     async def __aexit__(self, *args: object) -> None:
         return None
+
+
+@pytest.mark.parametrize(
+    "tournament_id,active", [(123, True), (123, False), (None, False)]
+)
+def test_old_or_empty_batch_refresh_refuses_before_query(
+    session_factory, tournament_id, active
+):
+    calls = []
+    with session_factory() as session:
+        batch = _batch(session, complete=tournament_id is not None)
+        if tournament_id is not None:
+            match = session.scalar(select(Match).where(Match.batch_id == batch.id))
+            match.active = active
+        session.flush()
+        before = (
+            batch.updated_at,
+            batch.last_error_code,
+            batch.current_preview_article_id,
+        )
+        with pytest.raises(WorkflowError) as raised:
+            asyncio.run(
+                refresh_batch(
+                    session,
+                    batch,
+                    ExternalFactories(
+                        queries=lambda: _FailingExternalService(calls, "queries")
+                    ),
+                )
+            )
+        assert raised.value.status_code == 409
+        assert calls == []
+        assert (
+            batch.updated_at,
+            batch.last_error_code,
+            batch.current_preview_article_id,
+        ) == before
+
+
+def test_current_batch_passes_refresh_guard(session_factory):
+    calls = []
+    with session_factory() as session:
+        batch = _batch(session, complete=True)
+        match = session.scalar(select(Match).where(Match.batch_id == batch.id))
+        match.tournament_id = 142
+        session.flush()
+        with pytest.raises(WorkflowError) as raised:
+            asyncio.run(
+                refresh_batch(
+                    session,
+                    batch,
+                    ExternalFactories(
+                        queries=lambda: _FailingExternalService(calls, "queries")
+                    ),
+                )
+            )
+        assert raised.value.status_code == 502
+        assert calls == ["queries"]
+
+
+def test_new_womens_swiss_prompt_and_environment_roster_in_isolation(session_factory):
+    with session_factory() as session:
+        repository = FootballDataRepository(session)
+        tournament = repository.get_tournament(142)
+        document = deepcopy(tournament.data)
+        target = deepcopy(repository.get_game(4377).data["game"])
+        target.update(
+            game_id=999999,
+            tournament_id=142,
+            home_team_id=63,
+            away_team_id=2077,
+            home_tournament_team_id=1994,
+            away_tournament_team_id=1975,
+            kickoff_local="2026-11-01T13:00:00+08:00",
+            stage="循环赛",
+            group_name=None,
+            home_score=None,
+            away_score=None,
+            valid=None,
+            status="scheduled",
+        )
+        played = dict(
+            target,
+            game_id=999998,
+            kickoff_local="2026-10-01T13:00:00+08:00",
+            valid=True,
+            status="finished",
+            home_score=2,
+            away_score=0,
+        )
+        document["games"] = [played, target]
+        tournament.data = document
+        for game in (target, played):
+            session.add(
+                GameRecord(
+                    id=game["game_id"],
+                    tournament_id=142,
+                    data={"game": game, "events": []},
+                )
+            )
+        session.flush()
+        bundle = build_prompt_bundle(999999, repository=repository)
+        current = bundle.automatic_context["home_team"]["current_tournament"]
+        assert bundle.match_context["home_team"] == "环境学院"
+        assert bundle.match_context["stage"] == "瑞士轮"
+        assert current["group_standing"] is None
+        assert current["swiss_standing"]["points"] == 3
+        assert current["swiss_standing"]["rank"] == 1
+        assert "2026–2027 起" in bundle.system_message
+        manual = match_manual_payload(session, 999999)
+        assert manual["home_team"]["players"]
+        assert manual["away_team"]["institution_short_name"] == "土水"
 
 
 def test_create_reuses_without_query_and_only_all_query_failures_return_502(

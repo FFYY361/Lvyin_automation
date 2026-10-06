@@ -23,6 +23,7 @@ from auto_report.service import (
     DEFAULT_REPORT_COVER_MEDIA_ID,
     _report_warning_message,
 )
+from test.season_scope import legacy_scope  # noqa: F401
 from thufootball import (
     GameDetail,
     GameEventIssue,

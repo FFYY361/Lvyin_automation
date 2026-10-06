@@ -16,6 +16,7 @@ from thufootball.database import (
     create_football_session_factory,
 )
 from thufootball.rankings import StaticTeamIdentity
+from thufootball.rules import CompetitionRules, competition_rules
 
 from .config import PromptConfig, load_prompt_config
 
@@ -28,11 +29,6 @@ _CARD_TYPES = {
     "YELLOWCARD": "yellow",
     "SECONDYELLOWCARD": "second_yellow",
     "REDCARD": "red",
-}
-_COMPETITION_RULE_FILES = {
-    "男足": "men.md",
-    "女足": "women.md",
-    "五人制": "futsal.md",
 }
 _COMPETITION_VALUES = {"男足": "male", "女足": "female", "五人制": "futsal"}
 _COMPETITION_LABELS = {value: key for key, value in _COMPETITION_VALUES.items()}
@@ -188,11 +184,19 @@ def build_prompt_bundle(
             home_record,
             competition_kind,
             home_identity.brief_name,
+            target_tournament,
+            _integer(
+                target_game.get("home_tournament_team_id"), "home_tournament_team_id"
+            ),
         ),
         "away_team": _manual_team_context(
             away_record,
             competition_kind,
             away_identity.brief_name,
+            target_tournament,
+            _integer(
+                target_game.get("away_tournament_team_id"), "away_tournament_team_id"
+            ),
         ),
     }
 
@@ -273,7 +277,10 @@ def build_prompt_bundle(
     match_context = {
         "competition": _competition_label(competition_kind, target_info),
         "season": target_season,
-        "stage": target_game.get("stage") or "未标注",
+        "stage": competition_rules(
+            _COMPETITION_VALUES[competition_kind], target_season
+        ).stage_label(target_game.get("stage"))
+        or "未标注",
         "group": target_game.get("group_name"),
         "round": target_game.get("round"),
         "home_team": home_identity.institution_name,
@@ -284,6 +291,7 @@ def build_prompt_bundle(
     return PromptBundle(
         system_message=build_system_message(
             competition_kind,
+            season=target_season,
             prompt_root=prompt_root,
             prompt_documents=prompt_documents,
         ),
@@ -311,15 +319,16 @@ def build_user_message(
 def build_system_message(
     competition_kind: str,
     *,
+    season: str | None = None,
     prompt_root: Path = DEFAULT_PROMPT_ROOT,
     prompt_documents: dict[str, str] | None = None,
 ) -> str:
-    rule_file = _COMPETITION_RULE_FILES.get(competition_kind)
-    if rule_file is None:
+    if competition_kind not in _COMPETITION_VALUES:
         raise ValueError(f"不支持的比赛项目：{competition_kind}")
+    rules = competition_rules(_COMPETITION_VALUES[competition_kind], season)
     keys = (
         "preview_system",
-        f"competition_{_COMPETITION_VALUES[competition_kind]}",
+        rules.prompt_key,
         "preview_writing_rules",
         "preview_data_rules",
     )
@@ -330,7 +339,7 @@ def build_system_message(
             raise ValueError(f"缺少 Prompt 分区：{exc.args[0]}") from exc
     paths = (
         prompt_root / "system.md",
-        prompt_root / "competition_rules" / rule_file,
+        prompt_root / "competition_rules" / rules.prompt_file,
         prompt_root / "writing_rules.md",
         prompt_root / "data_rules.md",
     )
@@ -456,13 +465,23 @@ def _automatic_team_context(
                 ],
             }
         )
+    rules = competition_rules(_COMPETITION_VALUES[competition_kind], target_season)
     return {
         "name": identity.brief_name,
         "current_tournament": {
             "competition": _competition_label(competition_kind, tournament_info),
             "season": _canonical_season(tournament_info.get("season")),
-            "current_stage": target_game.get("stage"),
-            "group_standing": _group_standing(target_tournament, target_game, team_id),
+            "current_stage": rules.stage_label(target_game.get("stage")),
+            "group_standing": (
+                None
+                if rules.swiss
+                else _group_standing(target_tournament, target_game, team_id)
+            ),
+            "swiss_standing": (
+                _swiss_standing(target_tournament, target_game, team_id, rules)
+                if rules.swiss
+                else None
+            ),
             "record_before_match": _record(current_games, {team_id}),
         },
         "season_outcomes": season_outcomes,
@@ -528,12 +547,52 @@ def _group_standing(
         for game in group_games
         for field in ("home_team_id", "away_team_id")
     }
+    standing = _standing(group_games, participants, target_time, team_id)
+    return None if standing is None else {"group": group, **standing}
+
+
+def _swiss_standing(
+    tournament: dict[str, Any],
+    target_game: dict[str, Any],
+    team_id: int,
+    rules: CompetitionRules,
+) -> dict[str, object] | None:
+    if not rules.is_first_stage(target_game.get("stage")):
+        return None
+    games = [
+        _object(game, "games[]")
+        for game in _array(tournament.get("games"), "games")
+        if rules.is_first_stage(_object(game, "games[]").get("stage"))
+    ]
+    participants = {
+        _integer(team.get("team_id"), "registered_teams[].team_id")
+        for raw in _array(tournament.get("registered_teams"), "registered_teams")
+        if (team := _object(raw, "registered_teams[]")).get("status")
+    }
+    standing = _standing(games, participants, _game_time(target_game), team_id)
+    if standing is not None and any(
+        _game_time(game) < _game_time(target_game) and not _is_finished_game(game)
+        for game in games
+    ):
+        standing["rank"] = None
+        standing["rank_note"] = "本场之前的瑞士轮比赛尚未全部完成录入，无法确定准确顺位"
+    return standing
+
+
+def _standing(
+    games: list[dict[str, Any]],
+    participants: set[int],
+    target_time: datetime,
+    team_id: int,
+) -> dict[str, object] | None:
     table = {participant: _empty_group_record() for participant in participants}
-    for game in group_games:
+    for game in games:
         if _game_time(game) >= target_time or not _is_finished_game(game):
             continue
         home_id = _integer(game.get("home_team_id"), "home_team_id")
         away_id = _integer(game.get("away_team_id"), "away_team_id")
+        if home_id not in table or away_id not in table:
+            raise ValueError("积分统计比赛包含未登记的球队")
         for current_id in (home_id, away_id):
             score_for, score_against = _relative_score(game, current_id)
             outcome = _outcome(game, current_id)
@@ -558,7 +617,6 @@ def _group_standing(
             record["points"] > team_record["points"] for record in table.values()
         )
     return {
-        "group": group,
         "rank": rank,
         "rank_note": rank_note,
         **team_record,
@@ -900,14 +958,25 @@ def _collect_matches(
 
 
 def _manual_team_context(
-    institution: InstitutionRecord, competition: str, team_name: str
+    institution: InstitutionRecord,
+    competition: str,
+    team_name: str,
+    tournament: dict[str, Any],
+    tournament_team_id: int,
 ) -> dict[str, object]:
     value = _COMPETITION_VALUES[competition]
     team_description = getattr(institution, f"{value}_description")
+    registered_names = {
+        _text(player.get("name"), "registered_players[].name").strip()
+        for raw in _array(tournament.get("registered_players"), "registered_players")
+        if (player := _object(raw, "registered_players[]")).get("valid") is True
+        and player.get("tournament_team_id") == tournament_team_id
+    }
     players = [
         {"name": name, "description": raw["description"]}
         for name, raw in institution.player_descriptions.items()
-        if isinstance(raw, dict)
+        if name in registered_names
+        and isinstance(raw, dict)
         and isinstance(raw.get("competitions"), list)
         and value in raw["competitions"]
         and isinstance(raw.get("description"), str)

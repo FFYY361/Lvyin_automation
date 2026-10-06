@@ -6,7 +6,7 @@ import { Alert, Badge, Button, EmptyState, Field, PageHeader, Panel, SectionTitl
 import { competitionLabels, type Competition, type CreateBatchResult } from "../types";
 import { cartesianPairs, formatDate, futureMatchDates } from "../utils";
 
-const competitions: Competition[] = ["male", "female", "futsal"];
+const competitions: Competition[] = ["male", "female"];
 
 export function DashboardPage() {
   const [dateInput, setDateInput] = useState("");
@@ -68,7 +68,7 @@ export function DashboardPage() {
 
   return (
     <>
-      <PageHeader eyebrow="工作台" title="创建前瞻批次" description="选择日期和赛事，在一次查询中创建所有组合。" />
+      <PageHeader eyebrow="2026–2027 赛季" title="创建前瞻批次" description="选择日期和赛事，在一次查询中创建所有组合。五人制新赛季暂未启用。" />
       <div className="two-column two-column--wide">
         <Panel>
           <SectionTitle title="选择范围" description="日期与赛事将组合成独立批次。" />

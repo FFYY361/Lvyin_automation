@@ -12,7 +12,9 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from ai_preview import PromptConfig, build_prompt_bundle, build_system_message
+from ai_preview.builder import _swiss_standing
 from thufootball.rankings import build_outcome_catalog
+from thufootball.rules import competition_rules
 
 
 class PromptBuilderTests(unittest.TestCase):
@@ -52,6 +54,9 @@ class PromptBuilderTests(unittest.TestCase):
                     "season": "2025~2026",
                 },
                 "registered_teams": [],
+                "registered_players": [
+                    {"name": "甲球员", "tournament_team_id": 10, "valid": True},
+                ],
                 "games": games,
             },
         )
@@ -108,6 +113,94 @@ class PromptBuilderTests(unittest.TestCase):
                 for game_id, document in game_documents.items()
             },
             institutions,
+        )
+
+    def test_manual_players_only_include_valid_target_roster(self) -> None:
+        profiles = self.repository.institutions[1].player_descriptions
+        for name in ("旧球员", "无效球员", "其他队球员"):
+            profiles[name] = {"description": "已有描述", "competitions": ["male"]}
+        self.repository.tournament.data["registered_players"].extend(
+            [
+                {"name": "无效球员", "tournament_team_id": 10, "valid": False},
+                {"name": "其他队球员", "tournament_team_id": 20, "valid": True},
+            ]
+        )
+        bundle = build_prompt_bundle(20, repository=self.repository)
+        self.assertEqual(
+            [
+                player["name"]
+                for player in bundle.manual_context["home_team"]["player_descriptions"]
+            ],
+            ["甲球员"],
+        )
+        self.assertIn("旧球员", profiles)
+
+    def test_four_season_window_includes_target_and_three_previous_seasons(
+        self,
+    ) -> None:
+        for year in range(2021, 2025):
+            game = dict(
+                _game(year, f"{year}-10-01T13:00:00+08:00", 1, 3, 1, 0),
+                tournament_id=year,
+            )
+            self.repository.tournaments[year] = SimpleNamespace(
+                id=year,
+                competition="male",
+                final_rankings={},
+                data={
+                    "tournament": {
+                        "id": year,
+                        "name": f"马杯男足甲级{year}~{year + 1}",
+                        "season": f"{year}~{year + 1}",
+                    },
+                    "games": [game],
+                },
+            )
+            self.repository.games[year] = SimpleNamespace(
+                data={"game": game, "events": []}
+            )
+        bundle = build_prompt_bundle(20, repository=self.repository)
+        seasons = bundle.automatic_context["home_team"]["history_teams"][0][
+            "past_seasons"
+        ]
+        self.assertEqual(
+            {item["season"] for item in seasons}, {"2024-25", "2023-24", "2022-23"}
+        )
+        self.assertEqual(PromptConfig().history_seasons, 4)
+
+    def test_swiss_rules_standing_and_time_boundary(self) -> None:
+        new_rules = competition_rules("female", "2026-27")
+        old_rules = competition_rules("female", "2025-26")
+        self.assertTrue(new_rules.swiss)
+        self.assertFalse(old_rules.swiss)
+        self.assertIn(
+            "瑞士轮", build_system_message(competition_kind="女足", season="2026-27")
+        )
+        self.assertIn(
+            "小组赛分为六组",
+            build_system_message(competition_kind="女足", season="2025-26"),
+        )
+        target = _game(
+            20, "2026-11-01T13:00:00+08:00", 1, 2, None, None, status="scheduled"
+        )
+        played = _game(10, "2026-10-01T13:00:00+08:00", 1, 2, 2, 0)
+        future = _game(11, target["kickoff_local"], 2, 3, 8, 0)
+        tournament = {
+            "registered_teams": [
+                {"team_id": team, "status": True} for team in (1, 2, 3)
+            ],
+            "games": [played, future, target],
+        }
+        standing = _swiss_standing(tournament, target, 1, new_rules)
+        self.assertEqual(
+            (standing["played"], standing["points"], standing["rank"]), (1, 3, 1)
+        )
+        self.assertIsNone(_swiss_standing(tournament, target, 3, new_rules)["rank"])
+        incomplete = dict(played, game_id=12, valid=None, status="scheduled")
+        tournament["games"].append(incomplete)
+        self.assertIsNone(_swiss_standing(tournament, target, 1, new_rules)["rank"])
+        self.assertIsNone(
+            _swiss_standing(tournament, dict(target, stage=None), 1, new_rules)
         )
 
     def test_builds_context_and_normalizes_reversed_head_to_head(self) -> None:
@@ -215,6 +308,7 @@ class PromptBuilderTests(unittest.TestCase):
                     "season": "2024~2025",
                 },
                 "games": [internal, own],
+                "registered_players": [],
             },
         )
         self.repository.tournaments[8] = history
@@ -392,6 +486,8 @@ def _game(
         "round": None,
         "home_team_id": home_id,
         "away_team_id": away_id,
+        "home_tournament_team_id": home_id * 10,
+        "away_tournament_team_id": away_id * 10,
         "home_team_name": names[home_id],
         "away_team_name": names[away_id],
         "home_team_brief_name": names[home_id][:3],
