@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ai_preview.source import prepare_prompt_repository
 from thufootball import (
     AuthenticationError,
     ConfigurationError,
@@ -353,6 +354,7 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.session_factory = session_factory
     app.state.external_factories = resolved_factories
+    app.state.prompt_client_factory = create_environment_client
     app.state.thufootball_lock = thufootball_lock
     app.state.automatic_credentials = automatic_credentials
     app.state.ai_tasks = ai_tasks
@@ -1133,23 +1135,39 @@ def create_app(
             body=payload.body,
         )
 
+    async def prepare_match_football(session: Session, game_id: int, *, include_details: bool = True):
+        match = session.get(Match, game_id)
+        try:
+            async with app.state.prompt_client_factory() as client:
+                return await prepare_prompt_repository(
+                    game_id, repository=FootballDataRepository(session), client=client,
+                    tournament_id=match.tournament_id, include_details=include_details,
+                )
+        except (THUFootballError, AutomaticCredentialError, ValueError) as exc:
+            raise WorkflowError(
+                500, "ai_preview_context_invalid",
+                "AI 前瞻资料读取失败，暂时无法组装 Prompt。",
+            ) from exc
+
     @app.get("/api/matches/{game_id}/ai-preview-context")
-    def get_ai_preview_context(
+    async def get_ai_preview_context(
         game_id: int,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         require_match_access(session, game_id, user)
-        return ai_preview_context(session, game_id)
+        repository = await prepare_match_football(session, game_id)
+        return ai_preview_context(session, game_id, repository=repository)
 
     @app.get("/api/matches/{game_id}/ai-preview-prompt")
-    def get_ai_preview_prompt(
+    async def get_ai_preview_prompt(
         game_id: int,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         require_match_access(session, game_id, user)
-        return prompt_copy_payload(session, game_id)
+        repository = await prepare_match_football(session, game_id)
+        return prompt_copy_payload(session, game_id, repository=repository)
 
     @app.post("/api/matches/{game_id}/ai-preview-generations")
     async def create_ai_preview_generation(
@@ -1159,11 +1177,13 @@ def create_app(
         session: Session = Depends(get_session),
     ) -> JSONResponse:
         require_match_access(session, game_id, user)
+        repository = await prepare_match_football(session, game_id)
         result, material = prepare_generation(
             session,
             game_id=game_id,
             model_profile=payload.model_profile,
             requested_by_user_id=user.id,
+            repository=repository,
         )
         if material is not None:
             config_hash = result.model_config_hash
@@ -1275,13 +1295,14 @@ def create_app(
         return title_result_payload(result, current_prompt_hash=build_title_material(session, batch).prompt_hash, current_config_hash=model_config_hash(profile))
 
     @app.put("/api/matches/{game_id}/manual-descriptions")
-    def put_match_manual_descriptions(
+    async def put_match_manual_descriptions(
         game_id: int,
         payload: MatchManualDescriptionsRequest,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         require_match_access(session, game_id, user)
+        repository = await prepare_match_football(session, game_id, include_details=False)
         return update_match_manual_descriptions(
             session,
             game_id,
@@ -1289,6 +1310,7 @@ def create_app(
             home_player_descriptions=payload.home_team.player_descriptions,
             away_team_description=payload.away_team.team_description,
             away_player_descriptions=payload.away_team.player_descriptions,
+            repository=repository,
         )
 
     @app.put("/api/weather/{target_date}")

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +15,8 @@ if str(_SRC_ROOT) not in sys.path:
 
 from ai_preview import PromptConfig, build_prompt_bundle, build_system_message
 from ai_preview.builder import _swiss_standing
+from ai_preview.source import prepare_prompt_repository
+from thufootball.errors import ConfigurationError
 from thufootball.rankings import build_outcome_catalog
 from thufootball.rules import competition_rules
 
@@ -395,6 +399,117 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertEqual(historical_target.match_context["home_team"], "甲旧学部")
         self.assertEqual(
             len(historical_target.automatic_context["home_team"]["history_teams"]), 1
+        )
+
+
+class LivePromptSourceTests(unittest.TestCase):
+    def test_live_current_season_uses_existing_selection_and_archives(self) -> None:
+        fixture = PromptBuilderTests()
+        fixture.setUp()
+        database = fixture.repository
+        documents = {}
+        for tournament_id in (139, 140, 141):
+            document = deepcopy(database.tournament.data)
+            document["tournament"].update(id=tournament_id, season="2026~2027")
+            document["games"] = []
+            documents[tournament_id] = document
+        live = documents[139]
+        for game in database.tournament.data["games"]:
+            item = dict(game, game_id=game["game_id"] + 100, tournament_id=139)
+            item["kickoff_local"] = item["kickoff_local"].replace("2025", "2026")
+            live["games"].append(item)
+        cross = dict(live["games"][0], game_id=130, tournament_id=140)
+        documents[140]["games"] = [cross]
+        live["games"].append(
+            dict(
+                cross,
+                game_id=131,
+                tournament_id=139,
+                kickoff_local="2026-11-02T13:00:00+08:00",
+            )
+        )
+        live["registered_players"].append(
+            {"name": "新报名球员", "tournament_team_id": 10, "valid": True}
+        )
+        # No current-season tournament or game exists locally.
+        calls = []
+
+        class Client:
+            async def get_tournament_document(self, tournament_id):
+                calls.append(("tournament", tournament_id))
+                return documents[tournament_id]
+
+            async def get_game_info(self, game_id):
+                calls.append(("detail", game_id))
+                game = next(
+                    game
+                    for doc in documents.values()
+                    for game in doc["games"]
+                    if game["game_id"] == game_id
+                )
+                return {"game": game, "events": [_event("GOAL", "home", "远端射手")]}
+
+        stored = asyncio.run(
+            prepare_prompt_repository(
+                120,
+                repository=database,
+                client=Client(),
+                tournament_id=139,
+            )
+        )
+        bundle = build_prompt_bundle(120, repository=stored)
+        self.assertEqual(
+            {item for kind, item in calls if kind == "tournament"}, {139, 140, 141}
+        )
+        detail_ids = [item for kind, item in calls if kind == "detail"]
+        self.assertEqual(set(detail_ids), {110, 111, 112, 130})
+        self.assertEqual(len(detail_ids), len(set(detail_ids)))
+        self.assertEqual(
+            bundle.automatic_context["home_team"]["current_tournament"][
+                "record_before_match"
+            ]["played"],
+            1,
+        )
+        self.assertIn("远端射手", bundle.render_user_message())
+        self.assertIn(
+            {"name": "新报名球员", "description": ""},
+            bundle.manual_context["home_team"]["player_descriptions"],
+        )
+        self.assertNotIn("新报名球员", database.institutions[1].player_descriptions)
+        self.assertEqual(stored.get_game(10).data, database.get_game(10).data)
+
+    def test_failure_does_not_fall_back_to_current_database(self) -> None:
+        fixture = PromptBuilderTests()
+        fixture.setUp()
+
+        class Client:
+            async def get_tournament_document(self, tournament_id):
+                raise ConfigurationError("remote unavailable", stage="configuration")
+
+        with self.assertRaises(ConfigurationError):
+            asyncio.run(
+                prepare_prompt_repository(
+                    20,
+                    repository=fixture.repository,
+                    client=Client(),
+                    tournament_id=139,
+                )
+            )
+
+    def test_historical_target_does_not_query_remote(self) -> None:
+        fixture = PromptBuilderTests()
+        fixture.setUp()
+        stored = asyncio.run(
+            prepare_prompt_repository(
+                20,
+                repository=fixture.repository,
+                client=object(),
+                tournament_id=7,
+            )
+        )
+        self.assertEqual(
+            build_prompt_bundle(20, repository=stored),
+            build_prompt_bundle(20, repository=fixture.repository),
         )
 
 

@@ -24,10 +24,14 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 import backend.api as backend_api
-import backend.credentials as backend_credentials
+import thufootball.credentials as backend_credentials
 from ai_preview import build_prompt_bundle
 from ai_service import ChatResult, TokenUsage
-from backend.ai_preview import match_manual_payload, prepare_generation
+from backend.ai_preview import (
+    build_title_material,
+    match_manual_payload,
+    prepare_generation,
+)
 from backend.api import create_app
 from backend.artifacts import (
     parse_report_storage_descriptor,
@@ -51,6 +55,7 @@ from backend.models import (
     Base,
     Batch,
     Match,
+    PromptTemplate,
     User,
     Weather,
     WechatDraft,
@@ -1662,7 +1667,7 @@ def test_new_womens_swiss_prompt_and_environment_roster_in_isolation(session_fac
         bundle = build_prompt_bundle(999999, repository=repository)
         current = bundle.automatic_context["home_team"]["current_tournament"]
         assert bundle.match_context["home_team"] == "环境学院"
-        assert bundle.match_context["stage"] == "瑞士轮"
+        assert bundle.match_context["stage"] == "循环赛"
         assert current["group_standing"] is None
         assert current["swiss_standing"]["points"] == 3
         assert current["swiss_standing"]["rank"] == 1
@@ -2238,6 +2243,90 @@ def test_built_frontend_is_mounted_after_api_routes(
         assert "frontend" in client.get("/").text
         assert client.get("/api/auth/me").status_code == 401
         assert "Swagger UI" in client.get("/docs").text
+
+
+def test_title_uses_batch_snapshots_without_football_reads(session_factory, monkeypatch):
+    with session_factory() as session:
+        session.add_all([PromptTemplate(key=key, content="标题测试规则")
+                         for key in ("title_system", "title_rules")])
+        batch = _batch(session, complete=True)
+        match = session.scalar(select(Match).where(Match.batch_id == batch.id))
+        match.home_snapshot = {
+            **match.home_snapshot,
+            "current_results": [{"result_text": "快照战绩 2:1"}],
+            "previous_outcomes": [{"season": "2025~2026", "outcome": "八强"}],
+        }
+        match.head_to_head_snapshot = [{"result_text": "快照交锋 3:2"}]
+        session.flush()
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("title must not rebuild football facts")
+
+        monkeypatch.setattr("backend.ai_preview.build_prompt_material", forbidden)
+        prompt = build_title_material(session, batch).messages[1].content
+        assert all(value in prompt for value in ("快照战绩 2:1", "快照交锋 3:2", "八强", match.body))
+
+
+def test_current_prompt_and_manual_api_use_live_roster(session_factory, settings):
+    with session_factory.begin() as session:
+        session.add_all([PromptTemplate(key=key, content="标题测试规则")
+                         for key in ("title_system", "title_rules", "preview_system",
+                                     "preview_writing_rules", "preview_data_rules", "competition_male")])
+        session.add(User(username="LiveAdmin", display_name="Live Admin",
+                         password_hash=hash_password("password-123"), role="admin"))
+        batch = _batch(session, complete=True, game_id=4423, competition="male")
+        match = session.get(Match, 4423)
+        match.tournament_id = 141
+        database = FootballDataRepository(session)
+        documents = {item: deepcopy(database.get_tournament(item).data)
+                     for item in (139, 140, 141)}
+        target = next(game for game in documents[141]["games"] if game["game_id"] == 4423)
+        documents[141]["registered_players"].append({
+            "name": "远端新报名", "tournament_team_id": target["home_tournament_team_id"],
+            "valid": True, "kit_number": 99, "minute": 0,
+        })
+        session.execute(delete(GameRecord).where(GameRecord.id == 4423))
+        batch_id = batch.id
+    calls = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get_tournament_document(self, tournament_id):
+            calls.append(tournament_id)
+            return documents[tournament_id]
+
+        async def get_game_info(self, game_id):
+            raise AssertionError("the sample only needs archived details")
+
+    app = create_app(settings=settings, session_factory=session_factory)
+    app.state.prompt_client_factory = Client
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "LiveAdmin", "password": "password-123"}).raise_for_status()
+        context = client.get("/api/matches/4423/ai-preview-context")
+        context.raise_for_status()
+        manual = context.json()["manual"]
+        assert next(player for player in manual["home_team"]["players"]
+                    if player["name"] == "远端新报名")["description"] == ""
+        prompt = client.get("/api/matches/4423/ai-preview-prompt")
+        prompt.raise_for_status()
+        assert "远端新报名" in prompt.json()["copy_text"]
+        payload = {side: {"team_description": manual[side]["team_description"],
+                          "player_descriptions": {p["name"]: p["description"] for p in manual[side]["players"]}}
+                   for side in ("home_team", "away_team")}
+        client.put("/api/matches/4423/manual-descriptions", json=payload).raise_for_status()
+        payload["home_team"]["player_descriptions"]["远端新报名"] = "不能自动创建"
+        assert client.put("/api/matches/4423/manual-descriptions", json=payload).status_code == 409
+        # Title stays usable even when the football API is down.
+        assert client.get(f"/api/batches/{batch_id}/ai-title-prompt").status_code == 200
+    with session_factory() as session:
+        institution = FootballDataRepository(session).find_institution(target["home_team_id"], "male")
+        assert "远端新报名" not in institution.player_descriptions
+    assert set(calls) == {139, 140, 141}
 
 
 def test_ai_preview_generation_cache_and_manual_context(
