@@ -482,6 +482,12 @@ async def create_batches(
     dates: list[date],
     competitions: list[str],
 ) -> list[dict[str, Any]]:
+    for competition_value in competitions:
+        config = competition_config(Competition(competition_value))
+        if not config.current_tournament_ids:
+            raise WorkflowError(
+                409, "competition_not_configured", "该项目尚未接入新赛季。"
+            )
     resolved_dates = sorted(set(dates))
     resolved_competitions = sorted(
         set(competitions), key=COMPETITION_ORDER.__getitem__
@@ -644,6 +650,15 @@ async def refresh_batch(
     factories: ExternalFactories,
 ) -> None:
     config = competition_config(Competition(batch.competition))
+    tournament_ids = set(
+        session.scalars(select(Match.tournament_id).where(Match.batch_id == batch.id))
+    )
+    if not tournament_ids or not tournament_ids.issubset(config.current_tournament_ids):
+        raise WorkflowError(
+            409,
+            "historical_batch_refresh_not_allowed",
+            "批次不属于当前配置赛事，不能刷新；已有内容仍可查看和编辑。",
+        )
     try:
         async with factories.queries() as queries:
             builder = PreviewSourceBuilder(

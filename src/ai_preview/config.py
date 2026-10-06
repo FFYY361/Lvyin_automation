@@ -12,7 +12,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).with_name("config.json")
 @dataclass(frozen=True)
 class PromptConfig:
     recent_matches_with_events: int = 3
-    history_seasons: int = 3
+    history_seasons: int = 4
 
     def __post_init__(self) -> None:
         if (

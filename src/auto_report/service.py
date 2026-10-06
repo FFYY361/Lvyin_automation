@@ -622,6 +622,7 @@ class AutoReportPipeline:
         if not contexts:
             return
         config = contexts[0].config
+        config.require_current_tournaments()
         games = await football.query_games(
             GameQuery(
                 tournament_ids=config.current_tournament_ids,

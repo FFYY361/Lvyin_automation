@@ -40,7 +40,7 @@ Python 接口为 `ai_preview.build_user_message(match_id)`；需要检查中间�
 
 - 只选择目标比赛开球时间之前、已经结束且有效的比赛。即使本地快照已经包含目标比赛赛果，
   也不会把本场结果注入 Prompt。
-- 历史范围由 `history_seasons` 控制，默认包含目标赛季在内的最近三个赛季。
+- 历史范围由 `history_seasons` 控制，默认包含目标赛季在内的最近四个赛季。
 - 同一实际身份、同一项目的多个历史 ID 用于追溯自身历史；本体和前身在 `history_teams` 中
   分别组织，ID 不出现在 Prompt 中。当前赛季单队历史不展开前身，旧前身目标比赛只追溯其自身。
 - 每方最近 `recent_matches_with_events` 场非交锋比赛保留比分、首发和完整有效事件，随后归入
@@ -63,7 +63,7 @@ Python 接口为 `ai_preview.build_user_message(match_id)`；需要检查中间�
 ```json
 {
   "recent_matches_with_events": 3,
-  "history_seasons": 3
+  "history_seasons": 4
 }
 ```
 
@@ -71,6 +71,13 @@ Python 接口为 `ai_preview.build_user_message(match_id)`；需要检查中间�
 保留完整事件。配置只负责资料选择，不改变 User message 的字段结构。
 
 ## 5. 初步验收
+
+女足规则按目标赛季选择：2025–2026 及以前保留旧规则，2026–2027 起使用瑞士轮规则。
+第一阶段的 `current_tournament.swiss_standing` 统计本届全部报名球队，`group_standing` 为空；
+只计算本场之前已完成录入的第一阶段比赛。同分或此前比赛尚未完成录入时，排名为空并说明原因。
+无法识别阶段时不推测瑞士轮。男足和旧赛季女足继续使用原有小组积分。
+
+人工球员描述只提供目标赛事该队的有效报名球员；历史球员仍保留在院系资料库中。
 
 后续选择约 5-10 场比赛试写，重点检查事实错误、球员归属、人工资料使用、双方叙述平衡、
 文章结构和可编辑性。首轮以暴露问题为主，不设置精确分数或通过比例。
