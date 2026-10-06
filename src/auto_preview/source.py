@@ -33,7 +33,6 @@ from thufootball.rankings import (
     StaticOutcomeCatalog,
     load_outcome_catalog,
 )
-from thufootball.rules import competition_rules
 
 from .config import CompetitionConfig
 from .errors import NoGamesForDate
@@ -397,10 +396,7 @@ class PreviewSourceBuilder:
                     competition_name=self._config.current_tournament_names[
                         game.tournament_id
                     ],
-                    stage=competition_rules(
-                        self._config.competition.value, self._config.season
-                    ).stage_label(game.stage)
-                    or _stage(game),
+                    stage=_stage(game),
                     kickoff=game.kickoff_local,
                     venue=game.field_name or "场地待定",
                     home=home,
