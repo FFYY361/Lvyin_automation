@@ -15,11 +15,6 @@ class CompetitionRules:
     def is_first_stage(self, stage: str | None) -> bool:
         return stage in {"小组赛", "循环赛", "瑞士轮", "联赛阶段", "第一阶段"}
 
-    def stage_label(self, stage: str | None) -> str | None:
-        if self.swiss and self.is_first_stage(stage):
-            return "瑞士轮"
-        return stage
-
 
 COMPETITION_RULES = {
     "male": (CompetitionRules(0, "competition_male", "men.md"),),

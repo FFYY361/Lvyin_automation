@@ -277,10 +277,7 @@ def build_prompt_bundle(
     match_context = {
         "competition": _competition_label(competition_kind, target_info),
         "season": target_season,
-        "stage": competition_rules(
-            _COMPETITION_VALUES[competition_kind], target_season
-        ).stage_label(target_game.get("stage"))
-        or "未标注",
+        "stage": target_game.get("stage") or "未标注",
         "group": target_game.get("group_name"),
         "round": target_game.get("round"),
         "home_team": home_identity.institution_name,
@@ -471,7 +468,7 @@ def _automatic_team_context(
         "current_tournament": {
             "competition": _competition_label(competition_kind, tournament_info),
             "season": _canonical_season(tournament_info.get("season")),
-            "current_stage": rules.stage_label(target_game.get("stage")),
+            "current_stage": target_game.get("stage"),
             "group_standing": (
                 None
                 if rules.swiss

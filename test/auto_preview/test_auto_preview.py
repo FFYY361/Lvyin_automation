@@ -318,6 +318,18 @@ class _BatchQueries(_FakeQueries):
 
 
 class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_female_season_keeps_upstream_stage(self) -> None:
+        queries = _FakeQueries()
+        queries.targets = [replace(game, stage="循环赛") for game in queries.targets]
+        logger, _ = _logger()
+        builder = PreviewSourceBuilder(
+            queries,
+            replace(competition_config(Competition.FEMALE), season="2026-2027"),
+            logger=logger,
+        )
+        source = await builder.build(date(2026, 4, 11))
+        self.assertEqual([game.stage for game in source.matches], ["循环赛"])
+
     async def test_empty_current_scope_refuses_without_query(self) -> None:
         queries = _FakeQueries()
         logger, _ = _logger()
