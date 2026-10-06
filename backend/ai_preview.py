@@ -439,6 +439,7 @@ def _side_manual_payload(
     tournament_data: Mapping[str, Any],
     competition: str,
     institution: InstitutionRecord,
+    team_name: str,
 ) -> dict[str, Any]:
     tournament_team_id = _require_integer(
         game.get(f"{side}_tournament_team_id"),
@@ -504,9 +505,6 @@ def _side_manual_payload(
         players.sort(key=lambda item: (_kit_sort(item["kit_number"]), item["name"]))
         sort_basis = "kit_number"
 
-    team_name = game.get(f"{side}_team_name")
-    if not isinstance(team_name, str) or not team_name.strip():
-        team_name = institution.short_name
     return {
         "institution_name": institution.name,
         "institution_short_name": institution.short_name,
@@ -538,6 +536,8 @@ def match_manual_payload(session: Session, game_id: int) -> dict[str, Any]:
     try:
         home = repository.find_institution(home_team_id, tournament.competition)
         away = repository.find_institution(away_team_id, tournament.competition)
+        home_identity = repository.find_team_identity(home_team_id, tournament.competition)
+        away_identity = repository.find_team_identity(away_team_id, tournament.competition)
     except ConfigurationError as exc:
         raise WorkflowError(
             500,
@@ -552,6 +552,7 @@ def match_manual_payload(session: Session, game_id: int) -> dict[str, Any]:
             tournament_data=tournament_data,
             competition=tournament.competition,
             institution=home,
+            team_name=home_identity.brief_name,
         ),
         "away_team": _side_manual_payload(
             side="away",
@@ -559,6 +560,7 @@ def match_manual_payload(session: Session, game_id: int) -> dict[str, Any]:
             tournament_data=tournament_data,
             competition=tournament.competition,
             institution=away,
+            team_name=away_identity.brief_name,
         ),
     }
 
@@ -947,6 +949,7 @@ def institution_detail_payload(record: InstitutionRecord) -> dict[str, Any]:
         "male_team_ids": record.male_team_ids,
         "female_team_ids": record.female_team_ids,
         "futsal_team_ids": record.futsal_team_ids,
+        "predecessors": record.predecessors,
         "male_description": record.male_description,
         "female_description": record.female_description,
         "futsal_description": record.futsal_description,

@@ -23,7 +23,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 
 from .config import load_env_file
 from .errors import ConfigurationError
-from .rankings import StaticOutcomeCatalog, build_outcome_catalog
+from .rankings import (
+    StaticOutcomeCatalog,
+    StaticTeamIdentity,
+    build_outcome_catalog,
+    build_team_identities,
+)
 
 
 class FootballDataBase(DeclarativeBase):
@@ -48,6 +53,9 @@ class InstitutionRecord(FootballDataBase):
     female_description: Mapped[str] = mapped_column(Text, nullable=False)
     futsal_description: Mapped[str] = mapped_column(Text, nullable=False)
     player_descriptions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    predecessors: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
 
 
 class TournamentRecord(FootballDataBase):
@@ -59,9 +67,7 @@ class TournamentRecord(FootballDataBase):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=False
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     competition: Mapped[str] = mapped_column(String(16), nullable=False)
     final_rankings: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
@@ -75,9 +81,7 @@ class GameRecord(FootballDataBase):
     __tablename__ = "games"
     __table_args__ = (Index("ix_games_tournament_id", "tournament_id"),)
 
-    id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=False
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     tournament_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("tournaments.id", ondelete="RESTRICT"),
@@ -126,23 +130,20 @@ class FootballDataRepository:
             )
         return record
 
-    def find_institution(
-        self, team_id: int, competition: str
-    ) -> InstitutionRecord:
-        field = {
-            "male": "male_team_ids",
-            "female": "female_team_ids",
-            "futsal": "futsal_team_ids",
-        }.get(competition)
-        if field is None:
-            raise ConfigurationError(
-                f"unsupported competition {competition!r}",
-                stage="configuration",
-            )
+    def find_institution(self, team_id: int, competition: str) -> InstitutionRecord:
+        return self.get_institution(
+            self.find_team_identity(team_id, competition).owner_name
+        )
+
+    def find_team_identity(self, team_id: int, competition: str) -> StaticTeamIdentity:
+        category = {"male": "男足", "female": "女足", "futsal": "五人制"}.get(
+            competition
+        )
+        identities = build_team_identities(self.institution_configurations())
         matches = [
-            record
-            for record in self.list_institutions()
-            if team_id in getattr(record, field)
+            identity
+            for identity in identities.values()
+            if identity.category == category and team_id in identity.team_ids
         ]
         if len(matches) != 1:
             raise ConfigurationError(
@@ -150,6 +151,19 @@ class FootballDataRepository:
                 stage="configuration",
             )
         return matches[0]
+
+    def institution_configurations(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": record.name,
+                "short_name": record.short_name,
+                "male_team_ids": record.male_team_ids,
+                "female_team_ids": record.female_team_ids,
+                "futsal_team_ids": record.futsal_team_ids,
+                "predecessors": record.predecessors,
+            }
+            for record in self.list_institutions()
+        ]
 
     def list_institutions(self) -> list[InstitutionRecord]:
         return list(
@@ -188,16 +202,7 @@ class FootballDataRepository:
         return list(self.session.scalars(statement.order_by(GameRecord.id)))
 
     def load_outcome_catalog(self) -> StaticOutcomeCatalog:
-        institutions = [
-            {
-                "name": record.name,
-                "short_name": record.short_name,
-                "male_team_ids": record.male_team_ids,
-                "female_team_ids": record.female_team_ids,
-                "futsal_team_ids": record.futsal_team_ids,
-            }
-            for record in self.list_institutions()
-        ]
+        institutions = self.institution_configurations()
         tournaments = [
             {
                 "id": record.id,

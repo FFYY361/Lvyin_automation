@@ -54,6 +54,7 @@ from thufootball import (
     TeamTournamentOutcome,
     Timeout,
 )
+from thufootball.rankings import build_outcome_catalog
 from thufootball import (
     PermissionError as THUFootballPermissionError,
 )
@@ -158,6 +159,17 @@ def _logger() -> tuple[logging.Logger, _ListHandler]:
 
 class _FakeQueries:
     def __init__(self) -> None:
+        institutions = [
+            {"name": name, "short_name": short, "male_team_ids": [team_id],
+             "female_team_ids": [team_id], "futsal_team_ids": [team_id]}
+            for team_id, name, short in ((1, "社会科学学院", "社会"), (2, "经济管理学院", "经济"),
+                                        (33, "计算机科学与技术系-全球创新学院", "计算机-GIX"))
+        ]
+        self.outcome_catalog = build_outcome_catalog(institutions, [
+            {"id": tid, "name": f"马杯女足{season}",
+             "final_rankings": {"社会科学学院女足": rank, "经济管理学院女足": rank}}
+            for tid, season, rank in ((102, "2024~2025", "八强"), (90, "2023~2024", "四强"))
+        ])
         self.target = _game(
             500,
             123,
@@ -257,15 +269,15 @@ class _FakeQueries:
             ),
         ]
 
-    async def query_team_to_team_matches(
+    async def query_team_sets_matches(
         self,
-        team_a_id: int,
-        team_b_id: int,
+        team_a_ids: tuple[int, ...],
+        team_b_ids: tuple[int, ...],
         tournament_ids: tuple[int, ...],
         *,
         include_unfinished: bool = False,
     ) -> HeadToHeadHistory:
-        self.h2h_calls.append((team_a_id, team_b_id, tournament_ids))
+        self.h2h_calls.append((team_a_ids[0], team_b_ids[0], tournament_ids))
         return self.history
 
 
@@ -332,7 +344,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             queries.outcome_calls,
-            [(1, (102, 90)), (2, (102, 90))],
+            [],
         )
         self.assertEqual(queries.h2h_calls, [(1, 2, (123, 102, 90, 74))])
         self.assertEqual(len(source.matches), 2)
@@ -437,11 +449,15 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
                     _head_to_head_line(played).startswith(f"（{expected_season}-甲）")
                 )
 
-    async def test_team_missing_from_outcome_catalog_is_shown_as_not_entered(
+    async def test_team_without_rankings_is_shown_as_not_entered(
         self,
     ) -> None:
         queries = _FakeQueries()
-        queries.outcome_query_error_team_ids.add(1)
+        queries.outcome_catalog = replace(queries.outcome_catalog, tournaments_by_id=MappingProxyType({
+            tid: replace(tournament, ranks=MappingProxyType({name: rank for name, rank in tournament.ranks.items()
+                                                            if name != "社会科学学院女足"}))
+            for tid, tournament in queries.outcome_catalog.tournaments_by_id.items()
+        }))
         logger, _ = _logger()
         builder = PreviewSourceBuilder(
             queries,  # type: ignore[arg-type]
@@ -478,7 +494,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([match.game_id for match in source.matches], [500])
 
-    async def test_uses_trusted_database_short_name_and_rejects_long_value(
+    async def test_ignores_api_short_names_and_uses_configuration(
         self,
     ) -> None:
         queries = _FakeQueries()
@@ -500,7 +516,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         source = await builder.build(datetime(2026, 4, 11).date())
 
-        self.assertEqual(source.matches[0].home.short_name, "社科女足")
+        self.assertEqual(source.matches[0].home.short_name, "社会")
         self.assertEqual(source.matches[0].away.short_name, "经济")
         self.assertFalse(
             any(
@@ -513,7 +529,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
                 "team_id=2" in item and "简称不可信" in item
                 for item in handler.messages
             ),
-            1,
+            0,
         )
 
     def test_official_team_name_and_brief_name_precede_database_values(

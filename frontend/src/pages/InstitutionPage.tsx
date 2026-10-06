@@ -75,12 +75,20 @@ export function InstitutionPage() {
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
 
+      {value.predecessors?.length ? <Panel>
+        <SectionTitle title="前身球队" description="历史比赛保留前身身份，人工描述统一由本院系维护。" />
+        {value.predecessors.map((predecessor) => <div key={predecessor.name}>
+          <strong>{predecessor.name}（{predecessor.short_name}）</strong>
+          {teamFields.map(([competition, , idsField]) => <p key={competition}>{competitionLabels[competition]}：{predecessor[idsField].join("、") || "无球队 ID"}</p>)}
+        </div>)}
+      </Panel> : null}
+
       <Panel>
         <SectionTitle title="球队描述" description="维护该院系现有比赛项目的整体特点。" />
         <div className="institution-team-editor-grid">
           {teamFields
-            .filter(([, , idsField]) => value[idsField].length > 0)
-            .map(([competition, descriptionField, idsField]) => <Field key={competition} label={competitionLabels[competition]} hint={`球队 ID：${value[idsField].join("、")}`}><textarea rows={8} value={value[descriptionField]} onChange={(event) => setValue({ ...value, [descriptionField]: event.target.value })} /></Field>)}
+            .filter(([, , idsField]) => value[idsField].length > 0 || value.predecessors?.some((item) => item[idsField].length > 0))
+            .map(([competition, descriptionField, idsField]) => <Field key={competition} label={competitionLabels[competition]} hint={`本体球队 ID：${value[idsField].join("、") || "尚未登记"}`}><textarea rows={8} value={value[descriptionField]} onChange={(event) => setValue({ ...value, [descriptionField]: event.target.value })} /></Field>)}
         </div>
       </Panel>
 

@@ -94,7 +94,7 @@ def test_repository_and_data_baseline(football_engine) -> None:
             session.scalar(select(func.count()).select_from(TournamentRecord)),
             session.scalar(select(func.count()).select_from(GameRecord)),
         )
-        assert counts == (53, 14, 590)
+        assert counts == (52, 14, 590)
         assert len(repository.load_outcome_catalog().tournaments_by_id) == 14
 
 
@@ -112,6 +112,7 @@ def test_schema_has_only_planned_columns_and_restricts_deletion(
             "female_description",
             "futsal_description",
             "player_descriptions",
+            "predecessors",
         },
         "tournaments": {
             "id",

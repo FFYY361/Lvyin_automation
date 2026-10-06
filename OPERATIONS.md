@@ -104,6 +104,10 @@ AI 前瞻的网站模型需要 `AI_SERVICE_DEEPSEEK_API_KEY` 和 `AI_SERVICE_QWE
 - `current_tournament_names`：这些赛事在网页上的名称；
 - `historical_seasons`：将上一赛季加入历史赛季。
 
+院系合并通过 `institutions.predecessors` 保存前身全称、简称和项目 ID。新赛季合并球队报名后，
+将其新 ID 填入院系根目录的对应数组；根目录只记录本体 ID，不能复制前身 ID。纯更名直接修改
+院系名称／简称及相关排名键。202609 资料迁移操作见 `docs/ai_preview/football_data_database.md`。
+
 球队、赛事、比赛和最终排名统一维护在 PostgreSQL 的 `institutions`、`tournaments` 和
 `games` 表中，不再维护 notes 文件。新赛季赛事先写入 `tournaments` 并保持
 `is_finalized = false`，再运行 `scripts/sync_ai_preview_automatic.py` 抓取报名、赛程和比赛。
@@ -111,6 +115,9 @@ AI 前瞻的网站模型需要 `AI_SERVICE_DEEPSEEK_API_KEY` 和 `AI_SERVICE_QWE
 `is_finalized = true`；封存赛事不会再参与同步。
 
 修改完成后在本地运行测试和前端构建，再按照第 2 节更新服务器。数据库不需要按赛季重建。
+
+模板比赛查询继续走 thufootball 接口，AI Prompt 的比赛、事件和报名资料继续使用本地数据库。
+本版本没有周期性资料同步，新赛季应按需要运行上述同步脚本，避免 AI 使用过期资料。
 
 ## 4. 2026-09-09 AI 功能上线记录
 

@@ -33,6 +33,7 @@ from thufootball import (
     PreparedGameReport,
     prepare_game_report,
 )
+from thufootball.rankings import build_outcome_catalog
 from wechat_official import Article, CoverFile, CoverMediaId, DraftReceipt
 
 
@@ -93,6 +94,16 @@ class FakeFootball:
         mixed_game_ids: set[int] | None = None,
     ) -> None:
         self.games_by_tournaments = games_by_tournaments
+        identities = {"A": set(), "B": set()}
+        for games in games_by_tournaments.values():
+            for game in games:
+                identities.setdefault(game.home_team_name, set()).add(game.home_team_id)
+                identities.setdefault(game.away_team_name, set()).add(game.away_team_id)
+        self.outcome_catalog = build_outcome_catalog([
+            {"name": name, "short_name": name, "male_team_ids": sorted(ids),
+             "female_team_ids": sorted(ids), "futsal_team_ids": sorted(ids)}
+            for name, ids in identities.items()
+        ], [])
         self.warning_game_ids = warning_game_ids or set()
         self.mixed_game_ids = mixed_game_ids or set()
         self.queries: list[GameQuery] = []
@@ -151,7 +162,7 @@ class FakeFootball:
                 text="AvsB的比赛，由于B被判负，记为A 3:0 B。",
             )
         if game.home_abandon is True or game.away_abandon is True:
-            return prepare_game_report(detail)
+            return prepare_game_report(detail, outcome_catalog=self.outcome_catalog)
         warnings = (
             (
                 GameEventIssue(

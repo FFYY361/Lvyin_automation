@@ -25,6 +25,7 @@ def clone_football_data(source_engine: Engine, target_engine: Engine) -> None:
                 "female_description": row.female_description,
                 "futsal_description": row.futsal_description,
                 "player_descriptions": deepcopy(row.player_descriptions),
+                "predecessors": deepcopy(row.predecessors),
             }
             for row in source.scalars(select(InstitutionRecord))
         ]
