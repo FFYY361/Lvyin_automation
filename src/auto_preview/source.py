@@ -26,21 +26,16 @@ from thufootball import (
     GameQuery,
     GameStatus,
     GameSummary,
-    QueryValidationError,
     TeamGameResult,
-    TeamTournamentOutcome,
     THUFootballQueryService,
 )
 from thufootball.rankings import (
     StaticOutcomeCatalog,
-    StaticTeamIdentity,
     load_outcome_catalog,
 )
 
 from .config import CompetitionConfig
 from .errors import NoGamesForDate
-
-MAX_TRUSTED_TEAM_SHORT_NAME_LENGTH = 5
 
 PLACEHOLDER_PREFIX = "【待填写"
 HEADLINE_PLACEHOLDER = "【待填写：文章标题】"
@@ -99,22 +94,15 @@ class PreviewSourceBuilder:
         self._queries = queries
         self._config = config
         self._logger = logger
-        self._short_names: dict[int, str] = {}
         category = _TEAM_CATEGORY_BY_COMPETITION[config.competition.value]
         catalog = (
             outcome_catalog
             or getattr(queries, "outcome_catalog", None)
             or load_outcome_catalog()
         )
-        self._official_teams: dict[int, StaticTeamIdentity] = {}
-        for team_id, team_names in catalog.team_names_by_id.items():
-            for team_name in team_names:
-                identity = catalog.teams_by_name[team_name]
-                if identity.category == category:
-                    self._official_teams[team_id] = identity
-                    break
+        self._catalog = catalog
+        self._category = category
         self._team_results: dict[tuple[int, int], list[TeamGameResult]] = {}
-        self._team_outcomes: dict[int, list[TeamTournamentOutcome]] = {}
         self._head_to_head: dict[tuple[int, int], tuple[GameSummary, ...]] = {}
         self._historical_seasons_by_tournament_id = {
             tournament_id: _season_label(season.label) or season.label
@@ -129,31 +117,7 @@ class PreviewSourceBuilder:
         name: str,
         database_short_name: str | None = None,
     ) -> str:
-        official = self._official_teams.get(team_id)
-        if official is not None:
-            self._short_names[team_id] = official.brief_name
-            return official.brief_name
-        existing = self._short_names.get(team_id)
-        if existing is not None:
-            return existing
-        clean_name = name.strip()
-        candidate = database_short_name.strip() if database_short_name else ""
-        trusted = (
-            bool(candidate) and len(candidate) <= MAX_TRUSTED_TEAM_SHORT_NAME_LENGTH
-        )
-        short_name = candidate if trusted else clean_name[:2]
-        self._short_names[team_id] = short_name
-        if not trusted:
-            reason = "缺失" if not candidate else "超过5个字符"
-            self._logger.warning(
-                "球队简称不可信：team_id=%s，全称=%s，数据库简称=%s，原因=%s，使用=%s",
-                team_id,
-                clean_name,
-                candidate or "<空>",
-                reason,
-                short_name,
-            )
-        return short_name
+        return self._catalog.resolve_identity(team_id, self._category).brief_name
 
     def _team_ref(
         self,
@@ -161,8 +125,8 @@ class PreviewSourceBuilder:
         name: str,
         short_name: str | None,
     ) -> TeamRef:
-        official = self._official_teams.get(team_id)
-        clean_name = official.institution_name if official is not None else name.strip()
+        official = self._catalog.resolve_identity(team_id, self._category)
+        clean_name = official.institution_name
         return TeamRef(
             team_id=team_id,
             name=clean_name,
@@ -262,31 +226,15 @@ class PreviewSourceBuilder:
         )
 
     async def _outcomes(self, team_id: int) -> tuple[SeasonOutcome, ...]:
-        outcomes = self._team_outcomes.get(team_id)
-        if outcomes is None:
-            try:
-                outcomes = await self._queries.query_team_outcomes(
-                    team_id,
-                    self._config.outcome_tournament_ids,
-                )
-            except QueryValidationError:
-                # 新队伍可能尚未进入静态历史成绩目录；视为三届均未参赛。
-                outcomes = []
-            self._team_outcomes[team_id] = outcomes
-
-        outcomes_by_tournament_id = {
-            outcome.tournament_id: outcome for outcome in outcomes
-        }
+        identity = self._catalog.resolve_identity(team_id, self._category)
         resolved: list[SeasonOutcome] = []
         for season in self._config.historical_seasons:
-            outcome = next(
-                (
-                    outcomes_by_tournament_id[tournament_id]
-                    for tournament_id in season.tournament_ids
-                    if tournament_id in outcomes_by_tournament_id
-                ),
-                None,
+            outcomes = (
+                self._catalog.season_outcomes(identity, season.tournament_ids)
+                if season.outcomes_available
+                else ()
             )
+            outcome = outcomes[0] if outcomes else None
             season_label = _season_label(season.label) or season.label
             if outcome is None:
                 resolved.append(
@@ -316,9 +264,13 @@ class PreviewSourceBuilder:
         key = tuple(sorted((team_a_id, team_b_id)))
         matches = self._head_to_head.get(key)
         if matches is None:
-            history = await self._queries.query_team_to_team_matches(
-                key[0],
-                key[1],
+            history = await self._queries.query_team_sets_matches(
+                self._catalog.history_ids(
+                    self._catalog.resolve_identity(key[0], self._category)
+                ),
+                self._catalog.history_ids(
+                    self._catalog.resolve_identity(key[1], self._category)
+                ),
                 (
                     self._config.current_tournament_ids
                     + self._config.historical_tournament_ids
@@ -348,10 +300,9 @@ class PreviewSourceBuilder:
         before: datetime,
     ) -> PreviewTeam:
         resolved_short_name = self._short_name(team_id, name, short_name)
-        official = self._official_teams.get(team_id)
-        resolved_name = (
-            official.institution_name if official is not None else name.strip()
-        )
+        resolved_name = self._catalog.resolve_identity(
+            team_id, self._category
+        ).institution_name
         outcomes = await self._outcomes(team_id)
         results = await self._current_results(team_id, tournament_id, before)
         return PreviewTeam(
@@ -403,7 +354,7 @@ class PreviewSourceBuilder:
             (game.game_id, game.tournament_id) for game in eligible
         )
 
-        # 目标队先注册；静态官方简称优先，未登记球队再采用可信数据库简称。
+        # 在查询比赛资料前验证目标球队的配置身份。
         for game in eligible:
             self._short_name(
                 game.home_team_id,

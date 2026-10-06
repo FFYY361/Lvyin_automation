@@ -487,7 +487,7 @@ class ReportRendererTests(unittest.TestCase):
 
         self.assertTrue(payload["metadata"].startswith("2026-04-04 15:00"))
 
-    def test_prefers_static_full_team_names_and_keeps_api_fallbacks(
+    def test_uses_configured_team_names_and_rejects_unknown_identity(
         self,
     ) -> None:
         assets = {name: _TINY_PNG for name in _REPORT_ASSET_NAMES}
@@ -510,14 +510,10 @@ class ReportRendererTests(unittest.TestCase):
                 away_team_id=999_999,
             ),
         )
-        fallback_payload = _report_payload(
-            unknown_teams,
-            settings=ReportSettings(),
-            assets=assets,
-            qr_code=_TINY_PNG,
-        )
-        self.assertEqual(fallback_payload["home_name"], "汽车")
-        self.assertEqual(fallback_payload["away_name"], "未央")
+        with self.assertRaises(ConfigurationError):
+            _report_payload(
+                unknown_teams, settings=ReportSettings(), assets=assets, qr_code=_TINY_PNG,
+            )
 
     def test_uses_website_fonts_and_original_event_assets(self) -> None:
         assets = {name: _TINY_PNG for name in _REPORT_ASSET_NAMES}

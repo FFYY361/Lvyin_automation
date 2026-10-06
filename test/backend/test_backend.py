@@ -2187,8 +2187,9 @@ def test_ai_preview_generation_cache_and_manual_context(
         context.raise_for_status()
         data = context.json()
         assert [item["profile"] for item in data["models"]] == [
-            "deepseek_v4_flash_thinking",
+            "deepseek_v41_flash_thinking",
             "qwen38_thinking",
+            "qwen38_max_thinking",
         ]
         assert data["manual"]["home_team"]["sort_basis"] == "minutes"
         assert data["manual"]["home_team"]["players"]
@@ -2196,13 +2197,13 @@ def test_ai_preview_generation_cache_and_manual_context(
 
         generated = client.post(
             "/api/matches/4245/ai-preview-generations",
-            json={"model_profile": "deepseek_v4_flash_thinking"},
+            json={"model_profile": "deepseek_v41_flash_thinking"},
         )
         assert generated.status_code == 202
         for _ in range(30):
             result = client.get(
                 "/api/matches/4245/ai-preview-results/"
-                "deepseek_v4_flash_thinking"
+                "deepseek_v41_flash_thinking"
             )
             result.raise_for_status()
             if result.json()["status"] == "succeeded":
@@ -2214,11 +2215,11 @@ def test_ai_preview_generation_cache_and_manual_context(
 
         reused = client.post(
             "/api/matches/4245/ai-preview-generations",
-            json={"model_profile": "deepseek_v4_flash_thinking"},
+            json={"model_profile": "deepseek_v41_flash_thinking"},
         )
         reused.raise_for_status()
         assert reused.json()["reused"] is True
-        assert calls == ["deepseek_v4_flash_thinking"]
+        assert calls == ["deepseek_v41_flash_thinking"]
 
         assert batch_id > 0
     with direct_factory.begin() as session:
@@ -2320,7 +2321,7 @@ def test_ai_preview_slot_allows_only_one_concurrent_generation(
             _, material = prepare_generation(
                 session,
                 game_id=4245,
-                model_profile="deepseek_v4_flash_thinking",
+                model_profile="deepseek_v41_flash_thinking",
                 requested_by_user_id=user_id,
             )
             return material is not None
@@ -2332,7 +2333,7 @@ def test_ai_preview_slot_allows_only_one_concurrent_generation(
         with direct_factory() as session:
             result = session.get(
                 AIPreviewResult,
-                (4245, "deepseek_v4_flash_thinking"),
+                (4245, "deepseek_v41_flash_thinking"),
             )
             assert result is not None
             assert result.status == "queued"

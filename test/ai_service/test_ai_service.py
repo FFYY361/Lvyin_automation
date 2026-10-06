@@ -113,8 +113,9 @@ class AIServiceTests(unittest.IsolatedAsyncioTestCase):
             {
                 "qwen",
                 "deepseek",
-                "deepseek_v4_flash_thinking",
+                "deepseek_v41_flash_thinking",
                 "qwen38_thinking",
+                "qwen38_max_thinking",
                 "deepseek_v4_pro_thinking",
                 "glm",
                 "doubao_turbo",

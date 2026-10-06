@@ -124,17 +124,7 @@ def resolve_report_team_name(
     static_names = catalog.team_names_by_id.get(team_id)
     if static_names:
         return catalog.teams_by_name[static_names[0]].institution_name
-    if side == "home":
-        return (
-            game.home_team_report_name
-            or game.home_team_brief_name
-            or game.home_team_name
-        )
-    return (
-        game.away_team_report_name
-        or game.away_team_brief_name
-        or game.away_team_name
-    )
+    raise ConfigurationError(f"team_id={team_id} has no configured identity", stage="configuration")
 
 
 def _awarded_score(detail: GameDetail) -> int:

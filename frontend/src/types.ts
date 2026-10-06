@@ -311,12 +311,21 @@ export interface InstitutionPlayer {
   description: string;
 }
 
+export interface InstitutionPredecessor {
+  name: string;
+  short_name: string;
+  male_team_ids: number[];
+  female_team_ids: number[];
+  futsal_team_ids: number[];
+}
+
 export interface InstitutionDetail {
   name: string;
   short_name: string;
   male_team_ids: number[];
   female_team_ids: number[];
   futsal_team_ids: number[];
+  predecessors: InstitutionPredecessor[];
   male_description: string;
   female_description: string;
   futsal_description: string;

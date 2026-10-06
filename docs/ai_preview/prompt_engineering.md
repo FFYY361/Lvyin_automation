@@ -33,21 +33,24 @@ ai-preview-prompt MATCH_ID
 ```
 
 Python 接口为 `ai_preview.build_user_message(match_id)`；需要检查中间结构时使用
-`ai_preview.build_prompt_bundle(match_id)`。命令行另提供 `--config`、`--data-root` 和
-`--teams-path`，只用于开发和测试时替换默认本地文件，不属于业务输入。
+`ai_preview.build_prompt_bundle(match_id)`。命令行另提供 `--config`，用于替换资料选择配置；
+足球资料通过 PostgreSQL Repository 读取，不提供旧文件回退。
 
 ## 3. 自动资料选择
 
 - 只选择目标比赛开球时间之前、已经结束且有效的比赛。即使本地快照已经包含目标比赛赛果，
   也不会把本场结果注入 Prompt。
 - 历史范围由 `history_seasons` 控制，默认包含目标赛季在内的最近三个赛季。
-- 同一院系、同一项目在 `teams.json` 中登记的多个历史球队 ID 会合并使用，避免球队换 ID 后
-  漏掉旧赛季资料；这些 ID 不会出现在 Prompt 中。
-- 每支球队最近 `recent_matches_with_events` 场非直接交锋进入 `recent_matches`，包含比分、
-  首发和完整有效事件；更早比赛进入只有赛果摘要的 `earlier_matches`。
+- 同一实际身份、同一项目的多个历史 ID 用于追溯自身历史；本体和前身在 `history_teams` 中
+  分别组织，ID 不出现在 Prompt 中。当前赛季单队历史不展开前身，旧前身目标比赛只追溯其自身。
+- 每方最近 `recent_matches_with_events` 场非交锋比赛保留比分、首发和完整有效事件，随后归入
+  对应身份的 `recent_matches`；更早比赛归入 `earlier_matches`。前身互相比赛不累计成本体总战绩。
+- `season_outcomes` 按排名记录选择本体成绩或前身最佳成绩，保留成绩来源；没有排名为“未参赛”。
+  每个身份的 `past_seasons` 只统计早于目标赛季的赛事战绩。
 - 两队在历史范围内的全部直接交锋进入 `head_to_head`，始终保留事件详情，不占上述近期场次
   额度。
 - 直接交锋统一转换为目标比赛的主客顺序；比分、首发、进球、换人、牌和其他事件同步转换。
+- 交锋名称保留比赛当时实际身份的配置简称，不将前身名称替换为本场合并球队名称。
 - 输出不包含比赛、赛事、球队、球员或事件 ID。姓名暂时保留，以降低首版 Prompt 组装难度；
   正文是否出现姓名仍由写作规则约束。
 - 当前赛事战绩和小组积分只按本场之前的比赛现场计算。无法确认同分球队准确顺位时，

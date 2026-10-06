@@ -92,9 +92,7 @@ def _include_unfinished(value: object) -> bool:
     return value
 
 
-def _team_alias_ids(
-    team_id: int, catalog: StaticOutcomeCatalog
-) -> frozenset[int]:
+def _team_alias_ids(team_id: int, catalog: StaticOutcomeCatalog) -> frozenset[int]:
     team_names = catalog.team_names_by_id.get(team_id)
     if team_names is None:
         return frozenset((team_id,))
@@ -651,6 +649,28 @@ class THUFootballQueryService:
         catalog = self.outcome_catalog
         team_a_ids = _team_alias_ids(team_a_id, catalog)
         team_b_ids = _team_alias_ids(team_b_id, catalog)
+        history = await self.query_team_sets_matches(
+            tuple(sorted(team_a_ids)),
+            tuple(sorted(team_b_ids)),
+            tournament_ids,
+            include_unfinished=include_unfinished,
+        )
+        return replace(history, team_a_id=team_a_id, team_b_id=team_b_id)
+
+    async def query_team_sets_matches(
+        self,
+        team_a_ids: Sequence[int],
+        team_b_ids: Sequence[int],
+        tournament_ids: Sequence[int] | None = None,
+        *,
+        include_unfinished: bool = False,
+    ) -> HeadToHeadHistory:
+        """Query explicit identity sets without implicitly adding other institutions."""
+        team_a_ids = frozenset(_normalise_sequence_ids(team_a_ids, "team_a_ids"))
+        team_b_ids = frozenset(_normalise_sequence_ids(team_b_ids, "team_b_ids"))
+        if not team_a_ids or not team_b_ids:
+            raise _validation_error("team ID sets must not be empty")
+        include_unfinished = _include_unfinished(include_unfinished)
         if team_a_ids & team_b_ids:
             raise _validation_error(
                 "team_a_id and team_b_id resolve to overlapping team ID aliases"
@@ -673,7 +693,11 @@ class THUFootballQueryService:
             tournament_id: [0, 0, 0] for tournament_id in normalised_tournament_ids
         }
         matches: list[GameSummary] = []
+        seen: set[int] = set()
         for game in batch.games:
+            if game.game_id in seen:
+                continue
+            seen.add(game.game_id)
             if game.home_team_id in team_a_ids and game.away_team_id in team_b_ids:
                 team_a_is_home = True
             elif game.home_team_id in team_b_ids and game.away_team_id in team_a_ids:
@@ -708,8 +732,8 @@ class THUFootballQueryService:
             }
         )
         return HeadToHeadHistory(
-            team_a_id=team_a_id,
-            team_b_id=team_b_id,
+            team_a_id=min(team_a_ids),
+            team_b_id=min(team_b_ids),
             tournament_ids=normalised_tournament_ids,
             matches=tuple(matches),
             summary=_summary(overall_counts),

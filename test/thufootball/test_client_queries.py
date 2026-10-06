@@ -1591,6 +1591,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
 
         async with self._service(handler) as service:
             history = await service.query_team_to_team_matches(254, 48, [10])
+            exact = await service.query_team_sets_matches((254,), (48,), [10])
+            combined = await service.query_team_sets_matches((254, 80, 254), (48,), [10])
 
         self.assertEqual(history.team_a_id, 254)
         self.assertEqual(history.team_b_id, 48)
@@ -1598,6 +1600,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history.summary.team_a_wins, 2)
         self.assertEqual(history.summary.draws, 0)
         self.assertEqual(history.summary.team_b_wins, 0)
+        self.assertEqual([game.game_id for game in exact.matches], [1])
+        self.assertEqual([game.game_id for game in combined.matches], [2, 1])
 
     async def test_query_team_outcomes_uses_static_alias_and_shared_id_data(
         self,
