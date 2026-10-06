@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
-from thufootball.errors import ConfigurationError
+from thufootball.errors import THUFootballError
 
-from .builder import build_user_message
 from .config import DEFAULT_CONFIG_PATH, load_prompt_config
+from .source import build_live_prompt_bundle
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -30,11 +31,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         config = load_prompt_config(args.config)
-        message = build_user_message(
-            args.match_id,
-            config=config,
-        )
-    except (ValueError, ConfigurationError) as exc:
+        bundle = asyncio.run(build_live_prompt_bundle(args.match_id, config=config))
+        message = bundle.render_user_message()
+    except (ValueError, THUFootballError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(message)

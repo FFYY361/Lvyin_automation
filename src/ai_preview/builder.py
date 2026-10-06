@@ -979,6 +979,11 @@ def _manual_team_context(
         and isinstance(raw.get("description"), str)
         and raw["description"] not in _PLACEHOLDERS
     ]
+    players.extend(
+        {"name": name, "description": ""}
+        for name in sorted(registered_names)
+        if name not in institution.player_descriptions
+    )
     return {
         "name": team_name,
         "institution": institution.name,

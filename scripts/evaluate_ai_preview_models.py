@@ -16,7 +16,8 @@ for import_root in (PROJECT_ROOT, PROJECT_ROOT / "src"):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
-from ai_preview import build_prompt_bundle, load_prompt_config
+from ai_preview import load_prompt_config
+from ai_preview.source import build_live_prompt_bundle
 from ai_service import AIChatService, AIServiceError, ChatMessage
 from ai_service.config import load_ai_service_config
 
@@ -75,7 +76,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     bundles = {}
     for match_id in match_ids:
-        bundle = build_prompt_bundle(match_id, config=prompt_config)
+        bundle = await build_live_prompt_bundle(match_id, config=prompt_config)
         bundles[match_id] = bundle
         (prompts_directory / f"{match_id}.system.md").write_text(
             bundle.system_message, encoding="utf-8"

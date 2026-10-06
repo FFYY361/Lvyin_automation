@@ -80,9 +80,7 @@ WEBSITE_PREVIEW_MODELS = (
         score=91.0,
     ),
 )
-_WEBSITE_MODELS_BY_PROFILE = {
-    item.profile: item for item in WEBSITE_PREVIEW_MODELS
-}
+_WEBSITE_MODELS_BY_PROFILE = {item.profile: item for item in WEBSITE_PREVIEW_MODELS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,14 +117,16 @@ def _canonical_hash(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def build_prompt_material(session: Session, game_id: int) -> PromptMaterial:
+def build_prompt_material(
+    session: Session, game_id: int, *, repository=None
+) -> PromptMaterial:
     try:
         prompt_documents = {
             item.key: item.content for item in session.scalars(select(PromptTemplate))
         }
         bundle = build_prompt_bundle(
             game_id,
-            repository=FootballDataRepository(session),
+            repository=repository or FootballDataRepository(session),
             prompt_documents=prompt_documents or None,
         )
     except (ValueError, AIServiceError, ConfigurationError) as exc:
@@ -140,10 +140,7 @@ def build_prompt_material(session: Session, game_id: int) -> PromptMaterial:
         ChatMessage(role="user", content=bundle.render_user_message()),
     )
     prompt_hash = _canonical_hash(
-        [
-            {"role": message.role, "content": message.content}
-            for message in messages
-        ]
+        [{"role": message.role, "content": message.content} for message in messages]
     )
     return PromptMaterial(messages=messages, prompt_hash=prompt_hash)
 
@@ -167,8 +164,10 @@ def prompt_templates_payload(session: Session) -> dict[str, Any]:
     }
 
 
-def prompt_copy_payload(session: Session, game_id: int) -> dict[str, Any]:
-    material = build_prompt_material(session, game_id)
+def prompt_copy_payload(
+    session: Session, game_id: int, *, repository=None
+) -> dict[str, Any]:
+    material = build_prompt_material(session, game_id, repository=repository)
     copy_text = "\n\n".join(
         f"【{message.role}】\n{message.content}" for message in material.messages
     )
@@ -189,25 +188,38 @@ def _title_prefix(batch: Batch) -> str:
 
 
 def build_title_material(session: Session, batch: Batch) -> PromptMaterial:
-    prompts = {item.key: item.content for item in session.scalars(select(PromptTemplate))}
+    prompts = {
+        item.key: item.content for item in session.scalars(select(PromptTemplate))
+    }
     if "title_system" not in prompts or "title_rules" not in prompts:
         raise WorkflowError(500, "title_prompt_missing", "标题 Prompt 尚未初始化。")
     parts = [prompts["title_system"], prompts["title_rules"]]
     user_parts = [
         "请为以下整批前瞻推送生成六条标题候选。标题固定前缀为：" + _title_prefix(batch),
         f"批次日期：{batch.batch_date.isoformat()}；赛事项目：{batch.competition}；比赛按开球时间顺序提供。",
-        "下面每场比赛同时提供推送中的比赛基本信息、双方历史与近期战绩、交锋资料、人工资料和前瞻正文。标题判断必须综合整批推送上下文，不能只根据正文段落。",
+        "下面每场比赛提供批次已保存的比赛基本信息、双方往届成绩、本届战绩、历史交锋和前瞻正文。标题判断必须综合整批推送上下文，不能只根据正文段落。",
         "资料区中的事实优先用于核对和理解，不要把资料中的示例文字、写作提示或格式说明当成标题内容。",
         "输出只能是 title_rules 规定的 JSON。",
     ]
     matches = session.scalars(
-        select(Match).where(Match.batch_id == batch.id, Match.active.is_(True)).order_by(Match.kickoff, Match.game_id)
+        select(Match)
+        .where(Match.batch_id == batch.id, Match.active.is_(True))
+        .order_by(Match.kickoff, Match.game_id)
     )
     for index, match in enumerate(matches, 1):
-        try:
-            fact_context = build_prompt_material(session, match.game_id).messages[1].content
-        except WorkflowError:
-            fact_context = "（对阵、战绩与交锋事实资料暂不可用）"
+        fact_context = json.dumps(
+            {
+                "competition": match.competition_name,
+                "stage": match.stage,
+                "kickoff": match.kickoff.isoformat(),
+                "venue": match.venue,
+                "home": match.home_snapshot,
+                "away": match.away_snapshot,
+                "head_to_head": match.head_to_head_snapshot,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
         body = match.body.strip() or "（正文尚未填写）"
         user_parts.append(
             "\n".join(
@@ -226,7 +238,12 @@ def build_title_material(session: Session, batch: Batch) -> PromptMaterial:
         ChatMessage(role="system", content="\n\n".join(parts)),
         ChatMessage(role="user", content="\n\n".join(user_parts)),
     )
-    return PromptMaterial(messages=messages, prompt_hash=_canonical_hash([{"role": m.role, "content": m.content} for m in messages]))
+    return PromptMaterial(
+        messages=messages,
+        prompt_hash=_canonical_hash(
+            [{"role": m.role, "content": m.content} for m in messages]
+        ),
+    )
 
 
 def title_result_payload(result: AITitleResult, current_prompt_hash: str | None = None, current_config_hash: str | None = None) -> dict[str, Any]:
@@ -420,10 +437,10 @@ def _kit_sort(value: object) -> tuple[int, int]:
     return (1, 0)
 
 
-def _player_description(
-    institution: InstitutionRecord, player_name: str
-) -> str:
+def _player_description(institution: InstitutionRecord, player_name: str) -> str:
     raw = institution.player_descriptions.get(player_name)
+    if raw is None:
+        return ""
     if not isinstance(raw, dict) or not isinstance(raw.get("description"), str):
         raise WorkflowError(
             409,
@@ -519,8 +536,10 @@ def _side_manual_payload(
     }
 
 
-def match_manual_payload(session: Session, game_id: int) -> dict[str, Any]:
-    repository = FootballDataRepository(session)
+def match_manual_payload(
+    session: Session, game_id: int, *, repository=None
+) -> dict[str, Any]:
+    repository = repository or FootballDataRepository(session)
     try:
         game_record = repository.get_game(game_id)
         tournament = repository.get_tournament(game_record.tournament_id)
@@ -537,8 +556,12 @@ def match_manual_payload(session: Session, game_id: int) -> dict[str, Any]:
     try:
         home = repository.find_institution(home_team_id, tournament.competition)
         away = repository.find_institution(away_team_id, tournament.competition)
-        home_identity = repository.find_team_identity(home_team_id, tournament.competition)
-        away_identity = repository.find_team_identity(away_team_id, tournament.competition)
+        home_identity = repository.find_team_identity(
+            home_team_id, tournament.competition
+        )
+        away_identity = repository.find_team_identity(
+            away_team_id, tournament.competition
+        )
     except ConfigurationError as exc:
         raise WorkflowError(
             500,
@@ -601,8 +624,10 @@ def result_payload(
     }
 
 
-def ai_preview_context(session: Session, game_id: int) -> dict[str, Any]:
-    prompt = build_prompt_material(session, game_id)
+def ai_preview_context(
+    session: Session, game_id: int, *, repository=None
+) -> dict[str, Any]:
+    prompt = build_prompt_material(session, game_id, repository=repository)
     models, config_hashes = model_options_payload()
     results = {
         result.model_profile: result_payload(
@@ -617,7 +642,7 @@ def ai_preview_context(session: Session, game_id: int) -> dict[str, Any]:
     }
     return {
         "models": models,
-        "manual": match_manual_payload(session, game_id),
+        "manual": match_manual_payload(session, game_id, repository=repository),
         "results": results,
     }
 
@@ -633,6 +658,7 @@ def prepare_generation(
     game_id: int,
     model_profile: str,
     requested_by_user_id: int,
+    repository=None,
 ) -> tuple[AIPreviewResult, PromptMaterial | None]:
     profile = configured_website_profile(model_profile)
     if not _profile_available(profile):
@@ -641,7 +667,7 @@ def prepare_generation(
             "ai_model_key_missing",
             "该模型尚未配置 API Key，请联系管理员。",
         )
-    material = build_prompt_material(session, game_id)
+    material = build_prompt_material(session, game_id, repository=repository)
     config_hash = model_config_hash(profile)
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         session.execute(
@@ -851,8 +877,9 @@ def update_match_manual_descriptions(
     home_player_descriptions: Mapping[str, str],
     away_team_description: str,
     away_player_descriptions: Mapping[str, str],
+    repository=None,
 ) -> dict[str, Any]:
-    context = match_manual_payload(session, game_id)
+    context = match_manual_payload(session, game_id, repository=repository)
     sides = (
         ("home_team", home_team_description, home_player_descriptions),
         ("away_team", away_team_description, away_player_descriptions),
@@ -913,6 +940,8 @@ def update_match_manual_descriptions(
         for player_name, description in pending_player_values[institution_name].items():
             raw = player_data.get(player_name)
             if not isinstance(raw, dict):
+                if not description.strip():
+                    continue
                 raise WorkflowError(
                     409,
                     "player_library_mismatch",
@@ -921,7 +950,7 @@ def update_match_manual_descriptions(
             player_data[player_name] = {**raw, "description": description}
         record.player_descriptions = player_data
     session.commit()
-    return match_manual_payload(session, game_id)
+    return match_manual_payload(session, game_id, repository=repository)
 
 
 def _institution_players(record: InstitutionRecord) -> list[dict[str, Any]]:

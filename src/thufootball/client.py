@@ -387,6 +387,18 @@ class THUFootballClient:
             if game.tournament_id not in BLACKLISTED_TOURNAMENT_IDS
         ]
 
+    async def get_tournament_document(self, tournament_id: int) -> dict[str, object]:
+        """Read the canonical tournament document, including roster data."""
+        from .documents import _tournament_document
+
+        tournament_id = _positive_id(tournament_id, "tournament_id")
+        if tournament_id in BLACKLISTED_TOURNAMENT_IDS:
+            raise _query_error(f"tournament_id {tournament_id} is blacklisted")
+        payload = await self._request_json(
+            "GetTournInfo", {"tourn_id": tournament_id}, authentication_required=True
+        )
+        return _tournament_document(payload, tournament_id=tournament_id)
+
     async def get_tournament_info(self, tournament_id: int) -> TournamentSnapshot:
         tournament_id = _positive_id(tournament_id, "tournament_id")
         if tournament_id in BLACKLISTED_TOURNAMENT_IDS:
