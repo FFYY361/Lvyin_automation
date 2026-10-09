@@ -117,8 +117,10 @@ from .workflow import (
     create_batches,
     create_wechat_draft,
     draft_payload,
+    invalidate_preview,
     match_payload,
     refresh_batch,
+    refresh_preview_articles,
     render_batch,
     render_match_report,
     render_report_batch,
@@ -203,15 +205,16 @@ def _body_version_conflict(match: Match | None) -> WorkflowError:
 
 
 def _invalidate_match_batch(session: Session, match: Match) -> None:
+    session.refresh(match)
     batch = session.get(Batch, match.batch_id)
     if batch is not None:
-        batch.current_preview_article_id = None
-        batch.updated_at = datetime.now(UTC)
+        invalidate_preview(batch)
 
 
 def _save_match_content(
     session: Session,
     match: Match,
+    settings: WebsiteSettings,
     *,
     expected_version: int,
     writers: list[str],
@@ -240,6 +243,7 @@ def _save_match_content(
         session.rollback()
         raise _body_version_conflict(session.get(Match, match.game_id))
     _invalidate_match_batch(session, match)
+    refresh_preview_articles(session, settings)
     session.commit()
     session.refresh(match)
     return _match_content_payload(match)
@@ -773,6 +777,9 @@ def create_app(
         batch = session.get(Batch, batch_id)
         if batch is None:
             raise _not_found("batch")
+        if batch.current_preview_article_id is None:
+            render_batch(session, resolved_settings, batch)
+            session.commit()
         return batch_payload(session, batch, detail=True)
 
     @app.post("/api/batches/{batch_id}/refresh-data")
@@ -784,7 +791,7 @@ def create_app(
         batch = session.get(Batch, batch_id)
         if batch is None:
             raise _not_found("batch")
-        await refresh_batch(session, batch, resolved_factories)
+        await refresh_batch(session, batch, resolved_factories, resolved_settings)
         session.refresh(batch)
         return batch_payload(session, batch, detail=True)
 
@@ -809,8 +816,8 @@ def create_app(
                 setattr(batch, name, value)
                 changed = True
         if changed:
-            batch.current_preview_article_id = None
-            batch.updated_at = datetime.now(UTC)
+            invalidate_preview(batch)
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         session.refresh(batch)
         return batch_payload(session, batch, detail=True)
@@ -1002,6 +1009,7 @@ def create_app(
                 "match is not available for claiming",
             )
         _invalidate_match_batch(session, current)
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         session.refresh(current)
         batch = session.get(Batch, current.batch_id)
@@ -1043,6 +1051,7 @@ def create_app(
             session.rollback()
             raise WorkflowError(409, "task_changed", "match claim changed")
         _invalidate_match_batch(session, current)
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         session.refresh(current)
         batch = session.get(Batch, current.batch_id)
@@ -1086,6 +1095,7 @@ def create_app(
             .execution_options(synchronize_session=False)
         )
         _invalidate_match_batch(session, current)
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         session.refresh(current)
         batch = session.get(Batch, current.batch_id)
@@ -1106,6 +1116,7 @@ def create_app(
         return _save_match_content(
             session,
             current,
+            resolved_settings,
             expected_version=payload.expected_version,
             writers=writers,
             body=body,
@@ -1130,6 +1141,7 @@ def create_app(
         return _save_match_content(
             session,
             current,
+            resolved_settings,
             expected_version=payload.expected_version,
             writers=current.writers,
             body=payload.body,
@@ -1329,6 +1341,7 @@ def create_app(
             wind_direction=payload.wind_direction,
             wind_level=payload.wind_level,
         )
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         return weather_payload(value) or {}
 
@@ -1344,6 +1357,7 @@ def create_app(
             raise _not_found("batch")
         content = await file.read(10 * 1024 * 1024 + 1)
         save_batch_cover(session, resolved_settings, batch, content)
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         return batch_payload(session, batch, detail=False)
 
@@ -1358,6 +1372,7 @@ def create_app(
         if batch is None:
             raise _not_found("batch")
         set_batch_cover_media_id(batch, payload.media_id)
+        refresh_preview_articles(session, resolved_settings)
         session.commit()
         return batch_payload(session, batch, detail=False)
 
@@ -1558,7 +1573,7 @@ def create_app(
             raise _not_found("article")
         return HTMLResponse(
             record.body_html,
-            headers={"Referrer-Policy": "no-referrer"},
+            headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"},
         )
 
     @app.post("/api/wechat-drafts")

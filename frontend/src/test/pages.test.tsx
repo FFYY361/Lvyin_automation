@@ -82,19 +82,10 @@ describe("batch and match pages", () => {
     renderRoute("/previews", "/previews", <BatchesPage />);
 
     expect(await screen.findAllByRole("link", { name: "打开批次" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "渲染文章" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "渲染文章" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "显示五人制批次" }));
     expect(screen.getAllByRole("link", { name: "打开批次" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "渲染文章" })).toHaveLength(2);
-  });
-
-  it("renders a preview article from the batch row and shows missing-field warnings", async () => {
-    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(json(init?.method === "POST" ? { reused: false, article: { missing_fields: ["matches.11.body"] } } : { items: [batch] }))));
-    renderRoute("/previews", "/previews", <BatchesPage />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "渲染文章" }));
-    expect(await screen.findByText("前瞻文章已生成，但仍存在缺项。")).toBeInTheDocument();
-    expect(screen.getByText("比赛 #11 · 正文")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "渲染文章" })).not.toBeInTheDocument();
   });
 
   it("uses compact match cards as links from the batch page", async () => {
@@ -209,8 +200,8 @@ describe("batch and match pages", () => {
 });
 
 describe("article preview page", () => {
-  it("loads the latest stale article and presents a warning", async () => {
-    const staleBatch = { ...batch, latest_preview_article_id: 44 };
+  it("loads the current automatically updated article without a version number", async () => {
+    const staleBatch = { ...batch, current_preview_article_id: 44, latest_preview_article_id: 44 };
     const article: Article = {
       id: 44,
       batch_id: 1,
@@ -234,11 +225,17 @@ describe("article preview page", () => {
     };
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(json(String(input).includes("/api/articles/") ? article : staleBatch))));
     renderRoute("/previews/1/article", "/previews/:batchId/article", <PreviewPage />);
-    expect(await screen.findByText("当前数据已发生变化，文章已过期。")).toBeInTheDocument();
-    expect(screen.getByText("已过期，仅供查看")).toBeInTheDocument();
+    expect(await screen.findByTitle("文章预览")).toBeInTheDocument();
+    expect(screen.queryByText("渲染记录")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新渲染" })).not.toBeInTheDocument();
     expect(screen.getByText("环境 vs 探微 · 作者")).toBeInTheDocument();
-    expect(screen.getByTitle("文章预览")).toHaveAttribute("src", "/api/articles/44/preview");
-    expect(screen.getByRole("link", { name: "全屏预览" })).toHaveAttribute("href", "/api/articles/44/preview");
+    expect(screen.getByTitle("文章预览")).toHaveAttribute("src", "/api/articles/44/preview?v=2026-08-01T00%3A00%3A00Z");
+    expect(screen.getByRole("link", { name: "全屏预览" })).toHaveAttribute("href", "/api/articles/44/preview?v=2026-08-01T00%3A00%3A00Z");
     expect(screen.getByRole("link", { name: "全屏预览" })).toHaveAttribute("target", "_blank");
+    article.created_at = "2026-08-02T00:00:00Z";
+    article.title = "更新后的文章";
+    fireEvent(window, new Event("focus"));
+    expect(await screen.findByText("更新后的文章")).toBeInTheDocument();
+    expect(screen.getByTitle("文章预览")).toHaveAttribute("src", "/api/articles/44/preview?v=2026-08-02T00%3A00%3A00Z");
   });
 });

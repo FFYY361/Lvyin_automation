@@ -1616,6 +1616,8 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             historical_alias = await service.query_team_outcomes(244)
             shared_three_ways = await service.query_team_outcomes(253)
             merged_news = await service.query_team_outcomes(2041, [101])
+            historical_news = await service.query_team_outcomes(253, [101])
+            historical_marxism = await service.query_team_outcomes(1944, [101])
             non_participant = await service.query_team_outcomes(2051, [122])
 
         self.assertEqual(
@@ -1640,14 +1642,19 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {outcome.team_name for outcome in shared_three_ways},
             {
-                "新闻与传播学院-马克思主义学院男足",
-                "新闻与传播学院-马克思主义学院女足",
-                "新闻与传播学院-马克思主义学院五人制",
+                "新闻与传播学院男足",
+                "新闻与传播学院女足",
+                "新闻与传播学院五人制",
             },
         )
+        self.assertEqual(merged_news, [])
         self.assertEqual(
-            [(item.team_name, item.rank) for item in merged_news],
-            [("新闻与传播学院-马克思主义学院男足", "小组第三")],
+            [(item.team_name, item.rank) for item in historical_news],
+            [("新闻与传播学院男足", "小组第三")],
+        )
+        self.assertEqual(
+            [(item.team_name, item.rank) for item in historical_marxism],
+            [("马克思主义学院男足", "小组第四")],
         )
         self.assertEqual(non_participant, [])
 

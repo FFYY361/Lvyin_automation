@@ -159,30 +159,4 @@ describe("stage 6 report batches", () => {
     await waitFor(() => expect(buttons[1]).not.toBeDisabled());
   });
 
-  it("keeps preview batch loading states independent", async () => {
-    const second = { ...detail, id: 8, batch_date: "2026-08-09", matches: [] };
-    const firstRender = deferred<Response>();
-    const secondRender = deferred<Response>();
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (init?.method === "POST") return path.endsWith("/7/render-preview") ? firstRender.promise : secondRender.promise;
-      return Promise.resolve(json({ items: [{ ...detail, matches: [] }, second] }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const router = createMemoryRouter([{ path: "/previews", element: <BatchesPage /> }], { initialEntries: ["/previews"] });
-    render(<AuthProvider initialUser={admin}><RouterProvider router={router} /></AuthProvider>);
-
-    const buttons = await screen.findAllByRole("button", { name: "渲染文章" });
-    fireEvent.click(buttons[0]);
-    fireEvent.click(buttons[1]);
-    await waitFor(() => expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(true));
-
-    const article = { missing_fields: [] };
-    await act(async () => firstRender.resolve(json({ reused: false, article })));
-    await waitFor(() => expect(buttons[0]).not.toBeDisabled());
-    expect(buttons[1]).toBeDisabled();
-
-    await act(async () => secondRender.resolve(json({ reused: false, article })));
-    await waitFor(() => expect(buttons[1]).not.toBeDisabled());
-  });
 });

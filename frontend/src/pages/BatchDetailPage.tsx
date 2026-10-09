@@ -8,7 +8,7 @@ import { Alert, Badge, Button, EmptyState, Field, LoadingScreen, NameInput, Page
 import { competitionLabels, labelMissingField, statusLabels, type AITitleContext, type AITitleResult, type PreviewBatch, type PreviewMatch, type Weather } from "../types";
 import { formatDateTime, matchTaskStatus, namesText, parseNames, teamName } from "../utils";
 
-function MatchCard({ batchId, match, claimantName, canEnter }: { batchId: number; match: PreviewMatch; claimantName: string; canEnter: boolean }) {
+function MatchCard({ batchId, match, claimantName }: { batchId: number; match: PreviewMatch; claimantName: string }) {
   const status = matchTaskStatus(match);
   const content = (
     <>
@@ -22,12 +22,10 @@ function MatchCard({ batchId, match, claimantName, canEnter }: { batchId: number
         <span>{match.venue}</span>
         <span>认领人：<strong>{claimantName}</strong></span>
       </div>
-      {canEnter ? <ChevronRight className="match-card__arrow" size={18} aria-hidden /> : null}
+      <ChevronRight className="match-card__arrow" size={18} aria-hidden />
     </>
   );
-  return canEnter
-    ? <Link className="match-card" to={`/previews/${batchId}/matches/${match.game_id}`}>{content}</Link>
-    : <article className="match-card match-card--readonly">{content}</article>;
+  return <Link className="match-card" to={`/previews/${batchId}/matches/${match.game_id}`}>{content}</Link>;
 }
 
 export function BatchDetailPage() {
@@ -196,8 +194,8 @@ export function BatchDetailPage() {
 
       <Panel className="matches-overview-panel">
         <SectionTitle title="比赛" description={`${matches.length} 场比赛，当前开放 ${openCount}/${activeMatches.length} 场有效比赛。`} actions={<Send size={20} />} />
-        {!matches.length ? <EmptyState title="当前没有比赛" description={isAdmin ? "可以返回批次列表重新查询数据。" : "该批次暂时没有比赛。"} /> : <div className="match-card-list">{matches.map((match) => <MatchCard key={match.game_id} batchId={batch.id} match={match} claimantName={match.claimed_by_user_id === null ? "未认领" : match.claimed_by_user_id === user?.id ? user.display_name : claimantNames[match.claimed_by_user_id] ?? "读取中…"} canEnter={isAdmin || match.claimed_by_user_id === user?.id} />)}</div>}
-        {isAdmin ? <><p className="panel-copy">开放或关闭操作会一次作用于当前批次的全部有效比赛，不影响已填写的正文。</p><div className="button-row"><Button variant="primary" loading={action === "open"} onClick={() => void run("open", () => api(`/api/batches/${batch.id}/open-tasks`, { method: "POST" }), "已开放全部有效比赛")}>开放全部任务</Button><Button loading={action === "close"} onClick={() => void run("close", () => api(`/api/batches/${batch.id}/close-tasks`, { method: "POST" }), "已关闭全部有效比赛")}>关闭全部任务</Button></div></> : <p className="panel-copy">只有本人已认领的比赛可以进入编辑。</p>}
+        {!matches.length ? <EmptyState title="当前没有比赛" description={isAdmin ? "可以返回批次列表重新查询数据。" : "该批次暂时没有比赛。"} /> : <div className="match-card-list">{matches.map((match) => <MatchCard key={match.game_id} batchId={batch.id} match={match} claimantName={match.claimed_by_user_id === null ? "未认领" : match.claimed_by_user_id === user?.id ? user.display_name : claimantNames[match.claimed_by_user_id] ?? "读取中…"} />)}</div>}
+        {isAdmin ? <><p className="panel-copy">开放或关闭操作会一次作用于当前批次的全部有效比赛，不影响已填写的正文。</p><div className="button-row"><Button variant="primary" loading={action === "open"} onClick={() => void run("open", () => api(`/api/batches/${batch.id}/open-tasks`, { method: "POST" }), "已开放全部有效比赛")}>开放全部任务</Button><Button loading={action === "close"} onClick={() => void run("close", () => api(`/api/batches/${batch.id}/close-tasks`, { method: "POST" }), "已关闭全部有效比赛")}>关闭全部任务</Button></div></> : <p className="panel-copy">所有比赛均可查看，只有本人已认领的比赛可以编辑。</p>}
       </Panel>
 
       {isAdmin ? <section className="admin-settings" aria-labelledby="admin-settings-title">
