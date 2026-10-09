@@ -13,8 +13,8 @@ from datetime import UTC, date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from sqlalchemy import func, select, text, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func, select, text
+from sqlalchemy.orm import Session, object_session, sessionmaker
 
 from ai_service import AIChatService
 from auto_preview import Competition, NoGamesForDate
@@ -181,17 +181,25 @@ def _advisory_lock(session: Session, namespace: str, value: str) -> None:
         )
 
 
-def _invalidate_batch(batch: Batch) -> None:
+def invalidate_preview(batch: Batch) -> None:
     batch.current_preview_article_id = None
     batch.updated_at = _now()
+    session = object_session(batch)
+    if session is not None:
+        session.info.setdefault("preview_batches_to_render", set()).add(batch.id)
 
 
 def _invalidate_date(session: Session, target_date: date) -> None:
-    session.execute(
-        update(Batch)
-        .where(Batch.batch_date == target_date)
-        .values(current_preview_article_id=None, updated_at=_now())
-    )
+    for batch in session.scalars(select(Batch).where(Batch.batch_date == target_date)):
+        invalidate_preview(batch)
+
+
+def refresh_preview_articles(session: Session, settings: WebsiteSettings) -> None:
+    """Render affected previews before committing their content changes."""
+    for batch_id in sorted(session.info.pop("preview_batches_to_render", set())):
+        batch = session.get(Batch, batch_id)
+        if batch is not None:
+            render_batch(session, settings, batch)
 
 
 def _deactivate_active_matches(session: Session, batch: Batch) -> bool:
@@ -210,7 +218,7 @@ def _deactivate_active_matches(session: Session, batch: Batch) -> bool:
         match.active = False
         match.task_open = False
         match.updated_at = changed_at
-    _invalidate_batch(batch)
+    invalidate_preview(batch)
     batch.current_report_article_id = None
     return True
 
@@ -385,7 +393,7 @@ def upsert_source(
         if record.batch_id != batch.id:
             old_batch = session.get(Batch, record.batch_id)
             if old_batch is not None:
-                _invalidate_batch(old_batch)
+                invalidate_preview(old_batch)
             record.task_open = False
             record_changed = True
         if record_changed:
@@ -397,7 +405,7 @@ def upsert_source(
             record.status = game.status.value
             record.updated_at = _now()
     if changed:
-        _invalidate_batch(batch)
+        invalidate_preview(batch)
     session.flush()
     report_order_after = [
         tuple(row)
@@ -616,6 +624,8 @@ async def create_batches(
                         weather = weather_values.get(target_date)
                         if weather is not None:
                             upsert_automatic_weather(session, weather)
+                        invalidate_preview(batch)
+                        refresh_preview_articles(session, settings)
                         warning = weather_warnings.get(target_date)
                         results.append(
                             {
@@ -648,6 +658,7 @@ async def refresh_batch(
     session: Session,
     batch: Batch,
     factories: ExternalFactories,
+    settings: WebsiteSettings,
 ) -> None:
     config = competition_config(Competition(batch.competition))
     tournament_ids = set(
@@ -698,6 +709,7 @@ async def refresh_batch(
         batch.last_error_at = _now()
         session.commit()
         raise WorkflowError(502, "query_failed", str(exc)) from exc
+    refresh_preview_articles(session, settings)
     session.commit()
 
 
@@ -735,9 +747,13 @@ def batch_status(session: Session, batch: Batch) -> str:
     if completeness(session, batch):
         return "incomplete"
     if batch.current_preview_article_id is not None:
+        article = session.get(ArticleRecord, batch.current_preview_article_id)
         for draft in session.scalars(select(WechatDraft)):
             if any(
                 item.get("article_id") == batch.current_preview_article_id
+                and article is not None
+                and item.get("content_fingerprint") == article.content_fingerprint
+                and item.get("cover_sha256") == article.cover_sha256
                 for item in draft.articles
                 if isinstance(item, dict)
             ):
@@ -890,13 +906,30 @@ def render_batch(
     settings: WebsiteSettings,
     batch: Batch,
 ) -> tuple[ArticleRecord, bool]:
-    _advisory_lock(session, "preview-batch", str(batch.id))
+    session.execute(select(Batch.id).where(Batch.id == batch.id).with_for_update())
+    session.flush()
     session.refresh(batch)
+    existing = None
     if batch.current_preview_article_id is not None:
         existing = session.get(ArticleRecord, batch.current_preview_article_id)
-        if existing is None or existing.batch_id != batch.id:
-            raise WorkflowError(409, "article_pointer_invalid", "current article is invalid")
-        return existing, True
+        if (
+            existing is None
+            or existing.batch_id != batch.id
+            or existing.article_type != "preview"
+        ):
+            raise WorkflowError(
+                409, "article_pointer_invalid", "current article is invalid"
+            )
+    else:
+        existing = session.scalar(
+            select(ArticleRecord)
+            .where(
+                ArticleRecord.batch_id == batch.id,
+                ArticleRecord.article_type == "preview",
+            )
+            .order_by(ArticleRecord.version_number.desc(), ArticleRecord.id.desc())
+            .limit(1)
+        )
     source = assemble_source(session, batch)
     cover, cover_sha256 = _cover_for_batch(settings, batch)
     renderer = PreviewService.from_template(
@@ -908,37 +941,40 @@ def render_batch(
         author="清华绿茵",
         digest=AUTO_PREVIEW_DIGEST,
     )
-    latest_version = session.scalar(
-        select(func.max(ArticleRecord.version_number)).where(
-            ArticleRecord.batch_id == batch.id,
-            ArticleRecord.article_type == "preview",
-        )
-    )
     missing = completeness(session, batch)
-    record = ArticleRecord(
-        batch_id=batch.id,
-        article_type="preview",
-        version_number=(latest_version or 0) + 1,
-        input_snapshot=preview_data_to_dict(source),
-        title=article.title,
-        body_html=article.body_html,
-        author=article.author,
-        digest=article.digest,
-        source_url=article.source_url,
-        template_version=renderer.template_version,
-        content_fingerprint=article.content_fingerprint,
-        cover_kind=batch.cover_kind,
-        cover_storage_key=batch.cover_storage_key,
-        cover_sha256=cover_sha256,
-        is_complete=not missing,
-        missing_fields=missing,
+    values = {
+        "input_snapshot": preview_data_to_dict(source),
+        "title": article.title,
+        "body_html": article.body_html,
+        "author": article.author,
+        "digest": article.digest,
+        "source_url": article.source_url,
+        "template_version": renderer.template_version,
+        "content_fingerprint": article.content_fingerprint,
+        "cover_kind": batch.cover_kind,
+        "cover_storage_key": batch.cover_storage_key,
+        "cover_sha256": cover_sha256,
+        "is_complete": not missing,
+        "missing_fields": missing,
+    }
+    reused = existing is not None and all(
+        getattr(existing, name) == value for name, value in values.items()
     )
-    session.add(record)
+    if existing is None:
+        record = ArticleRecord(
+            batch_id=batch.id, article_type="preview", version_number=1, **values
+        )
+        session.add(record)
+    else:
+        record = existing
+        if not reused:
+            for name, value in values.items():
+                setattr(record, name, value)
+            record.created_at = _now()
     session.flush()
     batch.current_preview_article_id = record.id
-    batch.updated_at = _now()
     session.flush()
-    return record, False
+    return record, reused
 
 
 def _report_input_sha256(detail: GameDetail) -> str:
@@ -1374,7 +1410,7 @@ def save_batch_cover(
         batch.cover_kind = "file"
         batch.cover_storage_key = key
         batch.cover_content_type = content_type
-        _invalidate_batch(batch)
+        invalidate_preview(batch)
 
 
 def set_batch_cover_media_id(
@@ -1385,7 +1421,7 @@ def set_batch_cover_media_id(
         batch.cover_kind = "media_id"
         batch.cover_storage_key = media_id
         batch.cover_content_type = None
-        _invalidate_batch(batch)
+        invalidate_preview(batch)
 
 
 def article_payload(record: ArticleRecord, current_id: int | None = None) -> dict[str, Any]:

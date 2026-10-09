@@ -56,7 +56,7 @@ describe("role-aware tutorial", () => {
     expect(screen.getByText(/按钮变回不可用且页面显示“已保存”后/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "使用 AI 辅助写作" })).toBeInTheDocument();
     expect(screen.getByText(/生成在服务器后台继续，可以关闭或切换页面/)).toBeInTheDocument();
-    expect(screen.getByText(/可以查看批次内的比赛，并打开管理员最近一次渲染的前瞻文章/)).toBeInTheDocument();
+    expect(screen.getByText(/可以查看全部比赛及最新前瞻文章；未认领的比赛以只读方式打开/)).toBeInTheDocument();
     expect(screen.queryByText(/存在缺项|只有已完善|微信公众号草稿箱|文章会过期/)).not.toBeInTheDocument();
     expect(screen.queryByText(/4 月 18|4 月 19/)).not.toBeInTheDocument();
     expect(document.querySelectorAll(".tutorial-figure__marker--badge-right")).toHaveLength(2);

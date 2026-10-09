@@ -140,17 +140,19 @@ describe("stage 5 match permissions", () => {
     expect(screen.getByLabelText("署名")).toHaveAttribute("readonly");
   });
 
-  it("blocks a normal user from opening another member's match", async () => {
+  it("opens another member's match in read-only mode", async () => {
     const batch = { id: 5, matches: [{ ...task, claimed_by_user_id: 9 }] } as unknown as PreviewBatch;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(batch)));
     renderPage(<MatchPage />, member, "/previews/5/matches/11", "/previews/:batchId/matches/:gameId");
-    expect(await screen.findByRole("heading", { name: "无法进入比赛" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("前瞻正文")).not.toBeInTheDocument();
+    expect(await screen.findByLabelText("前瞻正文")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("署名")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: "保存正文" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成前瞻" })).not.toBeInTheDocument();
   });
 });
 
 describe("stage 5 batch permissions", () => {
-  it("shows claimant names but only links a normal user to their own match", async () => {
+  it("shows claimant names and links a normal user to every match", async () => {
     const other = { ...task, game_id: 12, claimed_by_user_id: 9 };
     const batch = {
       id: 5, batch_date: "2026-08-08", competition: "male", preview_status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
@@ -161,7 +163,6 @@ describe("stage 5 batch permissions", () => {
     renderPage(<BatchDetailPage />, member, "/previews/5", "/previews/:batchId");
     expect((await screen.findAllByText("认领人：", { selector: ".match-card__meta span" }))).toHaveLength(2);
     expect(await screen.findByText("成员乙")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /环境 vs 探微/ })).toHaveAttribute("href", "/previews/5/matches/11");
-    expect(screen.getAllByRole("link", { name: /环境 vs 探微/ })).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: /环境 vs 探微/ }).map((link) => link.getAttribute("href"))).toEqual(["/previews/5/matches/11", "/previews/5/matches/12"]);
   });
 });

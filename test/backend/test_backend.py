@@ -19,7 +19,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import CHAR, create_engine, delete, func, inspect, select, text
+from sqlalchemy import CHAR, create_engine, delete, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -52,6 +52,7 @@ from backend.credentials import (
 )
 from backend.models import (
     AIPreviewResult,
+    ArticleRecord,
     Base,
     Batch,
     Match,
@@ -66,6 +67,7 @@ from backend.workflow import (
     article_domain,
     assemble_source,
     batch_status,
+    create_batches,
     create_wechat_draft,
     match_payload,
     refresh_batch,
@@ -629,6 +631,10 @@ def test_default_media_id_draft_is_ordered_and_idempotent(
         assert session.query(WechatDraft).count() == 1
         assert batch_status(session, first_batch) == "drafted"
         assert untouched_batch.current_preview_article_id is None
+        first_batch.headline = "更新后的前瞻"
+        updated, _ = render_batch(session, settings, first_batch)
+        assert updated.id == first.id
+        assert batch_status(session, first_batch) == "ready"
 
 
 def test_wechat_draft_closes_preview_batches_only(
@@ -704,7 +710,7 @@ def test_article_media_id_sha_is_checked(
             article_domain(settings, article)
 
 
-def test_batch_exposes_latest_stale_article_and_preview_omits_referrer(
+def test_batch_updates_existing_preview_and_renders_missing_article(
     session_factory,
     settings: WebsiteSettings,
 ) -> None:
@@ -739,13 +745,13 @@ def test_batch_exposes_latest_stale_article_and_preview_omits_referrer(
 
         stale = client.get(f"/api/batches/{batch_id}")
         stale.raise_for_status()
-        assert stale.json()["current_preview_article_id"] is None
+        assert stale.json()["current_preview_article_id"] == article_id
         assert stale.json()["latest_preview_article_id"] == article_id
 
         empty = client.get(f"/api/batches/{never_rendered_id}")
         empty.raise_for_status()
-        assert empty.json()["current_preview_article_id"] is None
-        assert empty.json()["latest_preview_article_id"] is None
+        assert empty.json()["current_preview_article_id"] is not None
+        assert empty.json()["latest_preview_article_id"] == empty.json()["current_preview_article_id"]
 
         preview = client.get(f"/api/articles/{article_id}/preview")
         preview.raise_for_status()
@@ -755,8 +761,8 @@ def test_batch_exposes_latest_stale_article_and_preview_omits_referrer(
             "/api/wechat-drafts",
             json={"article_ids": [article_id], "confirm": False},
         )
-        assert draft.status_code == 409
-        assert draft.json()["error"]["code"] == "article_stale"
+        draft.raise_for_status()
+        assert draft.json()["status"] == "ready"
 
 
 def test_match_payload_fills_legacy_result_text_without_mutating_snapshot(
@@ -1569,7 +1575,7 @@ class _FailingExternalService:
     "tournament_id,active", [(123, True), (123, False), (None, False)]
 )
 def test_old_or_empty_batch_refresh_refuses_before_query(
-    session_factory, tournament_id, active
+    session_factory, settings, tournament_id, active
 ):
     calls = []
     with session_factory() as session:
@@ -1591,6 +1597,7 @@ def test_old_or_empty_batch_refresh_refuses_before_query(
                     ExternalFactories(
                         queries=lambda: _FailingExternalService(calls, "queries")
                     ),
+                    settings,
                 )
             )
         assert raised.value.status_code == 409
@@ -1602,7 +1609,61 @@ def test_old_or_empty_batch_refresh_refuses_before_query(
         ) == before
 
 
-def test_current_batch_passes_refresh_guard(session_factory):
+def test_preview_creation_and_data_refresh_render_automatically(
+    session_factory, settings, monkeypatch
+):
+    target_date = date(2026, 10, 10)
+    with session_factory() as session:
+        seed = _batch(session, target_date=target_date, complete=True, game_id=9981)
+        source = assemble_source(session, seed)
+        session.rollback()
+    game = SimpleNamespace(
+        game_id=9981,
+        tournament_id=142,
+        tournament_name="马杯女足",
+        kickoff_local=source.matches[0].kickoff,
+        status=GameStatus.SCHEDULED,
+    )
+
+    class Builder:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def query_current_games(self):
+            return [game]
+
+        async def build(self, *_args, **_kwargs):
+            return source
+
+    @asynccontextmanager
+    async def queries():
+        yield None
+
+    async def no_weather(*_args):
+        return {}, {}
+
+    monkeypatch.setattr("backend.workflow.PreviewSourceBuilder", Builder)
+    monkeypatch.setattr("backend.workflow._query_weather", no_weather)
+    factories = ExternalFactories(
+        queries=queries, weather=lambda: _FailingExternalService([], "weather")
+    )
+    results = asyncio.run(
+        create_batches(session_factory, settings, factories, [target_date], ["female"])
+    )
+    assert results[0]["status"] == "created"
+    with session_factory() as session:
+        batch = session.get(Batch, results[0]["batch_id"])
+        article_id = batch.current_preview_article_id
+        assert article_id is not None
+        source = replace(source, matches=(replace(source.matches[0], venue="新场地"),))
+        asyncio.run(refresh_batch(session, batch, factories, settings))
+        article = session.get(ArticleRecord, article_id)
+        assert batch.current_preview_article_id == article_id
+        assert "新场地" in article.body_html
+        assert article.version_number == 1
+
+
+def test_current_batch_passes_refresh_guard(session_factory, settings):
     calls = []
     with session_factory() as session:
         batch = _batch(session, complete=True)
@@ -1617,6 +1678,7 @@ def test_current_batch_passes_refresh_guard(session_factory):
                     ExternalFactories(
                         queries=lambda: _FailingExternalService(calls, "queries")
                     ),
+                    settings,
                 )
             )
         assert raised.value.status_code == 502
@@ -2107,6 +2169,38 @@ def test_stage4_task_claim_content_release_assign_and_read_permissions(
         assert second_client.post("/api/matches/9501/claim").status_code == 409
 
         version = claimed.json()["match"]["body_version"]
+        article = first_client.get(f"/api/articles/{article_id}").json()
+        assert article["input_snapshot"]["matches"][0]["writers"] == ["用户甲"]
+        active_save = first_client.patch(
+            "/api/matches/9501/body",
+            json={"expected_version": version, "body": "自动刷新的正文"},
+        )
+        active_save.raise_for_status()
+        version = active_save.json()["body_version"]
+        assert (
+            "自动刷新的正文"
+            in first_client.get(f"/api/articles/{article_id}").json()["body_html"]
+        )
+        admin_client.patch(
+            f"/api/batches/{batch_id}", json={"headline": "自动更新的标题"}
+        ).raise_for_status()
+        admin_client.put(
+            "/api/weather/2026-09-04",
+            json={
+                "condition": "多云",
+                "low_c": 18,
+                "high_c": 26,
+                "wind_direction": "北风",
+                "wind_level": "3级",
+            },
+        ).raise_for_status()
+        admin_client.put(f"/api/batches/{batch_id}/cover-media-id", json={"media_id": "updated-cover"}).raise_for_status()
+        updated_article = first_client.get(f"/api/articles/{article_id}").json()
+        assert updated_article["title"].endswith("自动更新的标题")
+        assert updated_article["input_snapshot"]["weather"]["condition"] == "多云"
+        assert updated_article["cover_storage_key"] == "updated-cover"
+        with session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(ArticleRecord).where(ArticleRecord.batch_id == batch_id)) == 1
         assert second_client.patch(
             "/api/matches/9501/body",
             json={"expected_version": version, "body": "越权正文"},
@@ -2141,7 +2235,7 @@ def test_stage4_task_claim_content_release_assign_and_read_permissions(
         managed = next(item for item in users if item["id"] == second_id)
         assert managed["claimed_task_count"] == 1
         detail = first_client.get(f"/api/batches/{batch_id}").json()
-        assert detail["current_preview_article_id"] is None
+        assert detail["current_preview_article_id"] == article_id
 
 
 def test_stage4_concurrent_claim_has_one_winner(
@@ -2217,6 +2311,8 @@ def test_stage4_concurrent_claim_has_one_winner(
     finally:
         with direct_factory.begin() as session:
             session.execute(delete(Match).where(Match.game_id == game_id))
+            session.execute(update(Batch).where(Batch.id == batch_id).values(current_preview_article_id=None))
+            session.execute(delete(ArticleRecord).where(ArticleRecord.batch_id == batch_id))
             session.execute(delete(Batch).where(Batch.id == batch_id))
             session.execute(delete(Weather).where(Weather.date == target_date))
             session.execute(delete(User).where(User.id.in_(user_ids)))

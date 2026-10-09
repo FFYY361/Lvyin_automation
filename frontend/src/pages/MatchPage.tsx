@@ -83,7 +83,7 @@ export function MatchPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictValue | null>(null);
-  const [accessDenied, setAccessDenied] = useState(false);
+  const canEdit = Boolean(match && (isAdmin || match.claimed_by_user_id === user?.id));
   const parsedWriters = useMemo(() => parseNames(writers), [writers]);
   const bodyDirty = body !== baseBody || (isAdmin && JSON.stringify(parsedWriters) !== JSON.stringify(baseWriters));
   const manualDirty = manual !== null && baseManual !== null && JSON.stringify(manual) !== JSON.stringify(baseManual);
@@ -134,13 +134,14 @@ export function MatchPage() {
       if (!selected) {
         setMatch(null);
         setError("该比赛不属于当前批次，或比赛数据已不存在。");
-      } else if (!isAdmin && selected.claimed_by_user_id !== user?.id) {
-        setMatch(null); setAccessDenied(true);
-        setError("普通用户只能进入本人已经认领的比赛。");
+
       } else {
-        setAccessDenied(false);
         applyMatch(selected);
-        await refreshAIContext();
+        if (isAdmin || selected.claimed_by_user_id === user?.id) {
+          await refreshAIContext();
+        } else {
+          setAIContext(null); setManual(null); setBaseManual(null);
+        }
       }
     } catch (value) {
       setError(errorMessage(value));
@@ -175,7 +176,7 @@ export function MatchPage() {
   }, [gameId, manualDirty, refreshAIContext, selectedModel, selectedResult]);
 
   const save = async () => {
-    if (!match) return;
+    if (!match || !canEdit) return;
     setSaving(true); setError(null); setSuccess(null);
     try {
       const result = await api<{ game_id: number; writers: string[]; body: string; body_version: number }>(`/api/matches/${match.game_id}${isAdmin ? "" : "/body"}`, { method: "PATCH", ...jsonBody(isAdmin ? { expected_version: version, writers: parsedWriters, body } : { expected_version: version, body }) });
@@ -195,7 +196,7 @@ export function MatchPage() {
   };
 
   const startGeneration = async () => {
-    if (!match || !selectedModel) return;
+    if (!match || !canEdit || !selectedModel) return;
     setStartingAI(true); setError(null); setSuccess(null); setCopied(false);
     try {
       const result = await api<AIPreviewResult>(`/api/matches/${match.game_id}/ai-preview-generations`, { method: "POST", ...jsonBody({ model_profile: selectedModel }) });
@@ -235,7 +236,7 @@ export function MatchPage() {
     setManual((current) => current ? { ...current, [side]: { ...current[side], players: current[side].players.map((player) => player.name === name ? { ...player, description: value } : player) } } : current);
   };
   const saveManual = async () => {
-    if (!match || !manual) return;
+    if (!match || !canEdit || !manual) return;
     setSavingManual(true); setError(null); setSuccess(null);
     const sidePayload = (team: MatchManualTeam) => ({ team_description: team.team_description, player_descriptions: Object.fromEntries(team.players.map((player) => [player.name, player.description])) });
     try {
@@ -260,9 +261,9 @@ export function MatchPage() {
   };
 
   if (loading && !match) return <LoadingScreen label="正在读取比赛详情" />;
-  if (!batch || !match) return <><PageHeader title={accessDenied ? "无法进入比赛" : "比赛不存在"} actions={batchId ? <Link className="button button--quiet" to={`/previews/${batchId}`}><ArrowLeft size={16} />返回批次</Link> : undefined} /><Alert tone="danger">{error || "无法读取比赛"}</Alert></>;
+  if (!batch || !match) return <><PageHeader title="比赛不存在" actions={batchId ? <Link className="button button--quiet" to={`/previews/${batchId}`}><ArrowLeft size={16} />返回批次</Link> : undefined} /><Alert tone="danger">{error || "无法读取比赛"}</Alert></>;
 
-  const matches = isAdmin ? batch.matches ?? [] : (batch.matches ?? []).filter((item) => item.claimed_by_user_id === user?.id);
+  const matches = batch.matches ?? [];
   const index = matches.findIndex((item) => item.game_id === match.game_id);
   const previous = index > 0 ? matches[index - 1] : null;
   const next = index >= 0 && index < matches.length - 1 ? matches[index + 1] : null;
@@ -281,6 +282,8 @@ export function MatchPage() {
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
 
+      {!canEdit ? <Alert tone="info">当前为只读查看，只有认领人或管理员可以修改本场比赛。</Alert> : null}
+
       <Panel className="match-overview">
         <div><span>任务状态</span><Badge tone={status.tone}>{status.label}</Badge></div>
         <div><span>开球时间</span><strong>{formatDateTime(match.kickoff)}</strong></div>
@@ -294,14 +297,14 @@ export function MatchPage() {
           <Field label="署名" htmlFor="match-writers">{isAdmin ? <NameInput id="match-writers" value={writers} onChange={setWriters} /> : <input id="match-writers" value={writers} readOnly aria-readonly="true" />}</Field>
           <div className="version-display"><span>保存序号</span><strong>#{version}</strong>{bodyDirty ? <Badge tone="warning">未保存</Badge> : <Badge tone="success">已保存</Badge>}</div>
         </div>
-        <Field label="前瞻正文" htmlFor="match-body"><textarea id="match-body" rows={14} value={body} onChange={(event) => setBody(event.target.value)} placeholder="粘贴或填写本场比赛的前瞻正文……" /></Field>
+        <Field label="前瞻正文" htmlFor="match-body"><textarea id="match-body" rows={14} value={body} readOnly={!canEdit} onChange={(event) => { if (canEdit) setBody(event.target.value); }} placeholder={canEdit ? "粘贴或填写本场比赛的前瞻正文……" : "尚未填写正文"} /></Field>
         <Alert tone="info">
           <strong>写作建议</strong>
           <span>建议采用三段式结构：先介绍主队，再介绍客队，最后自然收束到本场对决。</span>
           <span>除决赛外，正文不应出现球员真实姓名。</span>
           <span>措辞应克制、客观，避免强烈主观判断，请勿阴阳或贬低任何一方。</span>
         </Alert>
-        <div className="editor-actions"><Button disabled={!bodyDirty} onClick={() => { setWriters(namesText(baseWriters)); setBody(baseBody); }}>撤销修改</Button><Button variant="primary" loading={saving} disabled={!bodyDirty} onClick={() => void save()}><Save size={16} />保存正文</Button></div>
+        {canEdit ? <div className="editor-actions"><Button disabled={!bodyDirty} onClick={() => { setWriters(namesText(baseWriters)); setBody(baseBody); }}>撤销修改</Button><Button variant="primary" loading={saving} disabled={!bodyDirty} onClick={() => void save()}><Save size={16} />保存正文</Button></div> : null}
       </Panel>
 
       <Panel className="match-history-panel">
@@ -312,31 +315,34 @@ export function MatchPage() {
         <div className="head-to-head-card"><strong>近三届交锋</strong><HistoryList values={match.head_to_head} empty="无" render={(value) => formatPlayedMatch(value as PlayedMatchSnapshot, true)} /></div>
       </Panel>
 
-      <Panel className="ai-writing-panel">
-        <SectionTitle title="AI 写作" description="根据当前比赛资料和人工描述生成一篇完整前瞻。" actions={<Sparkles size={20} />} />
-        {aiContext ? <>
-          <div className="ai-controls"><Field label="生成模型" htmlFor="ai-model"><select id="ai-model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setCopied(false); }}>{aiContext.models.map((model) => <option key={model.profile} value={model.profile} disabled={!model.available}>{model.label} · 约 {model.estimated_seconds} 秒 · {model.score.toFixed(1)} 分{model.recommended ? " · 推荐" : ""}{model.available ? "" : " · 未配置"}</option>)}</select></Field><div className="button-row"><Button variant="primary" loading={startingAI} disabled={!selectedModelOption?.available || aiRunning} onClick={() => void startGeneration()}><Sparkles size={16} />{selectedResult?.status === "failed" || selectedResult?.is_stale ? "重新生成" : "生成前瞻"}</Button><Button onClick={() => void copyPrompt()}><Copy size={16} />{promptCopied ? "Prompt 已复制" : "复制 Prompt"}</Button></div></div>
-          {selectedModelOption ? <p className="ai-model-note">{selectedModelOption.label}：评测 {selectedModelOption.score.toFixed(1)} 分，通常约需 {selectedModelOption.estimated_seconds} 秒，实际耗时会随文章和服务负载变化。</p> : null}
-          <Alert tone="warning">
-            <strong>AI 内容必须人工复核</strong>
-            <span>AI 仅提供写作初稿。保存或发布前，请逐项核对比赛、球队和球员事实，修正错误与不当表述，并由作者对最终文章负责。</span>
-            <span>模型可能连续复用相同词语、句式或描述，造成表达单一；请检查高频词和重复表达，按需替换、精简或改写。</span>
-          </Alert>
-          {aiRunning ? <Alert tone="info">AI 正在后台生成。可以关闭或切换页面，稍后返回继续查看。</Alert> : null}
-          {selectedResult?.error ? <Alert tone="danger">{selectedResult.error.message}</Alert> : null}
-          {selectedResult?.content ? <div className="ai-result"><div className="ai-result__heading"><div><strong>生成正文</strong>{selectedResult.is_stale ? <Badge tone="warning">资料已变化，结果可能过期</Badge> : <Badge tone="success">当前资料</Badge>}</div><Button onClick={() => void copyResult()}><Copy size={16} />{copied ? "已复制" : "复制正文"}</Button></div><textarea readOnly aria-label="AI生成正文" rows={18} value={selectedResult.content} /></div> : null}
-        </> : <LoadingScreen label="正在读取 AI 写作资料" />}
-      </Panel>
+      {canEdit ? <>
+        <Panel className="ai-writing-panel">
+          <SectionTitle title="AI 写作" description="根据当前比赛资料和人工描述生成一篇完整前瞻。" actions={<Sparkles size={20} />} />
+          {aiContext ? <>
+            <div className="ai-controls"><Field label="生成模型" htmlFor="ai-model"><select id="ai-model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setCopied(false); }}>{aiContext.models.map((model) => <option key={model.profile} value={model.profile} disabled={!model.available}>{model.label} · 约 {model.estimated_seconds} 秒 · {model.score.toFixed(1)} 分{model.recommended ? " · 推荐" : ""}{model.available ? "" : " · 未配置"}</option>)}</select></Field><div className="button-row"><Button variant="primary" loading={startingAI} disabled={!selectedModelOption?.available || aiRunning} onClick={() => void startGeneration()}><Sparkles size={16} />{selectedResult?.status === "failed" || selectedResult?.is_stale ? "重新生成" : "生成前瞻"}</Button><Button onClick={() => void copyPrompt()}><Copy size={16} />{promptCopied ? "Prompt 已复制" : "复制 Prompt"}</Button></div></div>
+            {selectedModelOption ? <p className="ai-model-note">{selectedModelOption.label}：评测 {selectedModelOption.score.toFixed(1)} 分，通常约需 {selectedModelOption.estimated_seconds} 秒，实际耗时会随文章和服务负载变化。</p> : null}
+            <Alert tone="warning">
+              <strong>AI 内容必须人工复核</strong>
+              <span>AI 仅提供写作初稿。保存或发布前，请逐项核对比赛、球队和球员事实，修正错误与不当表述，并由作者对最终文章负责。</span>
+              <span>模型可能连续复用相同词语、句式或描述，造成表达单一；请检查高频词和重复表达，按需替换、精简或改写。</span>
+            </Alert>
+            {aiRunning ? <Alert tone="info">AI 正在后台生成。可以关闭或切换页面，稍后返回继续查看。</Alert> : null}
+            {selectedResult?.error ? <Alert tone="danger">{selectedResult.error.message}</Alert> : null}
+            {selectedResult?.content ? <div className="ai-result"><div className="ai-result__heading"><div><strong>生成正文</strong>{selectedResult.is_stale ? <Badge tone="warning">资料已变化，结果可能过期</Badge> : <Badge tone="success">当前资料</Badge>}</div><Button onClick={() => void copyResult()}><Copy size={16} />{copied ? "已复制" : "复制正文"}</Button></div><textarea readOnly aria-label="AI生成正文" rows={18} value={selectedResult.content} /></div> : null}
+          </> : <LoadingScreen label="正在读取 AI 写作资料" />}
+        </Panel>
 
-      <Panel className="manual-description-panel">
-        <SectionTitle title="人工描述" actions={<Button variant="primary" loading={savingManual} disabled={!manualDirty} onClick={() => void saveManual()}><Save size={16} />保存双方资料</Button>} />
-        <Alert tone="info">
-          <strong>及时维护可复用的人工资料</strong>
-          <span>请填写球队与球员的风格、特点、位置、年级、伤病等人工信息，并在情况变化后及时更新。</span>
-          <span>这些资料会随球队长期保存并用于组装 AI Prompt。建议不要重复填写系统可自动获取的战绩、进球、出场时间等数据。</span>
-        </Alert>
-        {manual ? <div className="manual-team-grid"><ManualTeamEditor side="主队" value={manual.home_team} onTeamChange={(value) => updateManualTeam("home_team", value)} onPlayerChange={(name, value) => updateManualPlayer("home_team", name, value)} /><ManualTeamEditor side="客队" value={manual.away_team} onTeamChange={(value) => updateManualTeam("away_team", value)} onPlayerChange={(name, value) => updateManualPlayer("away_team", name, value)} /></div> : <LoadingScreen label="正在读取人工资料" />}
-      </Panel>
+        <Panel className="manual-description-panel">
+          <SectionTitle title="人工描述" actions={<Button variant="primary" loading={savingManual} disabled={!manualDirty} onClick={() => void saveManual()}><Save size={16} />保存双方资料</Button>} />
+          <Alert tone="info">
+            <strong>及时维护可复用的人工资料</strong>
+            <span>请填写球队与球员的风格、特点、位置、年级、伤病等人工信息，并在情况变化后及时更新。</span>
+            <span>这些资料会随球队长期保存并用于组装 AI Prompt。建议不要重复填写系统可自动获取的战绩、进球、出场时间等数据。</span>
+          </Alert>
+          {manual ? <div className="manual-team-grid"><ManualTeamEditor side="主队" value={manual.home_team} onTeamChange={(value) => updateManualTeam("home_team", value)} onPlayerChange={(name, value) => updateManualPlayer("home_team", name, value)} /><ManualTeamEditor side="客队" value={manual.away_team} onTeamChange={(value) => updateManualTeam("away_team", value)} onPlayerChange={(name, value) => updateManualPlayer("away_team", name, value)} /></div> : <LoadingScreen label="正在读取人工资料" />}
+        </Panel>
+
+      </> : null}
 
       {conflict ? <Modal title="正文已被其他请求更新" wide actions={<><Button onClick={loadServer}>加载服务器内容</Button><Button variant="primary" onClick={rebaseLocal}>保留本地内容并人工合并</Button></>}><Alert tone="warning">服务器保存序号已经变为 #{conflict.body_version}。系统不会自动覆盖，请比较后明确选择。</Alert><div className="conflict-grid"><div><strong>你的未保存内容</strong><span>署名：{writers || "—"}</span><pre>{body || "（空正文）"}</pre></div><div><strong>服务器当前内容</strong><span>署名：{namesText(conflict.writers) || "—"}</span><pre>{conflict.body || "（空正文）"}</pre></div></div></Modal> : null}
       {blocker.state === "blocked" ? <Modal title={manualDirty ? "有未保存的修改" : "有未保存的正文"} actions={<><Button onClick={() => blocker.reset()}>留在此页</Button><Button variant="danger" onClick={() => blocker.proceed()}>放弃修改并离开</Button></>}><p>{manualDirty ? "离开页面会丢失尚未保存的正文、署名或人工描述。" : "离开页面会丢失尚未保存的署名或正文。"}</p></Modal> : null}

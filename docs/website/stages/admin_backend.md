@@ -189,13 +189,14 @@ Batch 不保存 SHA；render 时 Article 固化 SHA，创建草稿前再次校�
 
 ### 渲染和预览
 
-调用 `POST /api/batches/{id}/render-preview`。即使状态为 `incomplete` 也会生成
+前瞻批次创建时自动渲染，内容变化后在同一事务中自动更新。即使状态为 `incomplete` 也会生成
 带占位提示的 Article，并返回 `missing_fields`；零活动比赛时会加入只用于预览
 的占位对阵。缺项 Article 不能创建微信草稿。
 
-没有内容变化时再次 render 返回相同 Article 且 `reused=true`。标题、人员、
-天气、封面、比赛数据、署名或正文变化后 `current_preview_article_id` 被清空，下次 render
-插入版本号更大的新 Article；历史 Article 不修改。
+标题、人员、天气、封面、比赛数据、署名或正文变化后，更新同一条前瞻 Article，
+不新增版本；任务认领、释放和转交也会同步更新文章。已有批次尚无当前文章时，
+读取批次详情会自动生成或更新文章。`POST /api/batches/{id}/render-preview` 保留作为兼容入口，
+没有内容变化时返回相同 Article 且 `reused=true`。战报仍保留独立的渲染版本。
 
 - `GET /api/articles/{id}`：读取输入快照、最终 HTML、封面指纹和完整性。
 - `GET /api/articles/{id}/preview`：在浏览器中查看最终 HTML。
@@ -241,7 +242,7 @@ Smoke test 创建随机 PostgreSQL schema，验证登录、render、HTML 预览�
 
 ## 5. 备份与故障定位
 
-PostgreSQL 保存业务数据、不可变 Article 和微信回执；
+PostgreSQL 保存业务数据、当前前瞻 Article、战报 Article 版本和微信回执；
 `var/artifacts/covers/` 保存管理员上传且不一定可重建的原始封面。两者必须一起
 备份。Stage 2 不自动删除历史封面。
 
