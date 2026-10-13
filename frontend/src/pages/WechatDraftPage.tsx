@@ -17,6 +17,7 @@ export function WechatDraftPage() {
   const [result, setResult] = useState<{ status: "created" | "reused"; draft: WechatDraft } | null>(null);
   const [dragged, setDragged] = useState<number | null>(null);
   const [articleType, setArticleType] = useState<"all" | "preview" | "report">("all");
+  const [candidatesExpanded, setCandidatesExpanded] = useState(false);
 
   useEffect(() => {
     document.title = "微信草稿 · 绿茵宣传部";
@@ -61,19 +62,20 @@ export function WechatDraftPage() {
   const visibleCandidates = articleType === "all"
     ? candidates
     : candidates.filter(({ article }) => article.article_type === articleType);
+  const displayedCandidates = candidatesExpanded ? visibleCandidates : visibleCandidates.slice(0, 8);
   if (loading) return <LoadingScreen label="正在汇集可发布文章" />;
   return (
     <>
-      <PageHeader eyebrow="发布" title="创建微信草稿" description="选择当前完整文章，顺序即公众号头条与次条顺序。" actions={<><select aria-label="文章类型" value={articleType} onChange={(event) => setArticleType(event.target.value as typeof articleType)}><option value="all">全部文章</option><option value="preview">前瞻</option><option value="report">战报</option></select><Button variant="primary" loading={submitting} disabled={!selected.length} onClick={() => void validate()}>核对并继续</Button></>} />
+      <PageHeader eyebrow="发布" title="创建微信草稿" description="选择当前完整文章，顺序即公众号头条与次条顺序。" actions={<><select aria-label="文章类型" value={articleType} onChange={(event) => { setArticleType(event.target.value as typeof articleType); setCandidatesExpanded(false); }}><option value="all">全部文章</option><option value="preview">前瞻</option><option value="report">战报</option></select><Button variant="primary" loading={submitting} disabled={!selected.length} onClick={() => void validate()}>核对并继续</Button></>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {result ? <Alert tone="success"><strong>{result.status === "reused" ? "已复用已有草稿" : "微信草稿创建成功"}</strong><span className="result-media">media_id：<code>{result.draft.media_id}</code></span><span>微信回执时间：{formatDateTime(result.draft.wechat_created_at)}</span>{includesPreview ? <span>所选前瞻文章对应批次的任务已自动关闭。</span> : null}</Alert> : null}
       <div className="draft-layout">
         <Panel>
           <SectionTitle title="可选文章" description="仅显示每个批次当前且完整的文章。" />
-          {!visibleCandidates.length ? <EmptyState title="暂时没有完整文章" description="请先完善前瞻批次，或渲染完整的战报文章。" /> : <div className="candidate-list">{visibleCandidates.map(({ batch, article }) => {
+          {!visibleCandidates.length ? <EmptyState title="暂时没有完整文章" description="请先完善前瞻批次，或渲染完整的战报文章。" /> : <div className="candidate-list" id="article-candidates">{displayedCandidates.map(({ batch, article }) => {
             const checked = selected.includes(article.id);
             return <label className="candidate-card" key={article.id}><input type="checkbox" checked={checked} disabled={!checked && selected.length >= 8} onChange={() => toggle(article.id)} /><div><strong>{article.title}</strong><span>{article.article_type === "preview" ? "前瞻" : "战报"} · {formatDate(batch.batch_date)} · {competitionLabels[batch.competition]}{article.article_type === "report" ? ` · 记录 #${article.version_number}` : ""}</span></div>{checked ? <Check size={18} /> : null}</label>;
-          })}</div>}
+          })}{visibleCandidates.length > 8 ? <Button aria-expanded={candidatesExpanded} aria-controls="article-candidates" onClick={() => setCandidatesExpanded((current) => !current)}>{candidatesExpanded ? "收起" : `展开全部（${visibleCandidates.length} 篇）`}</Button> : null}</div>}
         </Panel>
         <Panel>
           <SectionTitle title={`发布顺序（${selected.length}/8）`} description="第一篇为头条。拖动或使用按钮调整。" />
