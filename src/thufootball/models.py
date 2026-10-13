@@ -175,7 +175,7 @@ class RefereeAssignment:
 
 @dataclass(frozen=True)
 class GameEventIssue:
-    severity: Literal["warning", "error"]
+    severity: Literal["info", "warning", "error"]
     code: str
     message: str
     event_ids: tuple[int, ...] = ()
@@ -183,6 +183,8 @@ class GameEventIssue:
     side: Literal["home", "away"] | None = None
     minute: int | None = None
     stoppage_minute: int | None = None
+    team_name: str | None = None
+    time_label: str | None = None
 
 
 @dataclass(frozen=True)

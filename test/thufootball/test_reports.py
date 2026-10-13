@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+import pytest
 from PIL import Image
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -24,12 +25,41 @@ from thufootball import (
     GameStatus,
     GameSummary,
     ReportSettings,
-    ReportValidationError,
     THUFootballClient,
     THUFootballReportService,
     prepare_game_report,
 )
-from thufootball.reports import _REPORT_ASSET_CACHE, _build_report_html, _report_payload
+from thufootball.errors import InvalidResponse
+from thufootball.rankings import build_outcome_catalog
+from thufootball.report_drawing import (
+    _FONT_FILES,
+    LEGEND_ITEMS,
+    _font_directory,
+    _load_font,
+    draw_report,
+    encode_report,
+    load_static_assets,
+    measure_report,
+)
+from thufootball.reports import _report_payload, render_game_report
+
+
+@pytest.fixture(autouse=True)
+def report_catalog(monkeypatch):
+    institutions = [
+        {
+            "name": name,
+            "short_name": name,
+            "male_team_ids": [team_id],
+            "female_team_ids": [],
+            "futsal_team_ids": [],
+        }
+        for name, team_id in (("车辆与运载学院", 48), ("未央书院", 163))
+    ]
+    catalog = build_outcome_catalog(institutions, [])
+    monkeypatch.setattr("thufootball.reports.load_outcome_catalog", lambda: catalog)
+    return catalog
+
 
 _TINY_PNG_BUFFER = BytesIO()
 Image.new("RGB", (2, 2), "white").save(_TINY_PNG_BUFFER, format="PNG")
@@ -231,35 +261,30 @@ class _FakeClient:
 
 
 class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
-        _REPORT_ASSET_CACHE.clear()
-
-    @patch("thufootball.reports._render_html_to_png")
-    async def test_validation_errors_stop_before_any_report_resources(
+    @patch("thufootball.reports.render_game_report", return_value=(_REPORT_PNG, 1600, 1646))
+    async def test_business_warnings_allow_single_report_generation(
         self,
         renderer: object,
     ) -> None:
         detail = _detail()
         duplicate_start = replace(detail.events[0], event_id=999)
-        client = _FakeClient(
-            replace(detail, events=(*detail.events, duplicate_start))
-        )
+        client = _FakeClient(replace(detail, events=(*detail.events, duplicate_start)))
         service = THUFootballReportService(client)  # type: ignore[arg-type]
 
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ReportValidationError) as caught:
-                await service.download_game_report(4245, Path(directory))
+            result = await service.download_game_report(4245, Path(directory))
+            self.assertTrue(Path(result.path).is_file())
 
         self.assertIn(
             "duplicate_start",
-            [issue.code for issue in caught.exception.issues],
+            [issue.code for issue in result.warnings],
         )
-        self.assertEqual(client.calls, [("detail", 4245)])
-        renderer.assert_not_called()  # type: ignore[attr-defined]
+        self.assertEqual(client.calls, [("detail", 4245), ("qrcode", 4245)])
+        renderer.assert_called_once()  # type: ignore[attr-defined]
 
     @patch(
-        "thufootball.reports._render_html_to_png",
-        return_value=_REPORT_PNG,
+        "thufootball.reports.render_game_report",
+        return_value=(_REPORT_PNG, 1600, 1646),
     )
     async def test_validation_warnings_are_returned_and_do_not_block(
         self,
@@ -271,9 +296,7 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
             event_id=999,
             valid=False,
         )
-        client = _FakeClient(
-            replace(detail, events=(*detail.events, invalid_event))
-        )
+        client = _FakeClient(replace(detail, events=(*detail.events, invalid_event)))
         service = THUFootballReportService(client)  # type: ignore[arg-type]
 
         with tempfile.TemporaryDirectory() as directory:
@@ -281,14 +304,13 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [warning.code for warning in result.warnings],
-            ["invalid_event_ignored"],
+            [],
         )
         self.assertIn(("qrcode", 4245), client.calls)
 
-
     @patch(
-        "thufootball.reports._render_html_to_png",
-        return_value=_REPORT_PNG,
+        "thufootball.reports.render_game_report",
+        return_value=(_REPORT_PNG, 1600, 1646),
     )
     async def test_downloads_png_without_refreshing_stats_by_default(
         self,
@@ -306,7 +328,6 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
                 [
                     ("detail", 4245),
                     ("qrcode", 4245),
-                    *((name, 4245) for name in _REPORT_ASSET_NAMES),
                 ],
             )
             self.assertEqual(result.path, str(output.resolve()))
@@ -322,8 +343,8 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
                 await service.download_game_report(4245, output)
 
     @patch(
-        "thufootball.reports._render_html_to_png",
-        return_value=_REPORT_PNG,
+        "thufootball.reports.render_game_report",
+        return_value=(_REPORT_PNG, 1600, 1646),
     )
     async def test_refreshes_stats_only_with_explicit_opt_in(
         self,
@@ -345,14 +366,13 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
                 ("refresh", 4245),
                 ("detail", 4245),
                 ("qrcode", 4245),
-                *((name, 4245) for name in _REPORT_ASSET_NAMES),
             ],
         )
         self.assertTrue(result.refreshed_stats)
 
     @patch(
-        "thufootball.reports._render_html_to_png",
-        return_value=_REPORT_PNG,
+        "thufootball.reports.render_game_report",
+        return_value=(_REPORT_PNG, 1600, 1646),
     )
     async def test_supports_read_only_report_without_qr_code(
         self,
@@ -373,7 +393,6 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
                 client.calls,
                 [
                     ("detail", 4245),
-                    *((name, 4245) for name in _REPORT_ASSET_NAMES),
                 ],
             )
             self.assertTrue(Path(result.path).is_file())
@@ -381,8 +400,8 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(Path(result.path).name.startswith("game_4245_"))
 
     @patch(
-        "thufootball.reports._render_html_to_png",
-        return_value=_REPORT_PNG,
+        "thufootball.reports.render_game_report",
+        return_value=(_REPORT_PNG, 1600, 1646),
     )
     async def test_reuses_static_assets_across_service_instances(
         self,
@@ -399,7 +418,7 @@ class ReportServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.calls.count(("qrcode", 4245)), 2)
         for name in _REPORT_ASSET_NAMES:
-            self.assertEqual(client.calls.count((name, 4245)), 1)
+            self.assertEqual(client.calls.count((name, 4245)), 0)
 
 
 class AbandonReportRuleTests(unittest.TestCase):
@@ -459,7 +478,7 @@ class AbandonReportRuleTests(unittest.TestCase):
         prepared = prepare_game_report(detail)
 
         self.assertFalse(prepared.render_image)
-        self.assertEqual(prepared.warnings[0].message, "双方弃赛")
+        self.assertEqual(prepared.warnings[0].message, "双方弃赛，本场仅生成文字战报")
         self.assertEqual(
             prepared.text,
             "车辆与运载学院vs未央书院的比赛，双方弃赛",
@@ -512,7 +531,10 @@ class ReportRendererTests(unittest.TestCase):
         )
         with self.assertRaises(ConfigurationError):
             _report_payload(
-                unknown_teams, settings=ReportSettings(), assets=assets, qr_code=_TINY_PNG,
+                unknown_teams,
+                settings=ReportSettings(),
+                assets=assets,
+                qr_code=_TINY_PNG,
             )
 
     def test_uses_website_fonts_and_original_event_assets(self) -> None:
@@ -533,23 +555,10 @@ class ReportRendererTests(unittest.TestCase):
             "event_second_yellow_card",
         )
 
-        html = _build_report_html(payload)
-        self.assertNotIn("<script src=", html)
-        self.assertIn("jQuery v3.6.4", html)
-        self.assertIn("jCanvas", html)
-        self.assertIn('fontFamily: "simHei"', html)
-        self.assertIn('fontStyle: "bold"', html)
-        self.assertIn('fontFamily: "WenQuanYi Micro Hei"', html)
-        self.assertIn("source: images[event.asset]", html)
-        self.assertNotIn("legend_assist", html)
-        self.assertNotIn("event_assist", html)
-        self.assertNotIn("助攻", html)
-        self.assertIn("imageWidth + 8 + textWidth", html)
-        self.assertIn("20 * (measuredLegendItems.length - 1)", html)
-        self.assertIn("let legendX = 800 - legendWidth / 2", html)
-        self.assertIn("function wrapTitle(text, maxWidth)", html)
-        self.assertIn('context.font = "bold 50px simHei"', html)
-        self.assertIn("text: wrapTitle(text, 600)", html)
+        self.assertEqual(
+            [label for _, label in LEGEND_ITEMS], ["进球", "点球", "点球罚失", "乌龙球"]
+        )
+        self.assertEqual(payload["groups"][-1]["time"], "80+3'")
 
 
 class ReportClientTests(unittest.IsolatedAsyncioTestCase):
@@ -599,6 +608,107 @@ class ReportClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(seen[3].url.path.endswith("/img_static/G.png"))
         self.assertNotIn("openid", seen[3].url.params)
         self.assertNotIn("session_key", seen[3].url.params)
+
+
+@pytest.fixture
+def report_fonts():
+    try:
+        directory = _font_directory()
+    except ConfigurationError:
+        pytest.skip("report integration requires THUFOOTBALL_FONT_DIR")
+    if not all(
+        (directory / filename).is_file() for filename, _ in _FONT_FILES.values()
+    ):
+        pytest.skip("report integration requires configured report fonts")
+    return directory
+
+
+@pytest.mark.parametrize("scenario", ["empty", "long", "shootout", "options"])
+def test_pillow_dynamic_layout(scenario, report_fonts):
+    assets = load_static_assets()
+    content = _report_payload(
+        _detail(), settings=ReportSettings(), assets=assets, qr_code=_TINY_PNG
+    )
+    original = measure_report(content, assets, _TINY_PNG)
+    if scenario == "empty":
+        content["groups"] = []
+    elif scenario == "long":
+        content["home_name"] *= 6
+        content["away_name"] *= 10
+        content["subtitle"] *= 25
+        content["metadata"] *= 10
+        content["home_starters"] = [name * 6 for name in content["home_starters"]]
+        content["groups"][0]["home"][0]["namestring"] *= 12
+    elif scenario == "shootout":
+        content["groups"] = [
+            {
+                "time": "P",
+                "home": [
+                    {
+                        "namestring": "22-王一凡",
+                        "asset": "event_penalty",
+                        "type": "PENALTY",
+                        "during_penalty_shootout": True,
+                    }
+                ],
+                "away": [
+                    {
+                        "namestring": "7-李梓伊",
+                        "asset": "event_missed_penalty",
+                        "type": "MISSPENALTY",
+                        "during_penalty_shootout": True,
+                    }
+                ],
+            }
+        ]
+    else:
+        content.update(include_lineup=False, include_qr_code=False, metadata="")
+    layout = measure_report(content, assets, _TINY_PNG)
+    image = draw_report(layout)
+    with Image.open(BytesIO(encode_report(image))) as decoded:
+        assert decoded.mode == "RGB" and decoded.size == (1600, layout.height)
+    assert all(
+        0 <= left < right <= 1600 and 0 <= top < bottom <= layout.height
+        for left, top, right, bottom in layout.rectangles
+    )
+    assert all(
+        0 <= x
+        and x + icon.width <= 1600
+        and 0 <= y
+        and y + icon.height <= layout.height
+        for icon, x, y in layout.images
+    )
+    for block, x, y, centered in layout.texts:
+        assert y >= 0 and y + block.height <= layout.height
+        if centered:
+            assert x - block.width / 2 >= 0 and x + block.width / 2 <= 1600
+        else:
+            assert 0 <= x and x + block.width <= 1600
+    if scenario == "long":
+        assert layout.height > original.height
+    elif scenario == "options":
+        assert layout.height < original.height
+    elif scenario == "shootout":
+        assert sum(layout.rectangles[0][1::2]) == sum(layout.rectangles[1][1::2])
+        assert any(block.lines == ("(1:0)",) for block, *_ in layout.texts)
+
+
+def test_missing_font_has_configuration_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("THUFOOTBALL_FONT_DIR", str(tmp_path))
+    with pytest.raises(ConfigurationError, match="simhei.ttf"):
+        _load_font(_font_directory(), "title")
+
+
+@pytest.mark.parametrize("qr", [None, b"not an image"])
+def test_missing_or_invalid_qr_is_report_error(qr, report_fonts):
+    with pytest.raises(InvalidResponse) as caught:
+        render_game_report(
+            _detail(),
+            settings=ReportSettings(),
+            assets=load_static_assets(),
+            qr_code=qr,
+        )
+    assert caught.value.stage == "report" and caught.value.game_id == 4245
 
 
 if __name__ == "__main__":

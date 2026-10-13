@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import html
@@ -70,7 +71,9 @@ from thufootball import (
     THUFootballQueryService,
     THUFootballReportService,
 )
+from thufootball.qr_cache import GameQRCodeCache
 from thufootball.rankings import StaticOutcomeCatalog
+from thufootball.report_validation import report_has_blocking_issues
 from weather import DailyWeather, WeatherQueryService
 from wechat_official import (
     Article,
@@ -104,7 +107,7 @@ AUTO_PREVIEW_DIGEST = "马杯前瞻"
 HAIDIAN_ADCODE = "110108"
 COMPETITION_ORDER = {"male": 0, "female": 1, "futsal": 2}
 SHANGHAI = timezone(timedelta(hours=8))
-MATCH_REPORT_TEMPLATE_VERSION = "v1 initial"
+MATCH_REPORT_TEMPLATE_VERSION = "pillow-v1"
 
 
 class WorkflowError(RuntimeError):
@@ -134,6 +137,7 @@ class ExternalFactories:
     wechat: ServiceFactory = WechatOfficialService.from_environment
     reports: ServiceFactory = lambda: WebsiteReportSession()
     ai: AIServiceFactory = AIChatService.from_config
+    qr_codes: ServiceFactory = lambda: THUFootballClient(load_environment=False)
 
 
 class WebsiteReportSession:
@@ -144,9 +148,14 @@ class WebsiteReportSession:
         outcome_catalog: StaticOutcomeCatalog | None = None,
         *,
         client: THUFootballClient | None = None,
+        qr_cache_root: Path = PROJECT_ROOT / "var" / "qrcodes",
     ) -> None:
         self._client = client or THUFootballClient()
-        self._reports = THUFootballReportService(self._client, outcome_catalog)
+        self._reports = THUFootballReportService(
+            self._client,
+            outcome_catalog,
+            qr_cache=GameQRCodeCache(qr_cache_root),
+        )
 
     async def __aenter__(self) -> "WebsiteReportSession":
         await self._client.__aenter__()
@@ -497,9 +506,7 @@ async def create_batches(
                 409, "competition_not_configured", "该项目尚未接入新赛季。"
             )
     resolved_dates = sorted(set(dates))
-    resolved_competitions = sorted(
-        set(competitions), key=COMPETITION_ORDER.__getitem__
-    )
+    resolved_competitions = sorted(set(competitions), key=COMPETITION_ORDER.__getitem__)
     with factory() as session:
         existing_batches = list(
             session.scalars(
@@ -510,8 +517,7 @@ async def create_batches(
             )
         )
     existing = {
-        (batch.batch_date, batch.competition): batch.id
-        for batch in existing_batches
+        (batch.batch_date, batch.competition): batch.id for batch in existing_batches
     }
     results: list[dict[str, Any]] = [
         {
@@ -540,6 +546,16 @@ async def create_batches(
         }
     )
     if not missing_dates:
+        with factory() as session:
+            game_ids = list(
+                session.scalars(
+                    select(Match.game_id).where(
+                        Match.batch_id.in_([item["batch_id"] for item in results]),
+                        Match.active.is_(True),
+                    )
+                )
+            )
+        await _cache_game_qr_codes(game_ids, factories, settings)
         return sorted(
             results,
             key=lambda item: (
@@ -645,6 +661,18 @@ async def create_batches(
                             "error": {"code": "write_failed", "message": str(exc)},
                         }
                     )
+    with factory() as session:
+        game_ids = list(
+            session.scalars(
+                select(Match.game_id).where(
+                    Match.batch_id.in_(
+                        [item["batch_id"] for item in results if "batch_id" in item]
+                    ),
+                    Match.active.is_(True),
+                )
+            )
+        )
+    await _cache_game_qr_codes(game_ids, factories, settings)
     return sorted(
         results,
         key=lambda item: (
@@ -711,6 +739,43 @@ async def refresh_batch(
         raise WorkflowError(502, "query_failed", str(exc)) from exc
     refresh_preview_articles(session, settings)
     session.commit()
+
+    game_ids = list(
+        session.scalars(
+            select(Match.game_id).where(
+                Match.batch_id == batch.id,
+                Match.active.is_(True),
+            )
+        )
+    )
+    await _cache_game_qr_codes(game_ids, factories, settings)
+
+
+async def _cache_game_qr_codes(
+    game_ids: list[int], factories: ExternalFactories, settings: WebsiteSettings
+) -> None:
+    if not game_ids:
+        return
+    cache = GameQRCodeCache(settings.qr_cache_root)
+    semaphore = asyncio.Semaphore(4)
+    logger = logging.getLogger("backend.qr-cache")
+    try:
+        async with factories.qr_codes() as client:
+
+            async def fetch(game_id: int) -> None:
+                async with semaphore:
+                    try:
+                        await cache.get(client, game_id)
+                    except Exception:
+                        logger.warning(
+                            "Could not cache QR code for game %s",
+                            game_id,
+                            exc_info=True,
+                        )
+
+            await asyncio.gather(*(fetch(game_id) for game_id in set(game_ids)))
+    except Exception:
+        logger.warning("Could not open QR code client", exc_info=True)
 
 
 def completeness(session: Session, batch: Batch) -> list[str]:
@@ -1037,6 +1102,13 @@ async def _render_match_with_service(
             "match_not_finished",
             f"match {match.game_id} is not finished; refresh the batch first",
         )
+    if report_has_blocking_issues(prepared.warnings):
+        batch = session.get(Batch, match.batch_id)
+        if batch is None:
+            raise WorkflowError(409, "batch_missing", "match batch is missing")
+        batch.current_report_article_id = None
+        batch.updated_at = _now()
+        session.flush()
     input_sha256 = _report_input_sha256(prepared.source_detail)
     if match.report_input_sha256 == input_sha256:
         try:
@@ -1104,13 +1176,13 @@ def _report_success_diagnostic(
 
 
 def _report_failure_diagnostic(
-    match: Match,
+    game_id: int,
     error: WorkflowError,
 ) -> dict[str, Any]:
     details = error.details or {}
     issues = details.get("issues")
     return {
-        "game_id": match.game_id,
+        "game_id": game_id,
         "status": "failed",
         "reused": None,
         "issues": issues if isinstance(issues, list) else [],
@@ -1124,7 +1196,8 @@ async def render_match_report(
     factories: ExternalFactories,
     match: Match,
 ) -> tuple[bool, list[dict[str, Any]]]:
-    _advisory_lock(session, "match-report", str(match.game_id))
+    game_id = match.game_id
+    _advisory_lock(session, "match-report", str(game_id))
     session.refresh(match)
     try:
         async with factories.reports() as reports:
@@ -1138,7 +1211,7 @@ async def render_match_report(
             error.status_code,
             error.code,
             error.message,
-            details={"diagnostics": [_report_failure_diagnostic(match, error)]},
+            details={"diagnostics": [_report_failure_diagnostic(game_id, error)]},
         ) from exc
 
 
@@ -1189,28 +1262,30 @@ async def render_report_batch(
         raise WorkflowError(
             409, "no_finished_matches", "batch has no saved finished matches"
         )
+    batch_id = batch.id
+    game_ids = [match.game_id for match in matches]
+    # Release the batch transaction before running independent match transactions.
+    session.commit()
     diagnostics: list[dict[str, Any]] = []
     failure_statuses: list[int] = []
-    try:
-        async with factories.reports() as reports:
-            for match in matches:
-                try:
-                    reused, issues = await _render_match_with_service(
-                        session, settings, match, reports
-                    )
-                    diagnostics.append(
-                        _report_success_diagnostic(match, reused, issues)
-                    )
-                except Exception as exc:
-                    error = _report_workflow_error(exc)
-                    failure_statuses.append(error.status_code)
-                    diagnostics.append(_report_failure_diagnostic(match, error))
-    except Exception as exc:
-        error = _report_workflow_error(exc)
-        diagnostics = [
-            _report_failure_diagnostic(match, error) for match in matches
-        ]
-        failure_statuses = [error.status_code] * len(matches)
+    for game_id in game_ids:
+        try:
+            match = session.get(Match, game_id)
+            if match is None:
+                raise WorkflowError(404, "match_missing", f"match {game_id} is missing")
+            _reused, match_diagnostics = await render_match_report(
+                session, settings, factories, match
+            )
+            session.commit()
+            diagnostics.extend(match_diagnostics)
+        except Exception as exc:
+            error = _report_workflow_error(exc)
+            session.rollback()
+            failure_statuses.append(error.status_code)
+            if error.details and "diagnostics" in error.details:
+                diagnostics.extend(error.details["diagnostics"])
+            else:
+                diagnostics.append(_report_failure_diagnostic(game_id, error))
     if failure_statuses:
         status_code = (
             502
@@ -1224,6 +1299,22 @@ async def render_report_batch(
             details={"diagnostics": diagnostics},
         )
 
+    if report_has_blocking_issues(
+        GameEventIssue(**issue)
+        for diagnostic in diagnostics
+        for issue in diagnostic["issues"]
+    ):
+        raise WorkflowError(
+            409,
+            "report_batch_article_blocked",
+            "单场战报已生成并保存，存在需要核对的比赛，暂未生成批次文章。",
+            details={"diagnostics": diagnostics},
+        )
+
+    _advisory_lock(session, "report-batch", str(batch_id))
+    session.refresh(batch)
+    for match in matches:
+        session.refresh(match)
     snapshot = {
         "matches": [
             {

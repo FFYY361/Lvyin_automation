@@ -25,7 +25,7 @@ export interface ApiErrorDetails {
 }
 
 export interface ReportIssue {
-  severity: "warning" | "error";
+  severity: "info" | "warning" | "error";
   code: string;
   message: string;
   event_ids: number[];
@@ -33,6 +33,8 @@ export interface ReportIssue {
   side: "home" | "away" | null;
   minute: number | null;
   stoppage_minute: number | null;
+  team_name?: string | null;
+  time_label?: string | null;
 }
 
 export interface ReportRenderDiagnostic {

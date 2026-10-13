@@ -1,30 +1,21 @@
-"""Download match data and render reports with TAFA's browser canvas code."""
+"""Download match data and render reports with Pillow."""
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 from collections.abc import Mapping
 from dataclasses import replace
-from functools import lru_cache
-from io import BytesIO
 from pathlib import Path
-from threading import Lock
 from typing import Any, Literal
-
-from PIL import Image, UnidentifiedImageError
 
 from .client import THUFootballClient
 from .errors import (
     ConfigurationError,
     InvalidResponse,
     QueryValidationError,
-    ReportValidationError,
 )
 from .models import (
     GameDetail,
@@ -35,10 +26,16 @@ from .models import (
     PreparedGameReport,
     ReportSettings,
 )
+from .qr_cache import GameQRCodeCache
 from .rankings import StaticOutcomeCatalog, load_outcome_catalog
+from .report_drawing import (
+    draw_report,
+    encode_report,
+    load_static_assets,
+    measure_report,
+)
 from .report_validation import validate_game_events
 
-_REPORT_WIDTH = 1600
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _LINEUP_EVENTS = frozenset({"START", "APPEARANCE"})
 _EVENT_ASSET_NAMES = {
@@ -52,35 +49,6 @@ _EVENT_ASSET_NAMES = {
     "SECONDYELLOWCARD": "event_second_yellow_card",
     "REDCARD": "event_red_card",
 }
-_WEBSITE_ASSET_NAMES = (
-    "start",
-    "end",
-    "legend_goal",
-    "legend_penalty",
-    "legend_missed_penalty",
-    "legend_own_goal",
-    *_EVENT_ASSET_NAMES.values(),
-)
-_REPORT_ASSET_CACHE: dict[str, bytes] = {}
-_REPORT_ASSET_CACHE_LOCK = Lock()
-_REPORT_DATA_PATTERN = re.compile(
-    rb'<pre id="report-data">data:image/png;base64,([^<]+)</pre>'
-)
-_REPORT_ERROR_PATTERN = re.compile(rb'<pre id="report-data">ERROR:([^<]*)</pre>')
-
-_REPORT_ASSET_DIRECTORY = Path(__file__).with_name("assets")
-_JQUERY_PATH = _REPORT_ASSET_DIRECTORY / "jquery-3.6.4.min.js"
-_JCANVAS_PATH = _REPORT_ASSET_DIRECTORY / "jcanvas.min.js"
-
-
-@lru_cache(maxsize=1)
-def _report_script_sources() -> tuple[str, str]:
-    """Load the pinned browser dependencies once for inline report HTML."""
-
-    return (
-        _JQUERY_PATH.read_text(encoding="utf-8"),
-        _JCANVAS_PATH.read_text(encoding="utf-8"),
-    )
 
 
 def _positive_game_id(value: object) -> int:
@@ -116,6 +84,8 @@ def resolve_report_team_name(
     game: GameSummary,
     side: Literal["home", "away"],
     outcome_catalog: StaticOutcomeCatalog | None = None,
+    *,
+    brief: bool = False,
 ) -> str:
     """Resolve the displayed report name, preferring the canonical full name."""
 
@@ -123,8 +93,11 @@ def resolve_report_team_name(
     catalog = outcome_catalog or load_outcome_catalog()
     static_names = catalog.team_names_by_id.get(team_id)
     if static_names:
-        return catalog.teams_by_name[static_names[0]].institution_name
-    raise ConfigurationError(f"team_id={team_id} has no configured identity", stage="configuration")
+        identity = catalog.teams_by_name[static_names[0]]
+        return identity.brief_name if brief else identity.institution_name
+    raise ConfigurationError(
+        f"team_id={team_id} has no configured identity", stage="configuration"
+    )
 
 
 def _awarded_score(detail: GameDetail) -> int:
@@ -172,6 +145,33 @@ def _single_abandon_text(
     )
 
 
+def _report_issues(
+    detail: GameDetail,
+    issues: tuple[GameEventIssue, ...],
+    catalog: StaticOutcomeCatalog,
+) -> tuple[GameEventIssue, ...]:
+    if not issues:
+        return ()
+    names = {
+        side: resolve_report_team_name(detail.game, side, catalog, brief=True)
+        for side in ("home", "away")
+    }
+    return tuple(
+        replace(
+            issue,
+            team_name=names.get(issue.side) or f"{names['home']} vs {names['away']}",
+        )
+        for issue in issues
+    )
+
+
+def _validate_report_events(
+    detail: GameDetail, catalog: StaticOutcomeCatalog
+) -> tuple[GameDetail, tuple[GameEventIssue, ...]]:
+    validated, issues = validate_game_events(detail)
+    return validated, _report_issues(detail, issues, catalog)
+
+
 def prepare_game_report(
     detail: GameDetail,
     *,
@@ -187,14 +187,14 @@ def prepare_game_report(
         home_name = resolve_report_team_name(game, "home", catalog)
         away_name = resolve_report_team_name(game, "away", catalog)
         warning = GameEventIssue(
-            severity="warning",
+            severity="info",
             code="both_sides_abandoned",
-            message="双方弃赛",
+            message="双方弃赛，本场仅生成文字战报",
         )
         return PreparedGameReport(
             source_detail=detail,
             detail=detail,
-            warnings=(warning,),
+            warnings=_report_issues(detail, (warning,), catalog),
             render_image=False,
             text=f"{home_name}vs{away_name}的比赛，双方弃赛",
         )
@@ -212,19 +212,13 @@ def prepare_game_report(
             )
 
         side = "home" if home_abandon else "away"
-        team_name = resolve_report_team_name(game, side, catalog)
         warning = GameEventIssue(
-            severity="warning",
+            severity="info",
             code="abandon_with_events_awarded_loss",
-            message=f"{team_name}弃赛但仍有事件，视为{team_name}被判负",
+            message="该队弃赛但仍有比赛事件，按判负处理并生成战报",
             side=side,
         )
-        try:
-            validated, warnings = validate_game_events(detail)
-        except ReportValidationError as exc:
-            raise ReportValidationError(
-                (warning, *exc.issues), game_id=game.game_id
-            ) from exc
+        validated, warnings = _validate_report_events(detail, catalog)
         score = _single_abandon_score(detail)
         render_game = replace(
             validated.game,
@@ -239,7 +233,7 @@ def prepare_game_report(
         return PreparedGameReport(
             source_detail=detail,
             detail=replace(validated, game=render_game),
-            warnings=(warning, *warnings),
+            warnings=(*_report_issues(detail, (warning,), catalog), *warnings),
             render_image=True,
             text=_single_abandon_text(
                 detail,
@@ -249,7 +243,7 @@ def prepare_game_report(
             ),
         )
 
-    validated, warnings = validate_game_events(detail)
+    validated, warnings = _validate_report_events(detail, catalog)
     return PreparedGameReport(
         source_detail=detail,
         detail=validated,
@@ -299,7 +293,7 @@ def _event_time(event: GameEvent) -> str:
     if event.during_penalty_shootout:
         return "P" if event.minute is None else f"{event.minute}'P"
     if event.stoppage_minute > 0:
-        return f"{event.minute}'+{event.stoppage_minute}'"
+        return f"{event.minute}+{event.stoppage_minute}'"
     return f"{event.minute}'"
 
 
@@ -366,39 +360,6 @@ def _timeline_groups(detail: GameDetail) -> list[dict[str, Any]]:
     ]
 
 
-def _image_data_url(
-    payload: object,
-    *,
-    label: str,
-    game_id: int,
-) -> str:
-    if not isinstance(payload, bytes):
-        raise InvalidResponse(
-            f"{label} is missing",
-            stage="report",
-            game_id=game_id,
-        )
-    try:
-        with Image.open(BytesIO(payload)) as image:
-            image.load()
-            image_format = image.format
-    except (OSError, UnidentifiedImageError) as exc:
-        raise InvalidResponse(
-            f"{label} returned an unreadable image",
-            stage="report",
-            game_id=game_id,
-        ) from exc
-
-    media_type = {
-        "GIF": "image/gif",
-        "JPEG": "image/jpeg",
-        "PNG": "image/png",
-        "WEBP": "image/webp",
-    }.get(image_format or "", "image/png")
-    encoded = base64.b64encode(payload).decode("ascii")
-    return f"data:{media_type};base64,{encoded}"
-
-
 def _report_payload(
     detail: GameDetail,
     *,
@@ -413,21 +374,6 @@ def _report_payload(
         raise QueryValidationError(
             "assets must be a mapping",
             stage="validation",
-            game_id=game_id,
-        )
-
-    encoded_assets = {
-        name: _image_data_url(
-            assets.get(name),
-            label=f"website report asset {name!r}",
-            game_id=game_id,
-        )
-        for name in _WEBSITE_ASSET_NAMES
-    }
-    if settings.include_qr_code:
-        encoded_assets["qr_code"] = _image_data_url(
-            qr_code,
-            label="GetGamePageCode",
             game_id=game_id,
         )
 
@@ -447,846 +393,18 @@ def _report_payload(
         "away_score": detail.game.away_score or 0,
         "subtitle": _report_subtitle(detail),
         "metadata": "    ".join(metadata),
-        "include_metadata": settings.include_time or settings.include_field,
+        "include_metadata": bool(metadata),
         "include_lineup": settings.include_lineup,
         "include_qr_code": settings.include_qr_code,
         "home_starters": [_event_name(event) for event in home_starters],
         "away_starters": [_event_name(event) for event in away_starters],
         "squad_title": (
             "出场阵容"
-            if any(
-                event.event_type.upper() == "APPEARANCE"
-                for event in detail.events
-            )
+            if any(event.event_type.upper() == "APPEARANCE" for event in detail.events)
             else "首发阵容"
         ),
         "groups": _timeline_groups(detail),
-        "assets": encoded_assets,
     }
-
-
-_REPORT_HTML = r"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="color-scheme" content="light">
-<style>
-html, body { margin: 0; padding: 0; background: white; }
-canvas { display: block; }
-#report-data { display: none; }
-</style>
-<script>__JQUERY_SOURCE__</script>
-<script>__JCANVAS_SOURCE__</script>
-</head>
-<body>
-<canvas id="canvas"></canvas>
-<pre id="report-data"></pre>
-<script>
-"use strict";
-
-const payloadBytes = Uint8Array.from(
-    atob("__PAYLOAD_BASE64__"),
-    character => character.charCodeAt(0)
-);
-const report = JSON.parse(new TextDecoder().decode(payloadBytes));
-
-function loadImage(source) {
-    return new Promise((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error("Could not load report image"));
-        image.src = source;
-        if (image.complete && image.naturalWidth > 0) {
-            resolve(image);
-        }
-    });
-}
-
-async function renderReport() {
-    if (typeof window.jQuery !== "function" ||
-            typeof jQuery.fn.drawText !== "function") {
-        throw new Error("TAFA jCanvas dependencies did not load");
-    }
-    await document.fonts.ready;
-    const imageEntries = await Promise.all(
-        Object.entries(report.assets).map(async ([name, source]) => {
-            return [name, await loadImage(source)];
-        })
-    );
-    const images = Object.fromEntries(imageEntries);
-    const $canvas = jQuery("#canvas");
-    const groups = report.groups;
-    let penalty = false;
-    let curY = 20;
-    let hy = 180;
-
-    $canvas.attr("width", 1600);
-
-    function drawfirst(color, layername, text, x, y) {
-        $canvas.drawText({
-            layer: true,
-            fillStyle: color,
-            fontFamily: "WenQuanYi Micro Hei",
-            fontSize: 36,
-            name: layername,
-            text: text,
-            fromCenter: false,
-            x: x,
-            y: y,
-            align: "left",
-            maxWidth: 600
-        });
-    }
-
-    function wrapTitle(text, maxWidth) {
-        const context = $canvas[0].getContext("2d");
-        const lines = [];
-        context.save();
-        context.font = "bold 50px simHei";
-        for (const paragraph of String(text).split(/\r?\n/)) {
-            let line = "";
-            for (const character of Array.from(paragraph)) {
-                const candidate = line + character;
-                if (line && context.measureText(candidate).width > maxWidth) {
-                    lines.push(line.trimEnd());
-                    line = character.trimStart();
-                } else {
-                    line = candidate;
-                }
-            }
-            lines.push(line.trimEnd());
-        }
-        context.restore();
-        return lines.join("\n");
-    }
-
-    function drawtitle(color, layername, text, x, y) {
-        $canvas.drawText({
-            layer: true,
-            fillStyle: "#000",
-            fontFamily: "simHei",
-            fontStyle: "bold",
-            name: layername,
-            text: wrapTitle(text, 600),
-            x: x,
-            y: y,
-            fontSize: 50,
-            maxWidth: 600
-        });
-    }
-
-    function drawcenter(font, size, style, layername, text, y) {
-        $canvas.drawText({
-            layer: true,
-            fillStyle: "#000",
-            fontStyle: style,
-            name: layername,
-            x: 800,
-            y: y,
-            fontSize: size,
-            fontFamily: font,
-            text: text
-        });
-    }
-
-    function drawline(layername, x1, x2, y) {
-        $canvas.drawLine({
-            layer: true,
-            name: layername,
-            strokeStyle: "#000",
-            strokeWidth: 3,
-            rounded: true,
-            x1: x1,
-            y1: y,
-            x2: x2,
-            y2: y
-        });
-    }
-
-    function drawtime(layername, time, x, y) {
-        $canvas.drawText({
-            layer: true,
-            name: layername,
-            fillStyle: "#000",
-            fontFamily: "Trebuchet MS",
-            fontSize: 36,
-            text: time,
-            x: x,
-            y: y
-        });
-    }
-
-    function drawname(color, layername, name, x, y) {
-        $canvas.drawText({
-            layer: true,
-            name: layername,
-            fillStyle: color,
-            fontFamily: "WenQuanYi Micro Hei",
-            fontSize: 40,
-            text: name,
-            x: x,
-            y: y,
-            align: "left",
-            maxWidth: 550
-        });
-    }
-
-    function drawplayer(layername, name, x, y) {
-        $canvas.drawText({
-            layer: true,
-            name: layername,
-            fillStyle: "#000",
-            fontFamily: "WenQuanYi Micro Hei",
-            fontSize: 40,
-            text: name,
-            fromCenter: false,
-            x: x,
-            y: y,
-            align: "left",
-            maxWidth: 550
-        });
-    }
-
-    function drawrect(layername, x, y, width, height) {
-        $canvas.drawRect({
-            layer: true,
-            name: layername,
-            strokeStyle: "#000",
-            strokeWidth: 3,
-            x: x,
-            y: y,
-            width: width,
-            height: height,
-            cornerRadius: 10
-        });
-    }
-
-    function drawicon(layername, event, x, y) {
-        $canvas.drawImage({
-            layer: true,
-            name: layername,
-            source: images[event.asset],
-            x: x,
-            y: y,
-            fromCenter: false
-        });
-    }
-
-    for (const group of groups) {
-        const hside = group.home;
-        const aside = group.away;
-        let hrectheight = 10;
-        let arectheight = 10;
-        if (hside.length !== 0) {
-            for (const event of hside) {
-                drawname(
-                    "rgba(0, 0, 0, 0)",
-                    "measure" + event.namestring,
-                    event.namestring,
-                    800,
-                    0
-                );
-                hrectheight += (
-                    $canvas.measureText("measure" + event.namestring).height
-                    + 10
-                );
-            }
-            if (hside[0].during_penalty_shootout) {
-                penalty = true;
-            }
-        }
-        if (aside.length !== 0) {
-            for (const event of aside) {
-                drawname(
-                    "rgba(0, 0, 0, 0)",
-                    "measure" + event.namestring,
-                    event.namestring,
-                    800,
-                    0
-                );
-                arectheight += (
-                    $canvas.measureText("measure" + event.namestring).height
-                    + 10
-                );
-            }
-            if (aside[0].during_penalty_shootout) {
-                penalty = true;
-            }
-        }
-        let halfh = Math.max(hrectheight, arectheight) / 2 + 10;
-        if (hside.length === 0 && aside.length === 0) {
-            halfh = -20;
-        }
-        hy += 2 * halfh + 40;
-    }
-
-    const hfstr = report.home_starters
-        .map(name => name + "    ")
-        .join("");
-    const afstr = report.away_starters
-        .map(name => name + "    ")
-        .join("");
-
-    drawtitle(
-        "rgba(0, 0, 0, 0)",
-        "measurehtitle",
-        report.home_name,
-        0,
-        curY
-    );
-    drawtitle(
-        "rgba(0, 0, 0, 0)",
-        "measureatitle",
-        report.away_name,
-        0,
-        curY
-    );
-    const htitle = Math.max(
-        $canvas.measureText("measurehtitle").height,
-        $canvas.measureText("measureatitle").height
-    );
-    hy += htitle;
-
-    drawfirst("rgba(0, 0, 0, 0)", "measurehfirst", hfstr, 0, curY);
-    drawfirst("rgba(0, 0, 0, 0)", "measureafirst", afstr, 0, curY);
-    if (report.include_lineup) {
-        const hf = Math.max(
-            $canvas.measureText("measurehfirst").height,
-            $canvas.measureText("measureafirst").height
-        ) / 2;
-        hy += Math.max(hf, 70) + hf;
-    }
-    hy += 80;
-    if (report.include_metadata) {
-        hy += 40;
-    }
-    if (report.include_qr_code) {
-        hy += 20;
-    }
-    if (penalty) {
-        hy += 80;
-    }
-
-    $canvas.attr("height", hy);
-    $canvas.drawRect({
-        layer: true,
-        name: "background",
-        fillStyle: "white",
-        x: 0,
-        y: 0,
-        width: 1600,
-        height: hy,
-        fromCenter: false
-    });
-
-    curY += htitle / 2;
-    drawtitle("#000", "homename", report.home_name, 400, curY);
-    drawtitle("#000", "awayname", report.away_name, 1200, curY);
-    curY += htitle / 2 + 20;
-    if (penalty) {
-        curY += 80;
-    }
-
-    drawcenter("simHei", 25, "normal", "subtitle", report.subtitle, curY);
-    curY += $canvas.measureText("subtitle").height + 15;
-    if (report.include_metadata) {
-        drawcenter(
-            "STFangsong",
-            22,
-            "normal",
-            "time_field",
-            report.metadata,
-            curY
-        );
-        curY += $canvas.measureText("time_field").height + 15;
-    }
-
-    if (report.include_lineup) {
-        drawfirst("#000", "homefirst", hfstr, 0, curY);
-        drawfirst("#000", "awayfirst", afstr, 1000, curY);
-        const firstheight = Math.max(
-            $canvas.measureText("homefirst").height,
-            $canvas.measureText("awayfirst").height
-        );
-        curY += firstheight / 2 - 10;
-        drawcenter(
-            "simHei",
-            38,
-            "normal",
-            "First",
-            report.squad_title,
-            curY
-        );
-        curY += Math.max(
-            $canvas.measureText("First").height + 30,
-            firstheight / 2
-        );
-    }
-
-    $canvas.drawImage({
-        layer: true,
-        name: "starticon",
-        source: images.start,
-        x: 800,
-        y: curY
-    });
-    curY += 30;
-    $canvas.drawArc({
-        layer: true,
-        name: "startpoint",
-        fillStyle: "black",
-        x: 800,
-        y: curY,
-        radius: 8
-    });
-    const startY = curY;
-    curY += 50;
-
-    let phg = 0;
-    let pag = 0;
-    for (const group of groups) {
-        const time = group.time;
-        const hside = group.home;
-        const aside = group.away;
-        let hrectwidth = 0;
-        let hrectheight = 10;
-        let arectwidth = 0;
-        let arectheight = 10;
-
-        if (hside.length !== 0) {
-            for (const event of hside) {
-                drawname(
-                    "rgba(0, 0, 0, 0)",
-                    "measure" + event.namestring,
-                    event.namestring,
-                    800,
-                    0
-                );
-                hrectwidth = Math.max(
-                    hrectwidth,
-                    $canvas.measureText("measure" + event.namestring).width
-                );
-                hrectheight += (
-                    $canvas.measureText("measure" + event.namestring).height
-                    + 10
-                );
-            }
-            hrectwidth += 100;
-        }
-        if (aside.length !== 0) {
-            for (const event of aside) {
-                drawname(
-                    "rgba(0, 0, 0, 0)",
-                    "measure" + event.namestring,
-                    event.namestring,
-                    800,
-                    0
-                );
-                arectwidth = Math.max(
-                    arectwidth,
-                    $canvas.measureText("measure" + event.namestring).width
-                );
-                arectheight += (
-                    $canvas.measureText("measure" + event.namestring).height
-                    + 10
-                );
-            }
-            arectwidth += 100;
-        }
-
-        let halfh = Math.max(hrectheight, arectheight) / 2 + 10;
-        if (hside.length === 0 && aside.length === 0) {
-            halfh = -20;
-        }
-        curY += halfh;
-
-        if (hside.length !== 0) {
-            drawline("htimeline" + time, 680, 800, curY);
-            drawtime(
-                "htime" + time,
-                hside[0].timestring,
-                740,
-                curY - 20
-            );
-            drawrect(
-                "hrect" + time,
-                680 - hrectwidth / 2,
-                curY,
-                hrectwidth,
-                hrectheight
-            );
-        }
-        if (aside.length !== 0) {
-            drawline("atimeline" + time, 800, 920, curY);
-            drawtime(
-                "atime" + time,
-                aside[0].timestring,
-                860,
-                curY - 20
-            );
-            drawrect(
-                "arect" + time,
-                920 + arectwidth / 2,
-                curY,
-                arectwidth,
-                arectheight
-            );
-        }
-
-        if (hside.length !== 0) {
-            let ey = curY - hrectheight / 2 + 10;
-            for (const event of hside) {
-                drawicon(
-                    "icon" + event.id,
-                    event,
-                    680 - hrectwidth + 20,
-                    ey
-                );
-                drawplayer(
-                    "name" + event.id,
-                    event.namestring,
-                    680 - hrectwidth + 70,
-                    ey
-                );
-                if (event.type === "PENALTY" &&
-                        event.during_penalty_shootout) {
-                    phg += 1;
-                }
-                ey += (
-                    $canvas.measureText("measure" + event.namestring).height
-                    + 10
-                );
-            }
-        }
-        if (aside.length !== 0) {
-            let ey = curY - arectheight / 2 + 10;
-            for (const event of aside) {
-                drawicon("icon" + event.id, event, 940, ey);
-                drawplayer(
-                    "name" + event.id,
-                    event.namestring,
-                    990,
-                    ey
-                );
-                if (event.type === "PENALTY" &&
-                        event.during_penalty_shootout) {
-                    pag += 1;
-                }
-                ey += (
-                    $canvas.measureText("measure" + event.namestring).height
-                    + 10
-                );
-            }
-        }
-        curY += halfh + 40;
-    }
-
-    if (penalty) {
-        const pscore = "(" + phg.toString() + ":" + pag.toString() + ")";
-        drawcenter(
-            "Trebuchet MS",
-            50,
-            "bold",
-            "pscore",
-            pscore,
-            htitle / 2 + 90
-        );
-    }
-
-    const score = (
-        report.home_score.toString()
-        + ":"
-        + report.away_score.toString()
-    );
-    drawcenter(
-        "Trebuchet MS",
-        60,
-        "bold",
-        "score",
-        score,
-        htitle / 2 + 20
-    );
-    $canvas.drawLine({
-        layer: true,
-        name: "timeline",
-        strokeStyle: "#000",
-        strokeWidth: 6,
-        rounded: true,
-        x1: 800,
-        y1: startY,
-        x2: 800,
-        y2: curY
-    });
-    $canvas.drawArc({
-        layer: true,
-        name: "endpoint",
-        fillStyle: "black",
-        x: 800,
-        y: curY,
-        radius: 8
-    });
-    curY += 20;
-    $canvas.drawImage({
-        layer: true,
-        name: "endicon",
-        source: images.end,
-        x: 800,
-        y: curY
-    });
-
-    curY += 40;
-    if (report.include_qr_code) {
-        curY += 20;
-    }
-
-    const legendItems = [
-        ["legend_goal", "goaltext", "进球"],
-        ["legend_penalty", "pgtext", "点球"],
-        ["legend_missed_penalty", "pmtext", "点球罚失"],
-        ["legend_own_goal", "ogtext", "乌龙球"]
-    ];
-    const measuredLegendItems = [];
-    for (const [imageName, textName, text] of legendItems) {
-        const measureName = "measure_" + textName;
-        $canvas.drawText({
-            layer: true,
-            name: measureName,
-            fillStyle: "rgba(0, 0, 0, 0)",
-            x: 0,
-            y: 0,
-            fontSize: 24,
-            fontFamily: "simHei",
-            text: text
-        });
-        const textWidth = $canvas.measureText(measureName).width;
-        const imageWidth = images[imageName].naturalWidth;
-        measuredLegendItems.push({
-            imageName: imageName,
-            textName: textName,
-            text: text,
-            imageWidth: imageWidth,
-            imageHeight: images[imageName].naturalHeight,
-            textWidth: textWidth,
-            width: imageWidth + 8 + textWidth
-        });
-    }
-    const legendWidth = measuredLegendItems.reduce(
-        (width, item) => width + item.width,
-        20 * (measuredLegendItems.length - 1)
-    );
-    let legendX = 800 - legendWidth / 2;
-    for (const item of measuredLegendItems) {
-        $canvas.drawImage({
-            layer: true,
-            name: item.imageName,
-            source: images[item.imageName],
-            x: legendX + item.imageWidth / 2,
-            y: curY
-        });
-        $canvas.drawText({
-            layer: true,
-            name: item.textName,
-            fillStyle: "#111",
-            x: legendX + item.imageWidth + 8 + item.textWidth / 2,
-            y: curY,
-            fontSize: 24,
-            fontFamily: "simHei",
-            text: item.text
-        });
-        legendX += item.width + 20;
-    }
-
-    if (report.include_qr_code) {
-        $canvas.drawImage({
-            layer: true,
-            name: "qrcode",
-            source: images.qr_code,
-            width: 140,
-            height: 140,
-            x: 1520,
-            y: curY - 50
-        });
-    }
-
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    document.getElementById("report-data").textContent =
-        document.getElementById("canvas").toDataURL("image/png");
-}
-
-renderReport().catch(error => {
-    document.getElementById("report-data").textContent =
-        "ERROR:" + String(error && error.message ? error.message : error);
-});
-</script>
-</body>
-</html>
-"""
-
-
-def _build_report_html(payload: Mapping[str, Any]) -> str:
-    import json
-
-    jquery_source, jcanvas_source = _report_script_sources()
-    serialized = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    encoded = base64.b64encode(serialized).decode("ascii")
-    return (
-        _REPORT_HTML.replace("__JQUERY_SOURCE__", jquery_source)
-        .replace("__JCANVAS_SOURCE__", jcanvas_source)
-        .replace("__PAYLOAD_BASE64__", encoded)
-    )
-
-
-def _configured_browser() -> Path | None:
-    configured = os.environ.get("THUFOOTBALL_CHROMIUM")
-    if not configured:
-        return None
-    candidate = Path(configured).expanduser()
-    if candidate.is_file():
-        return candidate.resolve()
-    resolved = shutil.which(configured)
-    if resolved:
-        return Path(resolved).resolve()
-    raise ConfigurationError(
-        "THUFOOTBALL_CHROMIUM does not identify a browser executable",
-        stage="configuration",
-    )
-
-
-def _find_browser() -> Path:
-    configured = _configured_browser()
-    if configured is not None:
-        return configured
-
-    candidates: list[Path] = []
-    for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
-        root = os.environ.get(variable)
-        if not root:
-            continue
-        candidates.extend(
-            (
-                Path(root) / "Microsoft/Edge/Application/msedge.exe",
-                Path(root) / "Google/Chrome/Application/chrome.exe",
-            )
-        )
-    candidates.extend(
-        (
-            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
-            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-        )
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.resolve()
-
-    for command in (
-        "msedge",
-        "microsoft-edge",
-        "google-chrome",
-        "google-chrome-stable",
-        "chromium",
-        "chromium-browser",
-    ):
-        resolved = shutil.which(command)
-        if resolved:
-            return Path(resolved).resolve()
-
-    raise ConfigurationError(
-        "pixel-exact report rendering requires Microsoft Edge or Chromium; "
-        "install one or set THUFOOTBALL_CHROMIUM",
-        stage="configuration",
-    )
-
-
-def _render_html_to_png(
-    html_source: str,
-    *,
-    game_id: int,
-) -> bytes:
-    browser = _find_browser()
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="thufootball-report-",
-            ignore_cleanup_errors=True,
-        ) as directory:
-            temporary = Path(directory)
-            html_path = temporary / "report.html"
-            profile_path = temporary / "browser-profile"
-            html_path.write_text(html_source, encoding="utf-8")
-            command = [str(browser)]
-            if os.name == "nt":
-                command.append("--edge-skip-compat-layer-relaunch")
-            command.extend(
-                [
-                    "--headless",
-                    "--hide-scrollbars",
-                    "--no-first-run",
-                    "--noerrdialogs",
-                    "--disable-extensions",
-                    "--disable-dev-shm-usage",
-                    f"--user-data-dir={profile_path}",
-                    "--virtual-time-budget=30000",
-                    "--dump-dom",
-                    html_path.resolve().as_uri(),
-                ]
-            )
-            run_options: dict[str, Any] = {}
-            if os.name == "nt":
-                run_options["creationflags"] = subprocess.CREATE_NO_WINDOW
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                timeout=60,
-                **run_options,
-            )
-    except subprocess.TimeoutExpired as exc:
-        raise InvalidResponse(
-            "browser report renderer timed out",
-            stage="report",
-            retryable=True,
-            game_id=game_id,
-        ) from exc
-    except OSError as exc:
-        raise ConfigurationError(
-            "could not start the browser report renderer",
-            stage="configuration",
-            game_id=game_id,
-        ) from exc
-
-    if completed.returncode != 0:
-        raise InvalidResponse(
-            "browser report renderer failed",
-            stage="report",
-            retryable=True,
-            game_id=game_id,
-        )
-
-    match = _REPORT_DATA_PATTERN.search(completed.stdout)
-    if match is None:
-        error_match = _REPORT_ERROR_PATTERN.search(completed.stdout)
-        message = "browser report renderer produced no PNG"
-        if error_match is not None:
-            detail = error_match.group(1).decode("utf-8", errors="replace")
-            message = f"browser report renderer failed: {detail}"
-        raise InvalidResponse(
-            message,
-            stage="report",
-            retryable=True,
-            game_id=game_id,
-        )
-    try:
-        return base64.b64decode(match.group(1), validate=True)
-    except ValueError as exc:
-        raise InvalidResponse(
-            "browser report renderer returned malformed PNG data",
-            stage="report",
-            game_id=game_id,
-        ) from exc
 
 
 def render_game_report(
@@ -1297,7 +415,7 @@ def render_game_report(
     qr_code: bytes | None = None,
     outcome_catalog: StaticOutcomeCatalog | None = None,
 ) -> tuple[bytes, int, int]:
-    """Run TAFA's jCanvas layout in Chromium and return its canvas PNG."""
+    """Draw the measured report with Pillow and return its RGB PNG."""
 
     settings = _validate_settings(settings)
     catalog = outcome_catalog or load_outcome_catalog()
@@ -1315,41 +433,12 @@ def render_game_report(
         qr_code=qr_code,
         outcome_catalog=catalog,
     )
-    png = _render_html_to_png(
-        _build_report_html(payload),
-        game_id=game_id,
-    )
-    try:
-        with Image.open(BytesIO(png)) as image:
-            image.load()
-            width, height = image.size
-            image_format = image.format
-            rendered = image.convert("RGB")
-    except (OSError, UnidentifiedImageError) as exc:
-        raise InvalidResponse(
-            "browser report renderer returned an unreadable image",
-            stage="report",
-            game_id=game_id,
-        ) from exc
-    if image_format != "PNG" or width != _REPORT_WIDTH:
-        raise InvalidResponse(
-            "browser report renderer returned unexpected image dimensions",
-            stage="report",
-            game_id=game_id,
-        )
-    output = BytesIO()
-    rendered.save(
-        output,
-        format="PNG",
-        optimize=True,
-        dpi=(96, 96),
-    )
-    return output.getvalue(), width, height
+    layout = measure_report(payload, assets, qr_code)
+    image = draw_report(layout)
+    return encode_report(image), image.width, image.height
 
 
-def _safe_filename(
-    detail: GameDetail, outcome_catalog: StaticOutcomeCatalog
-) -> str:
+def _safe_filename(detail: GameDetail, outcome_catalog: StaticOutcomeCatalog) -> str:
     game = detail.game
     score = (
         f"{game.home_score}-{game.away_score}"
@@ -1382,15 +471,18 @@ def _output_path(
 
 
 class THUFootballReportService:
-    """Read game data and save a PNG drawn by TAFA's browser canvas code."""
+    """Read game data and save a PNG drawn with Pillow."""
 
     def __init__(
         self,
         client: THUFootballClient,
         outcome_catalog: StaticOutcomeCatalog | None = None,
+        *,
+        qr_cache: GameQRCodeCache | None = None,
     ) -> None:
         self._client = client
         self._outcome_catalog = outcome_catalog
+        self._qr_cache = qr_cache
 
     @property
     def outcome_catalog(self) -> StaticOutcomeCatalog:
@@ -1399,25 +491,7 @@ class THUFootballReportService:
         return self._outcome_catalog
 
     async def _get_report_assets(self) -> Mapping[str, bytes]:
-        with _REPORT_ASSET_CACHE_LOCK:
-            if all(name in _REPORT_ASSET_CACHE for name in _WEBSITE_ASSET_NAMES):
-                return {
-                    name: _REPORT_ASSET_CACHE[name]
-                    for name in _WEBSITE_ASSET_NAMES
-                }
-
-        payloads = await asyncio.gather(
-            *(self._client.get_report_asset(name) for name in _WEBSITE_ASSET_NAMES)
-        )
-        with _REPORT_ASSET_CACHE_LOCK:
-            for name, payload in zip(
-                _WEBSITE_ASSET_NAMES, payloads, strict=True
-            ):
-                _REPORT_ASSET_CACHE.setdefault(name, payload)
-            return {
-                name: _REPORT_ASSET_CACHE[name]
-                for name in _WEBSITE_ASSET_NAMES
-            }
+        return await asyncio.to_thread(load_static_assets)
 
     async def load_game_detail(self, game_id: int) -> GameDetail:
         """Read the current unvalidated report input."""
@@ -1438,7 +512,7 @@ class THUFootballReportService:
         """Read and validate the current report input without rendering it."""
 
         detail = await self.load_game_detail(game_id)
-        return validate_game_events(detail)
+        return _validate_report_events(detail, self.outcome_catalog)
 
     async def render_game_detail(
         self,
@@ -1452,7 +526,9 @@ class THUFootballReportService:
         game_id = detail.game.game_id
         if settings.include_qr_code:
             qr_code, assets = await asyncio.gather(
-                self._client.get_game_page_code(game_id),
+                self._qr_cache.get(self._client, game_id)
+                if self._qr_cache is not None
+                else self._client.get_game_page_code(game_id),
                 self._get_report_assets(),
             )
         else:

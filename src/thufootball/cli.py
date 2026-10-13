@@ -268,7 +268,9 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(
             _jsonable(
                 {
-                    "status": "warning",
+                    "status": "warning"
+                    if any(issue.severity == "warning" for issue in result.warnings)
+                    else "info",
                     "game_id": result.game_id,
                     "warnings": result.warnings,
                 }

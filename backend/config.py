@@ -62,6 +62,7 @@ class WebsiteSettings:
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     log_level: str = "INFO"
+    qr_cache_root: Path = PROJECT_ROOT / "var" / "qrcodes"
 
     @classmethod
     def from_environment(

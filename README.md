@@ -39,6 +39,7 @@ Copy-Item .env.example .env
 | `WEBSITE_DEFAULT_COVER_MEDIA_ID` | 网站和 Auto Preview CLI 共用的永久封面素材 ID |
 | `WEBSITE_POSTGRES_*`、`WEBSITE_DATABASE_URL` | 本地 PostgreSQL |
 | `WEBSITE_COOKIE_SECRET` | 网站登录 Cookie 签名密钥，需使用随机长字符串 |
+| `THUFOOTBALL_FONT_DIR` | Pillow 战报字体目录，Windows 默认系统 Fonts；其他环境需配置，详见[战报文档](docs/thufootball/thufootball_report_download.md) |
 
 不要提交真实 `.env`。微信公众号接口还要求把运行机器的出口 IP 加入后台白名单。
 

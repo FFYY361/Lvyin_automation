@@ -32,6 +32,10 @@ from thufootball import (
     resolve_report_team_name,
 )
 from thufootball.rankings import load_outcome_catalog
+from thufootball.report_validation import (
+    format_report_issue,
+    report_has_blocking_issues,
+)
 from wechat_official import (
     Article,
     CoverFile,
@@ -206,30 +210,7 @@ def _report_warning_message(
     home_name: str,
     away_name: str,
 ) -> str:
-    team_name = {
-        "home": home_name,
-        "away": away_name,
-    }.get(issue.side)
-    time_text = ""
-    if issue.minute is not None:
-        stoppage = issue.stoppage_minute or 0
-        time_text = (
-            f"{issue.minute}+{stoppage}分钟"
-            if stoppage > 0
-            else f"{issue.minute}分钟"
-        )
-    subject = f"{team_name or f'比赛 {game_id}'}{time_text}"
-
-    if issue.code == "multiple_events_same_time":
-        return f"{subject}存在多个事件，请注意检查前后顺序是否正确"
-    if issue.code == "lineup_under_capacity":
-        return f"{team_name or f'比赛 {game_id}'}首发人数不足，请确认首发名单是否完整"
-    if issue.code == "invalid_event_ignored":
-        return f"{subject}有无效事件已被忽略，请检查原始比赛记录"
-    return (
-        f"{subject}存在需要检查的战报事件"
-        f"（{issue.code}），请核对原始比赛记录"
-    )
+    return format_report_issue(issue)
 
 
 class AutoReportPipeline:
@@ -315,7 +296,13 @@ class AutoReportPipeline:
             not isinstance(value, dict)
             or set(value) != {"status", "manifest_sha256"}
             or value.get("status")
-            not in {"ready", "no_games", "no_finished_games"}
+            not in {
+                "ready",
+                "no_games",
+                "no_finished_games",
+                "article_blocked",
+                "render_failed",
+            }
             or not isinstance(value.get("manifest_sha256"), str)
             or len(value["manifest_sha256"]) != 64
         ):
@@ -353,9 +340,7 @@ class AutoReportPipeline:
             )
         return value
 
-    def _artifact_path(
-        self, paths: _RunPaths, reference: str, *, kind: str
-    ) -> Path:
+    def _artifact_path(self, paths: _RunPaths, reference: str, *, kind: str) -> Path:
         relative = Path(reference)
         expected_suffix = ".png" if kind == "image" else ".txt"
         if (
@@ -423,8 +408,7 @@ class AutoReportPipeline:
         report_state = self._report_state(context.state)
         if not context.paths.report.is_file():
             raise ArtifactValidationError(
-                "run.json 已记录 report，但 report.json 缺失；"
-                "请使用 --override 重建",
+                "run.json 已记录 report，但 report.json 缺失；请使用 --override 重建",
                 stage="report-validation",
             )
         if sha256_file(context.paths.report) != report_state["manifest_sha256"]:
@@ -481,6 +465,8 @@ class AutoReportPipeline:
                 stage="report",
             )
         items: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        article_blocked = False
         skipped: list[dict[str, Any]] = []
         expected_files: set[Path] = set()
         outcome_catalog = getattr(football, "outcome_catalog", None)
@@ -504,75 +490,92 @@ class AutoReportPipeline:
                 )
                 continue
 
-            home_name = resolve_report_team_name(game, "home", outcome_catalog)
-            away_name = resolve_report_team_name(game, "away", outcome_catalog)
-            common = {
-                "game_id": game.game_id,
-                "tournament_id": game.tournament_id,
-                "kickoff_local": game.kickoff_local.isoformat(),
-                "home_name": home_name,
-                "away_name": away_name,
-            }
-            filename = (
-                f"{game.kickoff_local:%H%M}_{game.game_id}.png"
-            )
-            output = (context.paths.reports / filename).resolve()
-            expected_files.add(output)
-            context.logger.info(
-                "→ report 比赛 %s：%s vs %s",
-                game.game_id,
-                home_name,
-                away_name,
-            )
-            prepared = await football.get_prepared_game_report(game.game_id)
-            artifacts: list[dict[str, str]] = []
-            if prepared.render_image:
-                image, _width, _height = await football.render_game_detail(
-                    prepared.detail, settings=ReportSettings()
-                )
-                _atomic_write_bytes(output, image)
-                artifacts.append(
-                    {
-                        "kind": "image",
-                        "path": f"reports/{filename}",
-                        "sha256": sha256_file(output),
-                    }
-                )
-            else:
-                expected_files.remove(output)
-            if prepared.text is not None:
-                text_filename = f"{game.kickoff_local:%H%M}_{game.game_id}.txt"
-                text_output = (context.paths.reports / text_filename).resolve()
-                _atomic_write_bytes(text_output, prepared.text.encode("utf-8"))
-                expected_files.add(text_output)
-                artifacts.append(
-                    {
-                        "kind": "text",
-                        "path": f"reports/{text_filename}",
-                        "sha256": sha256_file(text_output),
-                    }
-                )
-            warnings = [asdict(warning) for warning in prepared.warnings]
-            for warning in prepared.warnings:
-                context.logger.warning(
-                    "⚠ %s",
-                    _report_warning_message(
-                        warning,
-                        game_id=game.game_id,
-                        home_name=home_name,
-                        away_name=away_name,
-                    ),
-                )
-            items.append(
-                {
-                    **common,
-                    "artifacts": artifacts,
-                    "warnings": warnings,
+            try:
+                home_name = resolve_report_team_name(game, "home", outcome_catalog)
+                away_name = resolve_report_team_name(game, "away", outcome_catalog)
+                common = {
+                    "game_id": game.game_id,
+                    "tournament_id": game.tournament_id,
+                    "kickoff_local": game.kickoff_local.isoformat(),
+                    "home_name": home_name,
+                    "away_name": away_name,
                 }
-            )
+                filename = f"{game.kickoff_local:%H%M}_{game.game_id}.png"
+                output = (context.paths.reports / filename).resolve()
+                expected_files.add(output)
+                context.logger.info(
+                    "→ report 比赛 %s：%s vs %s",
+                    game.game_id,
+                    home_name,
+                    away_name,
+                )
+                prepared = await football.get_prepared_game_report(game.game_id)
+                artifacts: list[dict[str, str]] = []
+                if prepared.render_image:
+                    image, _width, _height = await football.render_game_detail(
+                        prepared.detail, settings=ReportSettings()
+                    )
+                    _atomic_write_bytes(output, image)
+                    artifacts.append(
+                        {
+                            "kind": "image",
+                            "path": f"reports/{filename}",
+                            "sha256": sha256_file(output),
+                        }
+                    )
+                else:
+                    expected_files.remove(output)
+                if prepared.text is not None:
+                    text_filename = f"{game.kickoff_local:%H%M}_{game.game_id}.txt"
+                    text_output = (context.paths.reports / text_filename).resolve()
+                    _atomic_write_bytes(text_output, prepared.text.encode("utf-8"))
+                    expected_files.add(text_output)
+                    artifacts.append(
+                        {
+                            "kind": "text",
+                            "path": f"reports/{text_filename}",
+                            "sha256": sha256_file(text_output),
+                        }
+                    )
+                warnings = [asdict(warning) for warning in prepared.warnings]
+                article_blocked = article_blocked or report_has_blocking_issues(
+                    prepared.warnings
+                )
+                for warning in prepared.warnings:
+                    log = (
+                        context.logger.info
+                        if warning.severity == "info"
+                        else context.logger.warning
+                    )
+                    log(
+                        "[%s] %s\n%s",
+                        "信息" if warning.severity == "info" else "警告",
+                        warning.code,
+                        _report_warning_message(
+                            warning,
+                            game_id=game.game_id,
+                            home_name=home_name,
+                            away_name=away_name,
+                        ),
+                    )
+                items.append(
+                    {
+                        **common,
+                        "artifacts": artifacts,
+                        "warnings": warnings,
+                    }
+                )
+            except Exception as exc:
+                failures.append({"game_id": game.game_id, "message": str(exc)})
+                context.logger.error("比赛 %s 生成失败：%s", game.game_id, exc)
+                continue
 
         if not selected:
             status = "no_games"
+        elif failures:
+            status = "render_failed"
+        elif article_blocked:
+            status = "article_blocked"
         elif not items:
             status = "no_finished_games"
         else:
@@ -589,6 +592,7 @@ class AutoReportPipeline:
             "queried_at": queried_at,
             "items": items,
             "skipped_unfinished": skipped,
+            "failures": failures,
         }
         write_json(context.paths.report, manifest)
         if context.paths.reports.exists():
@@ -702,6 +706,14 @@ class AutoReportPipeline:
     def _prepare_article(self, context: _CombinationContext) -> Article:
         assert context.manifest is not None
         self._validate_manifest_artifacts(context, context.manifest)
+        if context.manifest["status"] != "ready" or report_has_blocking_issues(
+            GameEventIssue(**issue)
+            for item in context.manifest["items"]
+            for issue in item["warnings"]
+        ):
+            raise PipelineError(
+                "单场战报已保存，存在警告或失败，暂未生成批次文章", stage="article"
+            )
         desired_cover = context.request.cover or self._default_cover()
         input_sha256 = self._article_input_sha256(context, desired_cover)
         desired_cover_state = cover_descriptor(desired_cover)
@@ -715,8 +727,7 @@ class AutoReportPipeline:
                 and article_state["template_version"] == ARTICLE_TEMPLATE_VERSION
                 and article_state["cover"] == article_cover_descriptor(existing)
                 and article_state["cover"] == desired_cover_state
-                and existing.title
-                == ARTICLE_TITLES[context.request.competition]
+                and existing.title == ARTICLE_TITLES[context.request.competition]
                 and existing.author == ARTICLE_AUTHOR
                 and existing.digest == ARTICLE_DIGEST
             ):
@@ -725,10 +736,7 @@ class AutoReportPipeline:
                     self._display_path(context.paths.article),
                 )
                 return existing
-        elif (
-            context.state.get("article") is not None
-            and not context.request.override
-        ):
+        elif context.state.get("article") is not None and not context.request.override:
             self._article_state(context.state)
 
         if (
@@ -737,8 +745,7 @@ class AutoReportPipeline:
             and not context.request.override
         ):
             raise ArtifactValidationError(
-                "article 目录已存在但 run.json.article 缺失；"
-                "请使用 --override 重建",
+                "article 目录已存在但 run.json.article 缺失；请使用 --override 重建",
                 stage="article-validation",
             )
 
@@ -826,9 +833,7 @@ class AutoReportPipeline:
             )
         components = self._publication_components(contexts)
         fingerprint = publication_fingerprint(components)
-        histories = [
-            load_draft_history(context.paths.draft) for context in contexts
-        ]
+        histories = [load_draft_history(context.paths.draft) for context in contexts]
         matching = self._matching_batch_receipt(
             histories,
             fingerprint,
@@ -923,8 +928,7 @@ class AutoReportPipeline:
         batch_logger = contexts[0].logger
         if request.override:
             batch_logger.warning(
-                "⚠ --override 已启用：将重新查询并重做到 %s；"
-                "不会刷新服务端统计",
+                "⚠ --override 已启用：将重新查询并重做到 %s；不会刷新服务端统计",
                 request.stage.value,
             )
 
@@ -955,8 +959,7 @@ class AutoReportPipeline:
         ready_contexts = [
             context
             for context in contexts
-            if context.manifest is not None
-            and context.manifest["status"] == "ready"
+            if context.manifest is not None and context.manifest["status"] == "ready"
         ]
         batch_logger.info(
             "✓ [1/3] report 完成（%.2fs）：%s 个文章组合，%s 个 skipped",
@@ -994,8 +997,7 @@ class AutoReportPipeline:
 
         if request.stage is Stage.PUBLISH and len(ready_contexts) > 8:
             raise PipelineError(
-                "公众号多图文草稿最多包含 8 篇文章；"
-                "请缩小日期或赛事范围",
+                "公众号多图文草稿最多包含 8 篇文章；请缩小日期或赛事范围",
                 stage="publish-validation",
             )
 

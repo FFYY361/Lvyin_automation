@@ -51,7 +51,7 @@ ai_preview = [
   "prompt/competition_rules/*.md",
 ]
 thufootball = [
-  "assets/*.js",
+  "assets/*.png",
 ]
 
 [tool.ruff]

@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api, errorMessage, getReportDiagnostics } from "../api";
 import { useAuth } from "../auth";
 import { Alert, Badge, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
-import { ReportDiagnostics } from "../ReportDiagnostics";
+import { ReportDiagnostics, reportBatchFeedback } from "../ReportDiagnostics";
 import { competitionLabels, type Article, type Competition, type PreviewBatch, type ReportRenderDiagnostic } from "../types";
 import { formatDate, formatDateTime, teamName } from "../utils";
 
@@ -32,7 +32,7 @@ export function ReportsPage() {
   const [showUnfinished, setShowUnfinished] = useState(false);
   const [refreshing, setRefreshing] = useState<number | null>(null);
   const [rendering, setRendering] = useState<Set<number>>(() => new Set());
-  const [renderFeedback, setRenderFeedback] = useState<Record<number, { tone: "success" | "info" | "danger"; message: string; diagnostics: ReportRenderDiagnostic[] }>>({});
+  const [renderFeedback, setRenderFeedback] = useState<Record<number, { tone: "success" | "info" | "warning" | "danger"; message: string; diagnostics: ReportRenderDiagnostic[] }>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,11 +99,18 @@ export function ReportsPage() {
       }
       const result = await api<{ reused: boolean; article: Article; diagnostics: ReportRenderDiagnostic[] }>(`/api/batches/${batch.id}/render-report`, { method: "POST" });
       setRenderFeedback((current) => ({ ...current, [batch.id]: { tone: result.reused ? "info" : "success", message: result.reused ? "内容没有变化，已复用当前战报文章。" : "战报文章渲染成功。", diagnostics: result.diagnostics } }));
-      await load(true);
     } catch (value) {
       const diagnostics = getReportDiagnostics(value);
-      setRenderFeedback((current) => ({ ...current, [batch.id]: { tone: "danger", message: diagnostics.length ? "战报文章渲染失败，请查看逐场诊断。" : `战报文章渲染失败：${errorMessage(value)}`, diagnostics } }));
+      const feedback = diagnostics.length ? reportBatchFeedback(diagnostics) : { tone: "danger" as const, message: `战报文章渲染失败：${errorMessage(value)}` };
+      setRenderFeedback((current) => ({ ...current, [batch.id]: { ...feedback, diagnostics } }));
     } finally {
+      try {
+        const detail = await api<PreviewBatch>(`/api/batches/${batch.id}`);
+        setDetails((current) => ({ ...current, [batch.id]: detail }));
+        await load(true);
+      } catch (value) {
+        setError(`读取渲染后的比赛状态失败：${errorMessage(value)}`);
+      }
       setRendering((current) => {
         const next = new Set(current);
         next.delete(batch.id);

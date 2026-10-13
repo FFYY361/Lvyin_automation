@@ -4,7 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, errorMessage, getReportDiagnostics } from "../api";
 import { useAuth } from "../auth";
 import { Alert, Badge, Button, EmptyState, LoadingScreen, PageHeader, Panel, SectionTitle } from "../components";
-import { ReportDiagnostics } from "../ReportDiagnostics";
+import { ReportDiagnostics, reportBatchFeedback } from "../ReportDiagnostics";
 import { competitionLabels, labelMissingField, type Article, type PreviewBatch, type PreviewMatch, type ReportRenderDiagnostic } from "../types";
 import { formatDateTime } from "../utils";
 
@@ -18,6 +18,7 @@ export function PreviewPage({ articleType = "preview" }: { articleType?: "previe
   const [rendering, setRendering] = useState(false);
   const [reused, setReused] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorTone, setErrorTone] = useState<"danger" | "warning">("danger");
   const [diagnostics, setDiagnostics] = useState<ReportRenderDiagnostic[]>([]);
 
   const load = useCallback(async (silent = false) => {
@@ -43,11 +44,19 @@ export function PreviewPage({ articleType = "preview" }: { articleType?: "previe
   }, [articleType, load]);
 
   const render = async () => {
-    setRendering(true); setError(null); setDiagnostics([]);
+    setRendering(true); setError(null); setErrorTone("danger"); setReused(null); setDiagnostics([]);
     try {
       const value = await api<{ reused: boolean; article: Article; diagnostics?: ReportRenderDiagnostic[] }>(`/api/batches/${batchId}/render-${articleType}`, { method: "POST" });
       setArticle(value.article); setReused(value.reused); setDiagnostics(value.diagnostics ?? []); await load();
-    } catch (value) { setError(errorMessage(value)); setDiagnostics(getReportDiagnostics(value)); } finally { setRendering(false); }
+    } catch (value) {
+      const issues = getReportDiagnostics(value);
+      setDiagnostics(issues);
+      if (issues.length) {
+        const feedback = reportBatchFeedback(issues);
+        setError(feedback.message); setErrorTone(feedback.tone);
+      } else { setError(errorMessage(value)); setErrorTone("danger"); }
+      await load(true);
+    } finally { setRendering(false); }
   };
 
   if (loading && !batch) return <LoadingScreen label="正在读取文章" />;
@@ -62,7 +71,7 @@ export function PreviewPage({ articleType = "preview" }: { articleType?: "previe
   return (
     <>
       <PageHeader eyebrow={articleType === "preview" ? "前瞻文章" : "战报文章"} title={batch ? `${competitionLabels[batch.competition]} · ${batch.batch_date}` : "文章预览"} description={articleType === "preview" ? "文章随批次内容自动更新，可直接查看最新排版。" : isAdmin ? "渲染结果保留为不可变记录，内容变化后需要重新渲染。" : "查看管理员最近一次渲染的文章记录。"} actions={<><Link className="button button--quiet" to={articleType === "preview" ? `/previews/${batchId}` : "/reports"}><ArrowLeft size={16} />返回{articleType === "preview" ? "批次" : "战报列表"}</Link>{isAdmin && articleType === "report" ? <Button variant="primary" loading={rendering} onClick={() => void render()}><RefreshCw size={16} />{article ? "重新渲染" : "渲染文章"}</Button> : null}</>} />
-      {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
+      {error ? <Alert tone={errorTone} onDismiss={() => setError(null)}>{error}</Alert> : null}
       {reused !== null ? <Alert tone={reused ? "info" : "success"}>{reused ? "内容没有变化，已复用当前渲染记录。" : "已生成新的渲染记录。"}</Alert> : null}
       {articleType === "report" ? <ReportDiagnostics diagnostics={diagnostics} matches={batch?.matches ?? []} /> : null}
       {stale ? <Alert tone="warning"><strong>当前数据已发生变化，文章已过期。</strong><span>{isAdmin ? "以下为最近一次渲染结果，请重新渲染后再用于发布。" : "以下仍是最近一次渲染结果，请等待管理员重新渲染。"}</span></Alert> : null}

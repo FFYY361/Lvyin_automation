@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from typing import Literal
 
-from .errors import ReportValidationError
 from .models import GameDetail, GameEvent, GameEventIssue
 
 _LINEUP_EVENTS = frozenset({"START", "APPEARANCE"})
@@ -26,8 +26,41 @@ _Side = Literal["home", "away"]
 _TimeKey = tuple[_Side, bool, int | None, int]
 
 
+def _player_label(event: GameEvent) -> str:
+    name = event.player_name.strip()
+    if event.kit_number >= 0:
+        return f"{event.kit_number}号{name or '球员'}"
+    return name or "未填写姓名的球员"
+
+
+def _event_label(event: GameEvent) -> str:
+    return {
+        "START": "首发",
+        "APPEARANCE": "出场",
+        "GOAL": "进球",
+        "OWNGOAL": "乌龙球",
+        "PENALTY": "点球",
+        "MISSPENALTY": "点球罚失",
+        "ON": "上场",
+        "OFF": "下场",
+        "YELLOWCARD": "黄牌",
+        "SECONDYELLOWCARD": "第二张黄牌",
+        "REDCARD": "红牌",
+    }.get(event.event_type.upper(), "未知事件")
+
+
+def report_has_blocking_issues(issues: Iterable[GameEventIssue]) -> bool:
+    return any(issue.severity in {"warning", "error"} for issue in issues)
+
+
+def format_report_issue(issue: GameEventIssue) -> str:
+    return " · ".join(
+        value for value in (issue.team_name, issue.time_label, issue.message) if value
+    )
+
+
 def _issue(
-    severity: Literal["warning", "error"],
+    severity: Literal["info", "warning"],
     code: str,
     message: str,
     *,
@@ -40,20 +73,34 @@ def _issue(
     infer_time_from_event: bool = True,
 ) -> GameEventIssue:
     first = events[0] if events else None
+    time_label = None
+    if code in {"duplicate_start", "lineup_under_capacity", "lineup_over_capacity"}:
+        time_label = "0 分钟"
+    elif first and first.during_penalty_shootout:
+        time_label = "点球大战"
+    elif first and first.minute is not None:
+        time_label = (
+            f"{first.minute}+{first.stoppage_minute} 分钟"
+            if first.stoppage_minute
+            else f"{first.minute} 分钟"
+        )
     return GameEventIssue(
         severity=severity,
+        time_label=time_label,
         code=code,
         message=message,
         event_ids=tuple(event.event_id for event in events),
-        player_id=player_id if not infer_player_from_event else (
+        player_id=player_id
+        if not infer_player_from_event
+        else (
             player_id
             if player_id is not None
             else (first.player_id if first is not None else None)
         ),
-        side=side if side is not None else (
-            first.side if first is not None else None
-        ),
-        minute=minute if not infer_time_from_event else (
+        side=side if side is not None else (first.side if first is not None else None),
+        minute=minute
+        if not infer_time_from_event
+        else (
             minute
             if minute is not None
             else (first.minute if first is not None else None)
@@ -86,14 +133,6 @@ def _filter_events(
     retained: list[GameEvent] = []
     for event in detail.events:
         if not event.valid:
-            issues.append(
-                _issue(
-                    "warning",
-                    "invalid_event_ignored",
-                    "Invalid event was ignored before report validation.",
-                    events=(event,),
-                )
-            )
             continue
         if event.event_type.upper() == "ASSIST":
             continue
@@ -117,9 +156,9 @@ def _initial_lineups(
         if previous is not None:
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "duplicate_start",
-                    "Player appears in more than one START event.",
+                    f"球员 {_player_label(event)}在首发中重复出现",
                     events=(previous, event),
                     player_id=event.player_id,
                     side=event.side,
@@ -138,12 +177,9 @@ def _initial_lineups(
         if player_count < detail.players_per_side:
             issues.append(
                 _issue(
-                    "warning",
+                    "info",
                     "lineup_under_capacity",
-                    (
-                        f"{side} has {player_count} START players; "
-                        f"expected {detail.players_per_side}."
-                    ),
+                    (f"仅{player_count}人首发，预期{detail.players_per_side}人"),
                     events=tuple(side_events),
                     side=side,
                     minute=None,
@@ -152,18 +188,12 @@ def _initial_lineups(
                     infer_time_from_event=False,
                 )
             )
-        elif (
-            player_count > detail.players_per_side
-            and detail.players_per_side != 5
-        ):
+        elif player_count > detail.players_per_side and detail.players_per_side != 5:
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "lineup_over_capacity",
-                    (
-                        f"{side} has {player_count} START players; "
-                        f"expected {detail.players_per_side}."
-                    ),
+                    f"首发共有{player_count}人，超过规定的{detail.players_per_side}人",
                     events=tuple(side_events),
                     side=side,
                     minute=None,
@@ -198,9 +228,9 @@ def _check_same_time_events(
         if semantic_event_count > 1:
             issues.append(
                 _issue(
-                    "warning",
+                    "info",
                     "multiple_events_same_time",
-                    "Team has multiple semantic events at the same time.",
+                    "该时间出现多个事件，请确认先后顺序正确",
                     events=tuple(grouped_events),
                     side=side,
                     minute=minute,
@@ -230,11 +260,10 @@ def _check_substitution_shapes(
             invalid_groups.add(group_key)
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "substitution_unbalanced",
                     (
-                        "Substitution must contain the same number of "
-                        "OFF and ON events."
+                        f"该时间有{off_count}人下场、{on_count}人上场，人数不一致，请核对换人记录"
                     ),
                     events=tuple(grouped_events),
                     side=side,
@@ -245,17 +274,20 @@ def _check_substitution_shapes(
                 )
             )
         first_on = next(
-            (index for index, event_type in enumerate(event_types)
-             if event_type == "ON"),
+            (
+                index
+                for index, event_type in enumerate(event_types)
+                if event_type == "ON"
+            ),
             len(event_types),
         )
         if "OFF" in event_types[first_on:]:
             invalid_groups.add(group_key)
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "substitution_order",
-                    "All OFF events must precede all ON events.",
+                    "该时间的上场事件之后仍有下场事件，请调整为先下场、后上场",
                     events=tuple(grouped_events),
                     side=side,
                     minute=minute,
@@ -286,15 +318,12 @@ def _check_event_state(
     for event in events:
         event_type = event.event_type.upper()
 
-        if (
-            event.during_penalty_shootout
-            and event_type not in _PENALTY_SHOOTOUT_EVENTS
-        ):
+        if event.during_penalty_shootout and event_type not in _PENALTY_SHOOTOUT_EVENTS:
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "invalid_penalty_shootout_event",
-                    "Event type is not allowed during a penalty shootout.",
+                    f"点球大战中出现“{_event_label(event)}”记录，请核对事件",
                     events=(event,),
                 )
             )
@@ -303,9 +332,9 @@ def _check_event_state(
         if was_dismissed:
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "dismissed_player_event",
-                    "Dismissed player has a later event.",
+                    f"球员 {_player_label(event)}被罚下后仍有“{_event_label(event)}”记录，请核对事件",
                     events=(event,),
                 )
             )
@@ -318,9 +347,9 @@ def _check_event_state(
             if yellow_counts[event.player_id] > 2:
                 issues.append(
                     _issue(
-                        "error",
+                        "warning",
                         "too_many_yellow_cards",
-                        "Player has more than two yellow cards.",
+                        f"球员 {_player_label(event)}累计有{yellow_counts[event.player_id]}张黄牌，超过2张，请核对事件",
                         events=(event,),
                     )
                 )
@@ -334,11 +363,10 @@ def _check_event_state(
             if previous_count != 1:
                 issues.append(
                     _issue(
-                        "error",
+                        "warning",
                         "invalid_second_yellow",
                         (
-                            "SECONDYELLOWCARD requires exactly one prior "
-                            "yellow card."
+                            f"球员 {_player_label(event)}有第二张黄牌记录，但此前黄牌数量为{previous_count}，预期1张"
                         ),
                         events=(event,),
                     )
@@ -347,9 +375,9 @@ def _check_event_state(
             if yellow_counts[event.player_id] > 2:
                 issues.append(
                     _issue(
-                        "error",
+                        "warning",
                         "too_many_yellow_cards",
-                        "Player has more than two yellow cards.",
+                        f"球员 {_player_label(event)}累计有{yellow_counts[event.player_id]}张黄牌，超过2张，请核对事件",
                         events=(event,),
                     )
                 )
@@ -363,9 +391,9 @@ def _check_event_state(
             if red_counts[event.player_id] > 1:
                 issues.append(
                     _issue(
-                        "error",
+                        "warning",
                         "too_many_red_cards",
-                        "Player has more than one red card.",
+                        f"球员 {_player_label(event)}累计有{red_counts[event.player_id]}张红牌，请核对事件",
                         events=(event,),
                     )
                 )
@@ -387,9 +415,9 @@ def _check_event_state(
                 if event.player_id not in on_field[event.side]:
                     issues.append(
                         _issue(
-                            "error",
+                            "warning",
                             "off_player_not_on_field",
-                            "OFF player is not currently on the field.",
+                            f"球员 {_player_label(event)}不在场上，却有下场记录，请核对首发和换人记录",
                             events=(event,),
                         )
                     )
@@ -399,9 +427,9 @@ def _check_event_state(
             elif event.player_id in on_field[event.side]:
                 issues.append(
                     _issue(
-                        "error",
+                        "warning",
                         "on_player_already_on_field",
-                        "ON player is already on the field.",
+                        f"球员 {_player_label(event)}已在场上，却再次上场，请核对换人记录",
                         events=(event,),
                     )
                 )
@@ -418,9 +446,9 @@ def _check_event_state(
         ):
             issues.append(
                 _issue(
-                    "error",
+                    "warning",
                     "scoring_player_not_on_field",
-                    "Scoring event player is not currently on the field.",
+                    f"球员 {_player_label(event)}不在场上，却有“{_event_label(event)}”记录，请核对事件",
                     events=(event,),
                 )
             )
@@ -429,7 +457,7 @@ def _check_event_state(
 def validate_game_events(
     detail: GameDetail,
 ) -> tuple[GameDetail, tuple[GameEventIssue, ...]]:
-    """Return a filtered detail and warnings, or raise all validation issues."""
+    """Return filtered events and non-blocking single-report diagnostics."""
 
     issues: list[GameEventIssue] = []
     events = _filter_events(detail, issues)
@@ -440,6 +468,4 @@ def validate_game_events(
     _check_event_state(events, on_field, invalid_substitution_groups, issues)
 
     all_issues = tuple(issues)
-    if any(issue.severity == "error" for issue in all_issues):
-        raise ReportValidationError(all_issues, game_id=detail.game.game_id)
     return filtered_detail, all_issues

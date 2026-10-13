@@ -38,7 +38,7 @@ WEBSITE_ALLOWED_HOSTS=media.thufootball.tech,127.0.0.1,localhost
 WEBSITE_DOCS_ENABLED=false
 WEBSITE_COOKIE_SECURE=true
 WEBSITE_INVITE_CODE=请替换为8到128字符的私密邀请码
-THUFOOTBALL_CHROMIUM=/usr/bin/google-chrome-stable
+THUFOOTBALL_FONT_DIR=/home/xfy/lvyin_media/fonts
 ```
 
 FastAPI 计划只监听 `127.0.0.1:3001` 且使用单 worker；PostgreSQL 计划只监听
@@ -56,5 +56,9 @@ FastAPI 计划只监听 `127.0.0.1:3001` 且使用单 worker；PostgreSQL 计划
 - 在真实 Linux 环境完成 Shell、依赖安装和启停流程验证；这些验证不属于本阶段。
 - 根据首次部署经验再决定是否编写自动发布、回滚、制品校验和依赖锁工具。
 
-暂不实施 PWA。Ubuntu 20.04 升级、Apache、证书和系统 Chrome 由服务器管理员负责。
+战报使用 Pillow，不需要系统 Chrome。上述字体目录需自行提供
+`simhei.ttf`、`NotoSansSC-VF.ttf`、`trebuc.ttf`、`trebucbd.ttf`、`STFANGSO.TTF`，
+详见战报下载文档。
+
+暂不实施 PWA。Ubuntu 20.04 升级、Apache 和证书由服务器管理员负责。
 

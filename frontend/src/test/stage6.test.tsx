@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { AuthProvider } from "../auth";
 import { ReportsPage } from "../pages/ReportsPage";
 import { BatchesPage } from "../pages/BatchesPage";
-import { ReportDiagnostics } from "../ReportDiagnostics";
+import { ReportDiagnostics, reportBatchFeedback } from "../ReportDiagnostics";
 import type { PreviewBatch, PreviewMatch, ReportRenderDiagnostic, User } from "../types";
 
 const admin: User = {
@@ -78,18 +78,26 @@ afterEach(() => {
 });
 
 describe("stage 6 report batches", () => {
-  it("groups concrete report errors and warnings by match", () => {
+  it("summarizes warning matches and technical failures separately", () => {
+    const issue = { severity: "warning", code: "duplicate_start", message: "球员 8号张三在首发中重复出现", event_ids: [11], player_id: 99, side: "home", minute: 0, stoppage_minute: 0 } as const;
     const diagnostics: ReportRenderDiagnostic[] = [
-      { game_id: 101, status: "failed", reused: null, error: { code: "report_event_validation_failed", message: "validation failed" }, issues: [{ severity: "error", code: "duplicate_start", message: "Player appears in more than one START event.", event_ids: [11, 12], player_id: 99, side: "home", minute: 0, stoppage_minute: 0 }] },
-      { game_id: 102, status: "success", reused: false, error: null, issues: [{ severity: "warning", code: "lineup_under_capacity", message: "away has 10 START players; expected 11.", event_ids: [], player_id: null, side: "away", minute: null, stoppage_minute: null }] },
+      { game_id: 101, status: "success", reused: true, error: null, issues: [{ ...issue, event_ids: [11] }, { ...issue, event_ids: [12] }] },
+    ];
+    expect(reportBatchFeedback(diagnostics)).toEqual({ tone: "warning", message: "单场战报已生成并保存；有1场比赛需要核对，暂未生成批次文章。" });
+    diagnostics.push({ game_id: 102, status: "failed", reused: null, issues: [], error: { code: "report_query_failed", message: "query unavailable" } });
+    expect(reportBatchFeedback(diagnostics)).toEqual({ tone: "danger", message: "单场战报已生成并保存；有1场比赛需要核对，有1场比赛生成失败，暂未生成批次文章。" });
+  });
+  it("shows compact Chinese business diagnostics without database identifiers", () => {
+    const diagnostics: ReportRenderDiagnostic[] = [
+      { game_id: 101, status: "success", reused: false, error: null, issues: [{ severity: "warning", code: "duplicate_start", message: "球员 8号张三在首发中重复出现", team_name: "环境", time_label: "0 分钟", event_ids: [11, 12], player_id: 99, side: "home", minute: 0, stoppage_minute: 0 }] },
+      { game_id: 102, status: "success", reused: false, error: null, issues: [{ severity: "info", code: "lineup_under_capacity", message: "仅10人首发，预期11人", team_name: "行健", time_label: "0 分钟", event_ids: [], player_id: null, side: "away", minute: null, stoppage_minute: null }] },
     ];
     render(<ReportDiagnostics diagnostics={diagnostics} matches={detail.matches} />);
-
-    expect(screen.getByText("环境 vs 探微")).toBeInTheDocument();
-    expect(screen.getByText("球员重复出现在首发事件中")).toBeInTheDocument();
-    expect(screen.getByText(/球员 #99 · 事件 #11、#12/)).toBeInTheDocument();
-    expect(screen.getByText("环境 vs 行健")).toBeInTheDocument();
-    expect(screen.getByText("首发人数不足")).toBeInTheDocument();
+    expect(screen.getByText("[警告] duplicate_start")).toBeInTheDocument();
+    expect(screen.getByText("环境 · 0 分钟 · 球员 8号张三在首发中重复出现")).toBeInTheDocument();
+    expect(screen.getByText("[信息] lineup_under_capacity")).toBeInTheDocument();
+    expect(screen.getByText("行健 · 0 分钟 · 仅10人首发，预期11人")).toBeInTheDocument();
+    expect(screen.queryByText(/球员 #99|事件 #11|渲染失败/)).not.toBeInTheDocument();
   });
 
   it("expands from stored data and hides unfinished matches by default", async () => {
@@ -115,7 +123,7 @@ describe("stage 6 report batches", () => {
   });
 
   it("renders a report article from the batch row and shows match warnings", async () => {
-    const warning = { severity: "warning", code: "lineup_under_capacity", message: "home has 10 START players; expected 11.", event_ids: [], player_id: null, side: "home", minute: null, stoppage_minute: null } as const;
+    const warning = { severity: "info", code: "lineup_under_capacity", message: "仅10人首发，预期11人", team_name: "环境", time_label: "0 分钟", event_ids: [], player_id: null, side: "home", minute: null, stoppage_minute: null } as const;
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (init?.method === "POST" && path.endsWith("/render-report")) return Promise.resolve(json({ reused: false, article: {}, diagnostics: [{ game_id: 101, status: "success", reused: false, issues: [warning], error: null }] }));
@@ -127,8 +135,7 @@ describe("stage 6 report batches", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "渲染文章" }));
     expect(await screen.findByText("战报文章渲染成功。")).toBeInTheDocument();
-    expect(screen.getByText("环境 vs 探微")).toBeInTheDocument();
-    expect(screen.getByText("首发人数不足")).toBeInTheDocument();
+    expect(screen.getByText("环境 · 0 分钟 · 仅10人首发，预期11人")).toBeInTheDocument();
   });
 
   it("keeps report batch loading states independent", async () => {
@@ -157,6 +164,34 @@ describe("stage 6 report batches", () => {
 
     await act(async () => secondRender.resolve(json({ reused: false, article: {}, diagnostics: [] })));
     await waitFor(() => expect(buttons[1]).not.toBeDisabled());
+  });
+
+  it.each([true, false])("updates expanded match reports after batch rendering (success=%s)", async (success) => {
+    let rendered = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (init?.method === "POST") {
+        rendered = true;
+        return Promise.resolve(new Response(JSON.stringify(success
+          ? { reused: false, article: {}, diagnostics: [] }
+          : { detail: { code: "report_render_failed", message: "another match failed" } }),
+        { status: success ? 200 : 502, headers: { "Content-Type": "application/json" } }));
+      }
+      if (path.endsWith("/api/batches/7")) return Promise.resolve(json({ ...detail,
+        matches: detail.matches?.map((item) => ({ ...item, report: { ...item.report, available: rendered } })),
+      }));
+      return Promise.resolve(json({ items: [{ ...detail, matches: [] }] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createMemoryRouter([{ path: "/reports", element: <ReportsPage /> }], { initialEntries: ["/reports"] });
+    render(<AuthProvider initialUser={admin}><RouterProvider router={router} /></AuthProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: /8月8日/ }));
+    expect(await screen.findByText("尚未生成战报")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "渲染文章" }));
+    expect(await screen.findByText("战报已生成")).toBeInTheDocument();
+    expect(screen.queryByText("尚未生成战报")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("refresh-data"))).toBe(false);
   });
 
 });

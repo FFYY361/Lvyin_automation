@@ -23,6 +23,7 @@ from auto_report.service import (
     DEFAULT_REPORT_COVER_MEDIA_ID,
     _report_warning_message,
 )
+from auto_report.state import sha256_file
 from test.season_scope import legacy_scope  # noqa: F401
 from thufootball import (
     GameDetail,
@@ -100,11 +101,19 @@ class FakeFootball:
             for game in games:
                 identities.setdefault(game.home_team_name, set()).add(game.home_team_id)
                 identities.setdefault(game.away_team_name, set()).add(game.away_team_id)
-        self.outcome_catalog = build_outcome_catalog([
-            {"name": name, "short_name": name, "male_team_ids": sorted(ids),
-             "female_team_ids": sorted(ids), "futsal_team_ids": sorted(ids)}
-            for name, ids in identities.items()
-        ], [])
+        self.outcome_catalog = build_outcome_catalog(
+            [
+                {
+                    "name": name,
+                    "short_name": name,
+                    "male_team_ids": sorted(ids),
+                    "female_team_ids": sorted(ids),
+                    "futsal_team_ids": sorted(ids),
+                }
+                for name, ids in identities.items()
+            ],
+            [],
+        )
         self.warning_game_ids = warning_game_ids or set()
         self.mixed_game_ids = mixed_game_ids or set()
         self.queries: list[GameQuery] = []
@@ -153,9 +162,10 @@ class FakeFootball:
                 detail=rendered,
                 warnings=(
                     GameEventIssue(
-                        severity="warning",
+                        severity="info",
                         code="abandon_with_events_awarded_loss",
-                        message="B弃赛但仍有事件，视为B被判负",
+                        message="该队弃赛但仍有比赛事件，按判负处理并生成战报",
+                        team_name="B",
                         side="away",
                     ),
                 ),
@@ -167,9 +177,11 @@ class FakeFootball:
         warnings = (
             (
                 GameEventIssue(
-                    severity="warning",
+                    severity="info",
                     code="lineup_under_capacity",
-                    message="under capacity",
+                    message="仅10人首发，预期11人",
+                    team_name="A",
+                    time_label="0 分钟",
                     side="home",
                 ),
             )
@@ -219,9 +231,11 @@ class FakeFootball:
         warnings = (
             (
                 GameEventIssue(
-                    severity="warning",
+                    severity="info",
                     code="lineup_under_capacity",
-                    message="under capacity",
+                    message="仅10人首发，预期11人",
+                    team_name="A",
+                    time_label="0 分钟",
                     side="home",
                 ),
             )
@@ -316,9 +330,7 @@ def test_request_deduplicates_and_sorts_cartesian_product() -> None:
 
 def test_cli_defaults_to_article_and_cover_options_are_mutually_exclusive() -> None:
     parser = _parser()
-    args = parser.parse_args(
-        ["--dates", "2026-04-11", "--competitions", "male"]
-    )
+    args = parser.parse_args(["--dates", "2026-04-11", "--competitions", "male"])
     assert args.stage is Stage.ARTICLE
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -337,21 +349,26 @@ def test_cli_defaults_to_article_and_cover_options_are_mutually_exclusive() -> N
 
 def test_report_warning_message_uses_team_name_and_friendly_time() -> None:
     warning = GameEventIssue(
-        severity="warning",
+        severity="info",
         code="multiple_events_same_time",
-        message="Team has multiple semantic events at the same time.",
+        message="该时间出现多个事件，请确认先后顺序正确",
+        team_name="新雅",
+        time_label="96 分钟",
         event_ids=(139609, 139610, 139611),
         side="away",
         minute=96,
         stoppage_minute=0,
     )
 
-    assert _report_warning_message(
-        warning,
-        game_id=4237,
-        home_name="A",
-        away_name="新雅书院",
-    ) == "新雅书院96分钟存在多个事件，请注意检查前后顺序是否正确"
+    assert (
+        _report_warning_message(
+            warning,
+            game_id=4237,
+            home_name="A",
+            away_name="新雅书院",
+        )
+        == "新雅 · 96 分钟 · 该时间出现多个事件，请确认先后顺序正确"
+    )
 
 
 @_async_test
@@ -416,9 +433,9 @@ async def test_report_queries_each_competition_once_and_caches_skips(
     )
     abandon_artifact = abandon_manifest["items"][0]["artifacts"][0]
     assert abandon_artifact["kind"] == "text"
-    assert (
-        result.runs[2].run_directory / abandon_artifact["path"]
-    ).read_text(encoding="utf-8") == "AvsB的比赛，由于A弃赛，记为A 0:3 B。"
+    assert (result.runs[2].run_directory / abandon_artifact["path"]).read_text(
+        encoding="utf-8"
+    ) == "AvsB的比赛，由于A弃赛，记为A 0:3 B。"
     assert result.runs[1].reason == "no_games"
     assert result.runs[3].reason == "no_games"
 
@@ -437,11 +454,7 @@ async def test_override_requeries_replaces_reports_and_never_refreshes_stats(
     tmp_path: Path,
 ) -> None:
     first = FakeFootball(
-        {
-            (122, 124, 126): [
-                _game(10, datetime(2026, 4, 11, 9, tzinfo=UTC))
-            ]
-        }
+        {(122, 124, 126): [_game(10, datetime(2026, 4, 11, 9, tzinfo=UTC))]}
     )
     request = PipelineRequest(
         report_dates=(date(2026, 4, 11),),
@@ -455,11 +468,7 @@ async def test_override_requeries_replaces_reports_and_never_refreshes_stats(
     ).run(request)
 
     second = FakeFootball(
-        {
-            (122, 124, 126): [
-                _game(11, datetime(2026, 4, 11, 10, tzinfo=UTC))
-            ]
-        }
+        {(122, 124, 126): [_game(11, datetime(2026, 4, 11, 10, tzinfo=UTC))]}
     )
     await AutoReportPipeline(
         project_root=tmp_path,
@@ -474,9 +483,7 @@ async def test_override_requeries_replaces_reports_and_never_refreshes_stats(
         )
     )
 
-    report_dir = (
-        tmp_path / "runs" / "auto_report" / "2026-04-11_male" / "reports"
-    )
+    report_dir = tmp_path / "runs" / "auto_report" / "2026-04-11_male" / "reports"
     assert [path.name for path in report_dir.glob("*.png")] == ["1000_11.png"]
     assert second.reports[0]["refresh_stats"] is False
     article_dir = report_dir.parent / "article"
@@ -576,17 +583,15 @@ async def test_awarded_loss_with_events_writes_png_then_text(tmp_path: Path) -> 
     assert [path.suffix for path in result.report_files] == [".png", ".txt"]
     article = Article.load(result.article_directory)
     text = "AvsB的比赛，由于B被判负，记为A 3:0 B。"
-    assert article.body_html.index("data:image/png;base64,") < article.body_html.index(text)
+    assert article.body_html.index("data:image/png;base64,") < article.body_html.index(
+        text
+    )
 
 
 @_async_test
 async def test_corrupt_report_image_requires_override(tmp_path: Path) -> None:
     football = FakeFootball(
-        {
-            (122, 124, 126): [
-                _game(30, datetime(2026, 4, 11, 9, tzinfo=UTC))
-            ]
-        }
+        {(122, 124, 126): [_game(30, datetime(2026, 4, 11, 9, tzinfo=UTC))]}
     )
     request = PipelineRequest(
         report_dates=(date(2026, 4, 11),),
@@ -736,40 +741,126 @@ async def test_all_skipped_does_not_create_wechat_draft(tmp_path: Path) -> None:
 
 
 @_async_test
-async def test_report_error_blocks_all_articles_and_wechat(tmp_path: Path) -> None:
+async def test_report_error_preserves_successes_and_blocks_batch_article(
+    tmp_path: Path,
+) -> None:
     football = FailingFootball(
         {
             (122, 124, 126): [
-                _game(60, datetime(2026, 4, 11, 9, tzinfo=UTC))
-            ],
-            (123,): [
-                _game(
-                    61,
-                    datetime(2026, 4, 11, 10, tzinfo=UTC),
-                    tournament_id=123,
-                )
+                _game(60, datetime(2026, 4, 11, 9, tzinfo=UTC)),
+                _game(61, datetime(2026, 4, 11, 10, tzinfo=UTC)),
+                _game(62, datetime(2026, 4, 11, 11, tzinfo=UTC)),
             ],
         },
         fail_game_id=61,
     )
     wechat = FakeWechat()
-    with pytest.raises(RuntimeError, match="validation"):
-        await AutoReportPipeline(
-            project_root=tmp_path,
-            football_service_factory=lambda: football,
-            wechat_service_factory=lambda: wechat,
-            logger=_logger(),
-        ).run(
-            PipelineRequest(
-                report_dates=(date(2026, 4, 11),),
-                competitions=(Competition.MALE, Competition.FEMALE),
-                stage=Stage.PUBLISH,
-            )
+    result = await AutoReportPipeline(
+        project_root=tmp_path,
+        football_service_factory=lambda: football,
+        wechat_service_factory=lambda: wechat,
+        logger=_logger(),
+    ).run(
+        PipelineRequest(
+            report_dates=(date(2026, 4, 11),),
+            competitions=(Competition.MALE,),
+            stage=Stage.PUBLISH,
         )
+    )
+    assert result.runs[0].reason == "render_failed"
+    assert [item["game_id"] for item in football.reports] == [60, 62]
+    manifest = json.loads(
+        result.runs[0].report_manifest_path.read_text(encoding="utf-8")
+    )
+    assert [item["game_id"] for item in manifest["items"]] == [60, 62]
+    assert manifest["failures"][0]["game_id"] == 61
+    assert all(path.exists() for path in result.runs[0].report_files)
     assert not (
         tmp_path / "runs" / "auto_report" / "2026-04-11_male" / "article"
     ).exists()
     assert wechat.calls == []
+
+
+@pytest.mark.parametrize("technical_failure", [False, True])
+@_async_test
+async def test_business_warning_blocks_article_and_cached_publish(
+    tmp_path: Path, technical_failure
+) -> None:
+    class WarningFootball(FakeFootball):
+        async def get_prepared_game_report(self, game_id):
+            if technical_failure and game_id == 71:
+                raise RuntimeError("query unavailable")
+            prepared = await super().get_prepared_game_report(game_id)
+            if game_id == 70:
+                return replace(
+                    prepared,
+                    warnings=(
+                        GameEventIssue(
+                            severity="warning",
+                            code="duplicate_start",
+                            message="球员 8号张三在首发中重复出现",
+                            team_name="求真",
+                            time_label="0 分钟",
+                        ),
+                    ),
+                )
+            return prepared
+
+    football = WarningFootball(
+        {
+            (122, 124, 126): [
+                _game(game_id, datetime(2026, 4, 11, hour, tzinfo=UTC))
+                for game_id, hour in ((70, 9), (71, 10), (72, 11))
+            ]
+        }
+    )
+    wechat = FakeWechat()
+    request = PipelineRequest(
+        report_dates=(date(2026, 4, 11),),
+        competitions=(Competition.MALE,),
+        stage=Stage.PUBLISH,
+    )
+    result = await AutoReportPipeline(
+        project_root=tmp_path,
+        football_service_factory=lambda: football,
+        wechat_service_factory=lambda: wechat,
+        logger=_logger(),
+    ).run(request)
+    assert result.runs[0].reason == (
+        "render_failed" if technical_failure else "article_blocked"
+    )
+    assert [item["game_id"] for item in football.reports] == (
+        [70, 72] if technical_failure else [70, 71, 72]
+    )
+    assert all(path.exists() for path in result.runs[0].report_files)
+    assert not (result.runs[0].run_directory / "article").exists()
+    assert wechat.calls == []
+
+    cached = FakeFootball({})
+    repeat = await AutoReportPipeline(
+        project_root=tmp_path,
+        football_service_factory=lambda: cached,
+        wechat_service_factory=lambda: wechat,
+        logger=_logger(),
+    ).run(request)
+    assert repeat.runs[0].reason == result.runs[0].reason
+    assert cached.queries == []
+    assert wechat.calls == []
+
+    manifest_path = result.runs[0].report_manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    state_path = result.runs[0].run_directory / "run.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["report"]["manifest_sha256"] = sha256_file(manifest_path)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(ArtifactValidationError, match="重新执行 report"):
+        await AutoReportPipeline(
+            project_root=tmp_path,
+            football_service_factory=lambda: cached,
+            logger=_logger(),
+        ).run(request)
 
 
 @_async_test

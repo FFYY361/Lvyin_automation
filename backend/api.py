@@ -295,7 +295,8 @@ def create_app(
     @asynccontextmanager
     async def process_environment_reports():
         async with WebsiteReportSession(
-            load_outcome_catalog(), client=create_environment_client()
+            load_outcome_catalog(), client=create_environment_client(),
+            qr_cache_root=resolved_settings.qr_cache_root,
         ) as service:
             yield service
 

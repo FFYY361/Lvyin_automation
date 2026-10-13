@@ -108,7 +108,10 @@ class CombinationResult:
     report_files: tuple[Path, ...] = ()
     article_directory: Path | None = None
     draft_media_id: str | None = None
-    reason: Literal["no_games", "no_finished_games"] | None = None
+    reason: (
+        Literal["no_games", "no_finished_games", "article_blocked", "render_failed"]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -129,6 +129,15 @@ def test_report_artifacts_are_content_addressed_and_path_limited(tmp_path: Path)
         parse_report_storage_descriptor(first_key)
 
 
+def test_report_template_version_invalidates_input_cache(monkeypatch) -> None:
+    import backend.workflow as workflow
+
+    detail = _finished_detail(4245)
+    current = workflow._report_input_sha256(detail)
+    monkeypatch.setattr(workflow, "MATCH_REPORT_TEMPLATE_VERSION", "v1 initial")
+    assert workflow._report_input_sha256(detail) != current
+
+
 @pytest.fixture(scope="session")
 def postgres_engine():
     load_env_file()
@@ -188,6 +197,7 @@ def settings(tmp_path: Path) -> WebsiteSettings:
         invite_code="test-invite-code",
         allowed_hosts=("testserver", "localhost", "127.0.0.1"),
         docs_enabled=True,
+        qr_cache_root=tmp_path / "var" / "qrcodes",
     )
 
 
@@ -1021,6 +1031,99 @@ def test_stage6_single_and_batch_report_rendering(
         assert diagnostic["error"]["code"] == "report_event_validation_failed"
 
 
+@pytest.mark.parametrize("failure_kind", ["validation", "database", "warning", "info"])
+def test_report_batch_commits_each_match_and_continues_after_failure(
+    session_factory, settings, monkeypatch, failure_kind
+):
+    import backend.workflow as workflow
+
+    game_ids = [9701, 9702, 9703]
+    with session_factory.begin() as session:
+        session.add(User(
+            username="PartialReportAdmin", display_name="管理员",
+            password_hash=hash_password("password-123"), role="admin",
+        ))
+        batch = _batch(session, complete=True, game_id=game_ids[0])
+        batch_id = batch.id
+        first = session.get(Match, game_ids[0])
+        first.status = "finished"
+        for game_id in game_ids[1:]:
+            values = {column.key: deepcopy(getattr(first, column.key))
+                      for column in Match.__table__.columns if column.key != "game_id"}
+            session.add(Match(game_id=game_id, **values))
+
+    attempted = []
+    failing = True
+
+    class Reports(_FakeWebsiteReports):
+        async def get_prepared_game_report(self, game_id):
+            attempted.append(game_id)
+            self.detail = _finished_detail(game_id)
+            if failing and failure_kind == "validation" and game_id == 9702:
+                raise ReportValidationError((GameEventIssue(
+                    severity="error", code="duplicate_start", message="duplicate start",
+                ),), game_id=game_id)
+            self.warnings = (GameEventIssue(
+                severity="warning" if failure_kind == "warning" else "info",
+                code="duplicate_start" if failure_kind == "warning" else "lineup_under_capacity",
+                message="球员 8号张三在首发中重复出现" if failure_kind == "warning" else "仅10人首发，预期11人",
+                team_name="新雅", time_label="0 分钟",
+            ),) if failing and failure_kind in {"warning", "info"} and game_id == 9702 else ()
+            return await super().get_prepared_game_report(game_id)
+
+    original = workflow._render_match_with_service
+
+    async def render_with_database_failure(session, settings, match, reports):
+        result = await original(session, settings, match, reports)
+        if failing and failure_kind == "database" and match.game_id == 9702:
+            match.venue = None
+            session.flush()
+        return result
+
+    monkeypatch.setattr(workflow, "_render_match_with_service", render_with_database_failure)
+    reports = Reports(_finished_detail(game_ids[0]))
+    app = create_app(settings=settings, session_factory=session_factory,
+                     external_factories=ExternalFactories(reports=lambda: reports))
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={
+            "username": "PartialReportAdmin", "password": "password-123",
+        }).raise_for_status()
+        if failure_kind == "warning":
+            failing = False
+            initial = client.post(f"/api/batches/{batch_id}/render-report")
+            initial.raise_for_status()
+            historical_article_id = initial.json()["article"]["id"]
+            failing = True
+            attempted.clear()
+        response = client.post(f"/api/batches/{batch_id}/render-report")
+        assert response.status_code == {"validation": 422, "database": 502, "warning": 409, "info": 200}[failure_kind]
+        diagnostics = response.json()["diagnostics"] if failure_kind == "info" else response.json()["error"]["details"]["diagnostics"]
+        assert attempted == game_ids
+        assert [item["status"] for item in diagnostics] == (["success"] * 3 if failure_kind in {"warning", "info"} else ["success", "failed", "success"])
+        if failure_kind == "warning":
+            assert response.json()["error"]["code"] == "report_batch_article_blocked"
+            assert all(item["reused"] for item in diagnostics)
+            assert reports.render_calls == 3
+        with session_factory() as session:
+            for game_id in (9701, 9703):
+                stored = session.get(Match, game_id)
+                assert stored.report_rendered_at is not None
+                assert workflow.report_content_paths(settings, stored)["image"].is_file()
+            failed = session.get(Match, 9702)
+            assert (failed.report_storage_key is not None) == (failure_kind in {"warning", "info"})
+            assert failed.venue is not None
+            assert (session.get(Batch, batch_id).current_report_article_id is not None) == (failure_kind == "info")
+            if failure_kind == "warning":
+                assert session.get(ArticleRecord, historical_article_id) is not None
+
+        failing = False
+        retry = client.post(f"/api/batches/{batch_id}/render-report")
+        retry.raise_for_status()
+        assert attempted == game_ids * 2
+        assert [item["reused"] for item in retry.json()["diagnostics"]] == ([True] * 3 if failure_kind in {"warning", "info"} else [True, False, True])
+        assert retry.json()["article"]["is_complete"] is True
+
+
 def test_identical_weather_keeps_render_and_actual_change_invalidates(
     session_factory,
     settings: WebsiteSettings,
@@ -1613,6 +1716,18 @@ def test_preview_creation_and_data_refresh_render_automatically(
     session_factory, settings, monkeypatch
 ):
     target_date = date(2026, 10, 10)
+    qr_calls = []
+
+    class QRClient:
+        async def get_game_page_code(self, game_id):
+            qr_calls.append(game_id)
+            output = BytesIO()
+            Image.new("RGB", (10, 10), "white").save(output, format="PNG")
+            return output.getvalue()
+
+    @asynccontextmanager
+    async def qr_codes():
+        yield QRClient()
     with session_factory() as session:
         seed = _batch(session, target_date=target_date, complete=True, game_id=9981)
         source = assemble_source(session, seed)
@@ -1645,7 +1760,8 @@ def test_preview_creation_and_data_refresh_render_automatically(
     monkeypatch.setattr("backend.workflow.PreviewSourceBuilder", Builder)
     monkeypatch.setattr("backend.workflow._query_weather", no_weather)
     factories = ExternalFactories(
-        queries=queries, weather=lambda: _FailingExternalService([], "weather")
+        queries=queries, weather=lambda: _FailingExternalService([], "weather"),
+        qr_codes=qr_codes,
     )
     results = asyncio.run(
         create_batches(session_factory, settings, factories, [target_date], ["female"])
@@ -1661,6 +1777,8 @@ def test_preview_creation_and_data_refresh_render_automatically(
         assert batch.current_preview_article_id == article_id
         assert "新场地" in article.body_html
         assert article.version_number == 1
+    assert qr_calls == [9981]
+    assert (settings.qr_cache_root / "9981.img").is_file()
 
 
 def test_current_batch_passes_refresh_guard(session_factory, settings):

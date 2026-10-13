@@ -15,7 +15,7 @@ from .errors import ArtifactValidationError
 from .models import Competition
 
 RUN_SCHEMA_VERSION = 1
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 DRAFT_SCHEMA_VERSION = 1
 
 
@@ -178,7 +178,13 @@ def validate_report_manifest(
         "queried_at",
         "items",
         "skipped_unfinished",
+        "failures",
     }
+    if payload.get("schema_version") != REPORT_SCHEMA_VERSION:
+        raise ArtifactValidationError(
+            "report.json 版本已更新；请使用 --override 重新执行 report 阶段",
+            stage="report-validation",
+        )
     if set(payload) != required:
         raise ArtifactValidationError(
             "report.json 字段不符合当前契约",
@@ -208,7 +214,13 @@ def validate_report_manifest(
             "赛事 ID 配置已变化；请使用 --override 重新查询",
             stage="report-validation",
         )
-    if payload["status"] not in {"ready", "no_games", "no_finished_games"}:
+    if payload["status"] not in {
+        "ready",
+        "no_games",
+        "no_finished_games",
+        "article_blocked",
+        "render_failed",
+    }:
         raise ArtifactValidationError(
             "report.json.status 字段损坏",
             stage="report-validation",
@@ -226,6 +238,16 @@ def validate_report_manifest(
             stage="report-validation",
         )
 
+    if not isinstance(payload["failures"], list) or any(
+        not isinstance(item, dict)
+        or set(item) != {"game_id", "message"}
+        or not isinstance(item["game_id"], int)
+        or not isinstance(item["message"], str)
+        for item in payload["failures"]
+    ):
+        raise ArtifactValidationError(
+            "report.json.failures 字段损坏", stage="report-validation"
+        )
     previous_key: tuple[str, int, int] | None = None
     for item in payload["items"]:
         if not isinstance(item, dict):
@@ -289,52 +311,55 @@ def validate_report_manifest(
                 stage="report-validation",
             )
         previous_key = key
-        if (
-            not isinstance(item["warnings"], list)
+        if not isinstance(item["warnings"], list) or any(
+            not isinstance(warning, dict)
+            or set(warning)
+            != {
+                "severity",
+                "code",
+                "message",
+                "event_ids",
+                "player_id",
+                "side",
+                "minute",
+                "stoppage_minute",
+                "team_name",
+                "time_label",
+            }
+            or warning.get("severity") not in {"info", "warning"}
             or any(
-                    not isinstance(warning, dict)
-                    or set(warning)
-                    != {
-                        "severity",
-                        "code",
-                        "message",
-                        "event_ids",
-                        "player_id",
-                        "side",
-                        "minute",
-                        "stoppage_minute",
-                    }
-                    or warning.get("severity") != "warning"
-                    or not isinstance(warning.get("code"), str)
-                    or not warning["code"]
-                    or not isinstance(warning.get("message"), str)
-                    or not isinstance(warning.get("event_ids"), list)
-                    or any(
-                        isinstance(event_id, bool)
-                        or not isinstance(event_id, int)
-                        or event_id <= 0
-                        for event_id in warning["event_ids"]
-                    )
-                    or (
-                        warning.get("player_id") is not None
-                        and (
-                            isinstance(warning["player_id"], bool)
-                            or not isinstance(warning["player_id"], int)
-                            or warning["player_id"] <= 0
-                        )
-                    )
-                    or warning.get("side") not in {None, "home", "away"}
-                    or any(
-                        warning.get(field) is not None
-                        and (
-                            isinstance(warning[field], bool)
-                            or not isinstance(warning[field], int)
-                            or warning[field] < 0
-                        )
-                        for field in ("minute", "stoppage_minute")
-                    )
-                    for warning in item["warnings"]
+                warning.get(field) is not None and not isinstance(warning[field], str)
+                for field in ("team_name", "time_label")
+            )
+            or not isinstance(warning.get("code"), str)
+            or not warning["code"]
+            or not isinstance(warning.get("message"), str)
+            or not isinstance(warning.get("event_ids"), list)
+            or any(
+                isinstance(event_id, bool)
+                or not isinstance(event_id, int)
+                or event_id <= 0
+                for event_id in warning["event_ids"]
+            )
+            or (
+                warning.get("player_id") is not None
+                and (
+                    isinstance(warning["player_id"], bool)
+                    or not isinstance(warning["player_id"], int)
+                    or warning["player_id"] <= 0
                 )
+            )
+            or warning.get("side") not in {None, "home", "away"}
+            or any(
+                warning.get(field) is not None
+                and (
+                    isinstance(warning[field], bool)
+                    or not isinstance(warning[field], int)
+                    or warning[field] < 0
+                )
+                for field in ("minute", "stoppage_minute")
+            )
+            for warning in item["warnings"]
         ):
             raise ArtifactValidationError(
                 "report.json 战报 warning 条目损坏",
@@ -344,8 +369,7 @@ def validate_report_manifest(
     for item in payload["skipped_unfinished"]:
         if (
             not isinstance(item, dict)
-            or set(item)
-            != {"game_id", "tournament_id", "kickoff_local", "status"}
+            or set(item) != {"game_id", "tournament_id", "kickoff_local", "status"}
             or isinstance(item.get("game_id"), bool)
             or not isinstance(item.get("game_id"), int)
             or item["game_id"] <= 0
@@ -360,12 +384,27 @@ def validate_report_manifest(
                 stage="report-validation",
             )
 
+    has_warnings = any(
+        issue.get("severity") == "warning"
+        for item in payload["items"]
+        for issue in item.get("warnings", [])
+    )
+    if (payload["status"] == "ready" and (payload["failures"] or has_warnings)) or (
+        payload["status"] == "article_blocked" and not has_warnings
+    ):
+        raise ArtifactValidationError(
+            "report.json 文章状态与诊断不一致", stage="report-validation"
+        )
+    if payload["status"] == "render_failed" and not payload["failures"]:
+        raise ArtifactValidationError(
+            "report.json 失败状态缺少失败诊断", stage="report-validation"
+        )
     if payload["status"] == "ready" and not payload["items"]:
         raise ArtifactValidationError(
             "ready 状态的 report.json 没有正文条目",
             stage="report-validation",
         )
-    if payload["status"] != "ready" and payload["items"]:
+    if payload["status"] in {"no_games", "no_finished_games"} and payload["items"]:
         raise ArtifactValidationError(
             "skipped 状态的 report.json 不应含正文条目",
             stage="report-validation",
