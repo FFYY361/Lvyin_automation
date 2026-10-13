@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.engine import Engine
@@ -120,6 +121,11 @@ class FootballDataRepository:
 
     def __init__(self, session: Session) -> None:
         self.session = session
+
+    def load_prompt_documents(self) -> dict[str, str]:
+        return dict(self.session.execute(
+            text("SELECT key, content FROM prompt_templates")
+        ).tuples().all())
 
     def get_institution(self, name: str) -> InstitutionRecord:
         record = self.session.get(InstitutionRecord, name)

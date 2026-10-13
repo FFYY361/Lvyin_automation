@@ -6,3 +6,11 @@
 - 上线后核验原管理员已成为超级管理员，重新登录，在用户管理页验证“升级管理员”和“取消管理员”；角色变化会让目标用户旧会话失效，已领取任务保留。
 - 回滚至 `v4_institution_predecessors` 时，超级管理员转为管理员并使其旧会话失效，恢复两角色约束；此前提拔产生的其他管理员保留。
 - `init-admin` 命令改为初始化首个超级管理员；已有超级管理员时拒绝重复初始化。
+
+## 待上线：固定 Prompt 改为仅数据库维护
+
+- 本地数据库 `prompt_templates` 的九个分区已完成本轮改写，包含正文写作正反例、资料口径、各项目赛制和标题规则；五人制内容不变。新版规则目前只在本地，尚未同步线上。
+- **下一次上线必须将本地数据库的九个 Prompt 分区同步到线上数据库**，与使用 `league_phase_standing` 的新代码一起生效，避免线上旧规则仍引用旧字段。同步范围为 `preview_system`、`preview_writing_rules`、`preview_data_rules`、`competition_male`、`competition_female`、`competition_female_2026_2027`、`competition_futsal`、`title_system`、`title_rules`。
+- 上线停站期间先备份线上原记录，再从本地数据库读取上述分区的 `key`、`content`，在一个事务中按 key 更新或补齐线上记录。修改时间使用线上同步时间，修改人置空，不复制本地用户 ID，不触及其他业务数据。核对九个分区内容与本地一致后启动新后端。
+- Git 不再保存固定 Prompt 文件，也不保留 apply/restore 同步脚本；日后只在数据库/管理页面维护。`v3_prompt_and_title_ai` 仅建表，不再初始化 Prompt；新环境必须从已有数据库导入规则，缺失规则会明确报错。
+- 上线后检查管理页、正文和标题的复制 Prompt 接口；旧 AI 结果按现有 Prompt 哈希机制判定过期，不自动覆盖人工正文或重生成。

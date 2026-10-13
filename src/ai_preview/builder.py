@@ -6,7 +6,6 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from thufootball.database import (
@@ -19,8 +18,6 @@ from thufootball.rankings import StaticTeamIdentity
 from thufootball.rules import CompetitionRules, competition_rules
 
 from .config import PromptConfig, load_prompt_config
-
-DEFAULT_PROMPT_ROOT = Path(__file__).with_name("prompt")
 
 _PLACEHOLDERS = {"", "待补充", "待补充。", "无", "无。"}
 _LINEUP_EVENTS = {"START", "APPEARANCE"}
@@ -117,6 +114,10 @@ class _Repository:
             _integer(game.get("tournament_id"), "tournament_id")
         ]["competition"]
         result = dict(game)
+        tournament = self.tournament(game["tournament_id"])
+        season = _canonical_season(tournament["tournament"].get("season"))
+        rules = competition_rules(_COMPETITION_VALUES[competition], season)
+        result["stage"] = rules.stage_label(game.get("stage"))
         for side in ("home", "away"):
             identity = self.catalog.resolve_identity(
                 _integer(game.get(f"{side}_team_id"), f"{side}_team_id"), competition
@@ -131,7 +132,6 @@ def build_prompt_bundle(
     *,
     config: PromptConfig | None = None,
     repository: FootballDataRepository | None = None,
-    prompt_root: Path = DEFAULT_PROMPT_ROOT,
     prompt_documents: dict[str, str] | None = None,
 ) -> PromptBundle:
     if isinstance(match_id, bool) or not isinstance(match_id, int) or match_id <= 0:
@@ -145,11 +145,12 @@ def build_prompt_bundle(
                     match_id,
                     config=config,
                     repository=FootballDataRepository(session),
-                    prompt_root=prompt_root,
                     prompt_documents=prompt_documents,
                 )
         finally:
             engine.dispose()
+    if prompt_documents is None:
+        prompt_documents = repository.load_prompt_documents()
     resolved_config = config or load_prompt_config()
     stored = _Repository(repository)
     target_detail = stored.game_detail(match_id)
@@ -277,7 +278,9 @@ def build_prompt_bundle(
     match_context = {
         "competition": _competition_label(competition_kind, target_info),
         "season": target_season,
-        "stage": target_game.get("stage") or "未标注",
+        "stage": competition_rules(
+            _COMPETITION_VALUES[competition_kind], target_season
+        ).stage_label(target_game.get("stage")) or "未标注",
         "group": target_game.get("group_name"),
         "round": target_game.get("round"),
         "home_team": home_identity.institution_name,
@@ -289,7 +292,6 @@ def build_prompt_bundle(
         system_message=build_system_message(
             competition_kind,
             season=target_season,
-            prompt_root=prompt_root,
             prompt_documents=prompt_documents,
         ),
         match_context=match_context,
@@ -303,13 +305,11 @@ def build_user_message(
     *,
     config: PromptConfig | None = None,
     repository: FootballDataRepository | None = None,
-    prompt_root: Path = DEFAULT_PROMPT_ROOT,
 ) -> str:
     return build_prompt_bundle(
         match_id,
         config=config,
         repository=repository,
-        prompt_root=prompt_root,
     ).render_user_message()
 
 
@@ -317,7 +317,6 @@ def build_system_message(
     competition_kind: str,
     *,
     season: str | None = None,
-    prompt_root: Path = DEFAULT_PROMPT_ROOT,
     prompt_documents: dict[str, str] | None = None,
 ) -> str:
     if competition_kind not in _COMPETITION_VALUES:
@@ -329,18 +328,20 @@ def build_system_message(
         "preview_writing_rules",
         "preview_data_rules",
     )
-    if prompt_documents is not None:
+    if prompt_documents is None:
+        engine = create_football_engine()
         try:
-            return "\n\n".join(prompt_documents[key] for key in keys)
-        except KeyError as exc:
-            raise ValueError(f"缺少 Prompt 分区：{exc.args[0]}") from exc
-    paths = (
-        prompt_root / "system.md",
-        prompt_root / "competition_rules" / rules.prompt_file,
-        prompt_root / "writing_rules.md",
-        prompt_root / "data_rules.md",
-    )
-    return "\n\n".join(_read_text(path) for path in paths)
+            with create_football_session_factory(engine)() as session:
+                prompt_documents = FootballDataRepository(session).load_prompt_documents()
+        finally:
+            engine.dispose()
+    parts = []
+    for key in keys:
+        content = prompt_documents.get(key, "").strip()
+        if not content:
+            raise ValueError(f"缺少或为空的 Prompt 分区：{key}，请在数据库中配置")
+        parts.append(content)
+    return "\n\n".join(parts)
 
 
 def _automatic_team_context(
@@ -468,15 +469,15 @@ def _automatic_team_context(
         "current_tournament": {
             "competition": _competition_label(competition_kind, tournament_info),
             "season": _canonical_season(tournament_info.get("season")),
-            "current_stage": target_game.get("stage"),
+            "current_stage": rules.stage_label(target_game.get("stage")),
             "group_standing": (
                 None
-                if rules.swiss
+                if rules.league_phase
                 else _group_standing(target_tournament, target_game, team_id)
             ),
-            "swiss_standing": (
-                _swiss_standing(target_tournament, target_game, team_id, rules)
-                if rules.swiss
+            "league_phase_standing": (
+                _league_phase_standing(target_tournament, target_game, team_id, rules)
+                if rules.league_phase
                 else None
             ),
             "record_before_match": _record(current_games, {team_id}),
@@ -548,7 +549,7 @@ def _group_standing(
     return None if standing is None else {"group": group, **standing}
 
 
-def _swiss_standing(
+def _league_phase_standing(
     tournament: dict[str, Any],
     target_game: dict[str, Any],
     team_id: int,
@@ -572,7 +573,7 @@ def _swiss_standing(
         for game in games
     ):
         standing["rank"] = None
-        standing["rank_note"] = "本场之前的瑞士轮比赛尚未全部完成录入，无法确定准确顺位"
+        standing["rank_note"] = "本场之前的联赛阶段比赛尚未全部完成录入，无法确定准确顺位"
     return standing
 
 
@@ -1116,16 +1117,6 @@ def _game_time(game: dict[str, Any]) -> datetime:
 
 def _format_kickoff(value: datetime) -> str:
     return f"{value.year} 年 {value.month} 月 {value.day} 日 {value:%H:%M}"
-
-
-def _read_text(path: Path) -> str:
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise ValueError(f"无法读取 Prompt 文档：{path}") from exc
-    if not text:
-        raise ValueError(f"Prompt 文档为空：{path}")
-    return text
 
 
 def _object(value: object, name: str) -> dict[str, Any]:

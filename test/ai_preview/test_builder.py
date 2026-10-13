@@ -14,8 +14,9 @@ if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from ai_preview import PromptConfig, build_prompt_bundle, build_system_message
-from ai_preview.builder import _swiss_standing
+from ai_preview.builder import _league_phase_standing
 from ai_preview.source import prepare_prompt_repository
+from test.prompt_documents import PROMPT_DOCUMENTS
 from thufootball.errors import ConfigurationError
 from thufootball.rankings import build_outcome_catalog
 from thufootball.rules import competition_rules
@@ -172,17 +173,26 @@ class PromptBuilderTests(unittest.TestCase):
         )
         self.assertEqual(PromptConfig().history_seasons, 4)
 
-    def test_swiss_rules_standing_and_time_boundary(self) -> None:
+    def test_league_phase_rules_standing_and_time_boundary(self) -> None:
         new_rules = competition_rules("female", "2026-27")
         old_rules = competition_rules("female", "2025-26")
-        self.assertTrue(new_rules.swiss)
-        self.assertFalse(old_rules.swiss)
+        self.assertTrue(new_rules.league_phase)
+        self.assertFalse(old_rules.league_phase)
+        for label in ("小组赛", "循环赛", "瑞士轮", "联赛阶段", "第一阶段"):
+            self.assertEqual(new_rules.stage_label(label), "联赛阶段")
+            self.assertEqual(old_rules.stage_label(label), label)
+            self.assertEqual(competition_rules("male", "2026-27").stage_label(label), label)
+        for label in (None, "半决赛", "待确认"):
+            self.assertEqual(new_rules.stage_label(label), label)
         self.assertIn(
-            "瑞士轮", build_system_message(competition_kind="女足", season="2026-27")
+            "test-section:competition_female_2026_2027",
+            build_system_message(competition_kind="女足", season="2026-27",
+                                 prompt_documents=PROMPT_DOCUMENTS)
         )
         self.assertIn(
-            "小组赛分为六组",
-            build_system_message(competition_kind="女足", season="2025-26"),
+            "test-section:competition_female",
+            build_system_message(competition_kind="女足", season="2025-26",
+                                 prompt_documents=PROMPT_DOCUMENTS),
         )
         target = _game(
             20, "2026-11-01T13:00:00+08:00", 1, 2, None, None, status="scheduled"
@@ -195,16 +205,16 @@ class PromptBuilderTests(unittest.TestCase):
             ],
             "games": [played, future, target],
         }
-        standing = _swiss_standing(tournament, target, 1, new_rules)
+        standing = _league_phase_standing(tournament, target, 1, new_rules)
         self.assertEqual(
             (standing["played"], standing["points"], standing["rank"]), (1, 3, 1)
         )
-        self.assertIsNone(_swiss_standing(tournament, target, 3, new_rules)["rank"])
+        self.assertIsNone(_league_phase_standing(tournament, target, 3, new_rules)["rank"])
         incomplete = dict(played, game_id=12, valid=None, status="scheduled")
         tournament["games"].append(incomplete)
-        self.assertIsNone(_swiss_standing(tournament, target, 1, new_rules)["rank"])
+        self.assertIsNone(_league_phase_standing(tournament, target, 1, new_rules)["rank"])
         self.assertIsNone(
-            _swiss_standing(tournament, dict(target, stage=None), 1, new_rules)
+            _league_phase_standing(tournament, dict(target, stage=None), 1, new_rules)
         )
 
     def test_builds_context_and_normalizes_reversed_head_to_head(self) -> None:
@@ -215,7 +225,7 @@ class PromptBuilderTests(unittest.TestCase):
         )
 
         automatic = bundle.automatic_context
-        self.assertIn("# 马杯男足赛制说明", bundle.system_message)
+        self.assertIn(PROMPT_DOCUMENTS["competition_male"], bundle.system_message)
         self.assertNotIn("# 马杯女足赛制说明", bundle.system_message)
         home = automatic["home_team"]
         record = home["current_tournament"]["record_before_match"]
@@ -261,15 +271,18 @@ class PromptBuilderTests(unittest.TestCase):
 
     def test_selects_one_competition_rules_document(self) -> None:
         expected = {
-            "男足": "# 马杯男足赛制说明",
-            "女足": "# 马杯女足赛制说明",
-            "五人制": "# 马杯五人制赛制说明",
+            "男足": "test-section:competition_male",
+            "女足": "test-section:competition_female",
+            "五人制": "test-section:competition_futsal",
         }
         for competition, heading in expected.items():
             with self.subTest(competition=competition):
-                message = build_system_message(competition)
+                message = build_system_message(competition, prompt_documents=PROMPT_DOCUMENTS)
                 self.assertIn(heading, message)
-                self.assertEqual(message.count("赛制说明"), 1)
+                self.assertEqual(message.count("test-section:competition_"), 1)
+
+        with self.assertRaisesRegex(ValueError, "preview_system"):
+            build_system_message("男足", prompt_documents={})
 
     def test_merge_preserves_body_history_and_separates_internal_predecessor_match(
         self,
@@ -514,6 +527,9 @@ class LivePromptSourceTests(unittest.TestCase):
 
 
 class _FakeRepository:
+    def load_prompt_documents(self):
+        return PROMPT_DOCUMENTS.copy()
+
     def __init__(self, tournament, games, institutions) -> None:
         self.tournament = tournament
         self.tournaments = {tournament.id: tournament}

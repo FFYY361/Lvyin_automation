@@ -1,19 +1,17 @@
-# AI 前瞻 Prompt：首版组装方案
+# AI 前瞻与标题 Prompt
 
 ## 1. 消息组成
 
-System message 根据 `MATCH_ID` 对应的比赛项目，依次拼接：
+固定 Prompt 仅由数据库 `prompt_templates` 维护，Git 不保存规则正文或默认模板。
+正文 System message 根据比赛项目和赛季，依次拼接 `preview_system`、对应的
+`competition_*`、`preview_writing_rules` 和 `preview_data_rules`。
 
-1. `src/ai_preview/prompt/system.md`；
-2. `src/ai_preview/prompt/competition_rules/` 中对应男足、女足或五人制的一个赛制说明；
-3. `src/ai_preview/prompt/writing_rules.md`；
-4. `src/ai_preview/prompt/data_rules.md`。
+User message 包含 `match_context`、`manual_context` 和 `automatic_context`。
+标题使用 `title_system` 和 `title_rules`，并以整批比赛快照和正文组成 User message。
+输出保持六条 `idiom_1` / `idiom_2` JSON 候选。
 
-只加入本场项目对应的一个赛制文档，避免无关赛制干扰写作。组装后的 System message 可通过
-`ai_preview.build_prompt_bundle(match_id).system_message` 取得。
-
-User message 由程序根据一场比赛动态生成，包含 `match_context`、`manual_context` 和
-`automatic_context`。本阶段只组装正文生成 Prompt，不调用模型，也不处理标题生成。
+网站和命令行均读取数据库规则；Python 调用可显式传入 `prompt_documents` 用于组装。
+缺失或空白的必要分区会报错，不回退到文件或内置正文。规则在网站管理页编辑，组装器不调用模型。
 
 ## 2. 输入与接口
 
@@ -72,10 +70,13 @@ Python 接口为 `ai_preview.build_user_message(match_id)`；需要检查中间�
 
 ## 5. 初步验收
 
-女足规则按目标赛季选择：2025–2026 及以前保留旧规则，2026–2027 起使用瑞士轮规则。
-第一阶段的 `current_tournament.swiss_standing` 统计本届全部报名球队，`group_standing` 为空；
+女足规则按目标赛季选择：2025–2026 及以前保留旧规则，2026–2027 起使用联赛阶段规则。
+第一阶段的 `current_tournament.league_phase_standing` 统计本届全部报名球队，`group_standing` 为空；
 只计算本场之前已完成录入的第一阶段比赛。同分或此前比赛尚未完成录入时，排名为空并说明原因。
-无法识别阶段时不推测瑞士轮。男足和旧赛季女足继续使用原有小组积分。
+无法识别阶段时不推测联赛阶段。男足和旧赛季女足继续使用原有小组积分。
+
+2026–2027 起女足第一阶段的已知来源别名在本场及历史比赛的 Prompt 阶段字段中统一显示为
+“联赛阶段”，原始比赛记录不修改。旧赛季与未知阶段原样保留。
 
 人工球员描述只提供目标赛事该队的有效报名球员；历史球员仍保留在院系资料库中。
 

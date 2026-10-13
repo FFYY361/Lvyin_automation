@@ -1,5 +1,7 @@
 # 历史本地资料库实施规划（设计记录）
 
+> 本文记录早期设计；文件式 Prompt 已移除，当前规则仅保存在数据库 `prompt_templates`。
+
 > 本文记录数据库迁移前的文件资料库设计，不再代表运行时架构。当前实现见
 > [足球资料数据库说明](football_data_database.md)；旧 notes、institutions 和 automatic
 > 文件在数据库迁移和审计完成后已经删除。下文只保留为早期设计记录。

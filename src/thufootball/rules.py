@@ -9,22 +9,27 @@ from dataclasses import dataclass
 class CompetitionRules:
     first_season: int
     prompt_key: str
-    prompt_file: str
-    swiss: bool = False
+    league_phase: bool = False
 
     def is_first_stage(self, stage: str | None) -> bool:
+        # Retain the legacy source label only for input compatibility.
         return stage in {"小组赛", "循环赛", "瑞士轮", "联赛阶段", "第一阶段"}
+
+    def stage_label(self, stage: str | None) -> str | None:
+        if self.league_phase and self.is_first_stage(stage):
+            return "联赛阶段"
+        return stage
 
 
 COMPETITION_RULES = {
-    "male": (CompetitionRules(0, "competition_male", "men.md"),),
+    "male": (CompetitionRules(0, "competition_male"),),
     "female": (
-        CompetitionRules(0, "competition_female", "women.md"),
+        CompetitionRules(0, "competition_female"),
         CompetitionRules(
-            2026, "competition_female_2026_2027", "women_2026_2027.md", swiss=True
+            2026, "competition_female_2026_2027", league_phase=True
         ),
     ),
-    "futsal": (CompetitionRules(0, "competition_futsal", "futsal.md"),),
+    "futsal": (CompetitionRules(0, "competition_futsal"),),
 }
 
 

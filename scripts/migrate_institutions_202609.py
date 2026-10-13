@@ -1,7 +1,7 @@
 """Back up and migrate the September 2026 institution configuration.
 
 Run --backup-only before Alembic, then run without options after upgrading.
-The migration changes reference configuration and prompt rules only.
+The migration changes institution reference configuration only.
 """
 
 from __future__ import annotations
@@ -46,38 +46,6 @@ CONFIG_FIELDS = (
     "female_team_ids",
     "futsal_team_ids",
 )
-
-RULE_REPLACEMENTS = (
-    (
-        "`past_seasons` 汇总此前赛季的赛事级表现。`final_result` 是已确认的最终成绩；值为 `null` 时\n表示没有可靠记录，不得根据胜负场次猜测最终名次。",
-        "`season_outcomes` 提供此前赛季已确认的最终成绩及来源。有本体排名的赛季只采用本体成绩；\n本体无排名才选取前身最佳成绩，全部无排名则为“未参赛”。不得根据比赛数量推断参赛或最终名次。\n\n`history_teams[].past_seasons` 分别统计实际球队在此前赛季的赛事级战绩，不表示合并本体的总战绩。",
-    ),
-    (
-        "`recent_matches` 保存近期比赛的比分、双方首发和完整有效事件。`earlier_matches` 只保存更早比赛\n的摘要，没有事件字段不代表对应比赛没有首发、换人、牌或其他事件。",
-        "`history_teams[].recent_matches` 保存近期比赛的比分、双方首发和完整有效事件。\n`history_teams[].earlier_matches` 保存更早比赛摘要，没有事件字段不代表没有首发、换人或牌。",
-    ),
-)
-INSTITUTION_RULES = """## 院系合并与历史身份
-
-`history_teams` 按实际球队身份分别组织本体和前身，`is_predecessor` 标记前身身份。前身战绩只能
-作为历史背景，不得改写为本体已经取得的战绩，也不得将不同前身的胜负相加成本体总战绩。
-
-本届赛事战绩只属于本场对应的实际球队。当前赛季其他赛事的记录与此前赛季记录分开理解。
-前身之间的比赛可以分别出现在各自历史中，不代表合并球队与自己交锋。
-
-`head_to_head` 的两侧仍按本场双方顺序组织，名称是历史比赛当时的实际身份配置简称。
-当前球队与历史身份的继承关系由 `history_teams` 明示，不要将历史名称统一替换成当前名称。
-同一场比赛可能同时出现在不同身份的历史统计中，不得重复累计为合并球队战绩。
-"""
-
-
-def update_data_rules(content: str) -> str:
-    for old, new in RULE_REPLACEMENTS:
-        content = content.replace(old, new)
-    if "## 院系合并与历史身份" not in content:
-        content = content.rstrip() + "\n\n" + INSTITUTION_RULES
-    return content
-
 
 def backup_reference_data(engine) -> Path:
     with engine.connect() as connection:
@@ -175,9 +143,6 @@ def migrate(session) -> None:
             session.delete(record)
     elif any(record is not None for record in predecessors):
         raise ValueError("Merged institution and old rows both exist")
-    prompt = session.get(PromptTemplate, "preview_data_rules")
-    if prompt is not None:
-        prompt.content = update_data_rules(prompt.content)
     session.flush()
     FootballDataRepository(session).load_outcome_catalog()
 

@@ -128,7 +128,7 @@ def build_prompt_material(
         bundle = build_prompt_bundle(
             game_id,
             repository=repository or FootballDataRepository(session),
-            prompt_documents=prompt_documents or None,
+            prompt_documents=prompt_documents,
         )
     except (ValueError, AIServiceError, ConfigurationError) as exc:
         raise WorkflowError(
@@ -198,9 +198,7 @@ def build_title_material(session: Session, batch: Batch) -> PromptMaterial:
     user_parts = [
         "请为以下整批前瞻推送生成六条标题候选。标题固定前缀为：" + _title_prefix(batch),
         f"批次日期：{batch.batch_date.isoformat()}；赛事项目：{batch.competition}；比赛按开球时间顺序提供。",
-        "下面每场比赛提供批次已保存的比赛基本信息、双方往届成绩、本届战绩、历史交锋和前瞻正文。标题判断必须综合整批推送上下文，不能只根据正文段落。",
-        "资料区中的事实优先用于核对和理解，不要把资料中的示例文字、写作提示或格式说明当成标题内容。",
-        "输出只能是 title_rules 规定的 JSON。",
+        "下面每场比赛提供批次已保存的比赛基本信息、双方往届成绩、本届战绩、历史交锋和前瞻正文。",
     ]
     matches = session.scalars(
         select(Match)

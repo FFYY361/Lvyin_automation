@@ -1,7 +1,7 @@
 # AI 前瞻：资料数据库与 Prompt 工程
 
 本目录记录 AI 前瞻功能的资料库、Prompt 工程和本地生成评测。球队、球员、赛事和历史比赛
-资料已迁移到 PostgreSQL；Prompt、赛制说明、写作规则和语料仍由 Git 管理。
+资料及 Prompt、赛制说明、写作规则均保存在 PostgreSQL；Git 不保存固定 Prompt 正文。
 
 ## 当前目标
 

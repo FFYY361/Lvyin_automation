@@ -12,8 +12,8 @@ PostgreSQL 是足球资料的唯一运行时来源：
 - `games`：完整比赛事实、事件、裁判和每队人数，通过 `tournament_id` 关联赛事。
 - `matches`：仍是网站写作任务，不与 `games` 合并。
 
-三张资料表不含时间、版本字段。赛事默认按赛季倒序、ID 升序查询。Prompt 和比赛规则留在
-`src/ai_preview/prompt`，corpus 留在只读资料目录；迁移使用的 notes、institutions 和 automatic
+三张资料表不含时间、版本字段。赛事默认按赛季倒序、ID 升序查询。Prompt 和比赛规则保存在
+数据库 `prompt_templates`，corpus 留在只读资料目录；迁移使用的 notes、institutions 和 automatic
 文件已经删除，也不提供文件回退。
 
 ## 数据库迁移

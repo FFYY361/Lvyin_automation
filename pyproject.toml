@@ -47,8 +47,6 @@ where = ["src"]
 ai_service = ["config.json"]
 ai_preview = [
   "config.json",
-  "prompt/*.md",
-  "prompt/competition_rules/*.md",
 ]
 thufootball = [
   "assets/*.png",

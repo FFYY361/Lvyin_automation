@@ -78,6 +78,7 @@ from backend.workflow import (
     upsert_source,
 )
 from test.football_data import clone_football_data
+from test.prompt_documents import PROMPT_DOCUMENTS
 from thufootball import (
     AuthenticationError,
     GameDetail,
@@ -159,6 +160,9 @@ def postgres_engine():
     Base.metadata.create_all(engine)
     FootballDataBase.metadata.create_all(engine)
     clone_football_data(administration, engine)
+    with Session(engine) as session, session.begin():
+        session.add_all(PromptTemplate(key=key, content=content)
+                        for key, content in PROMPT_DOCUMENTS.items())
     try:
         yield engine
     finally:
@@ -1803,7 +1807,7 @@ def test_current_batch_passes_refresh_guard(session_factory, settings):
         assert calls == ["queries"]
 
 
-def test_new_womens_swiss_prompt_and_environment_roster_in_isolation(session_factory):
+def test_new_womens_league_phase_prompt_and_environment_roster_in_isolation(session_factory):
     with session_factory() as session:
         repository = FootballDataRepository(session)
         tournament = repository.get_tournament(142)
@@ -1847,11 +1851,13 @@ def test_new_womens_swiss_prompt_and_environment_roster_in_isolation(session_fac
         bundle = build_prompt_bundle(999999, repository=repository)
         current = bundle.automatic_context["home_team"]["current_tournament"]
         assert bundle.match_context["home_team"] == "环境学院"
-        assert bundle.match_context["stage"] == "循环赛"
+        assert bundle.match_context["stage"] == "联赛阶段"
+        assert current["current_stage"] == "联赛阶段"
+        assert bundle.automatic_context["head_to_head"][0]["stage"] == "联赛阶段"
         assert current["group_standing"] is None
-        assert current["swiss_standing"]["points"] == 3
-        assert current["swiss_standing"]["rank"] == 1
-        assert "2026–2027 起" in bundle.system_message
+        assert current["league_phase_standing"]["points"] == 3
+        assert current["league_phase_standing"]["rank"] == 1
+        assert PROMPT_DOCUMENTS["competition_female_2026_2027"] in bundle.system_message
         manual = match_manual_payload(session, 999999)
         assert manual["home_team"]["players"]
         assert manual["away_team"]["institution_short_name"] == "土水"
@@ -2594,8 +2600,7 @@ def test_title_uses_batch_snapshots_without_football_reads(session_factory, monk
 def test_current_prompt_and_manual_api_use_live_roster(session_factory, settings):
     with session_factory.begin() as session:
         session.add_all([PromptTemplate(key=key, content="标题测试规则")
-                         for key in ("title_system", "title_rules", "preview_system",
-                                     "preview_writing_rules", "preview_data_rules", "competition_male")])
+                         for key in ("title_system", "title_rules")])
         session.add(User(username="LiveAdmin", display_name="Live Admin",
                          password_hash=hash_password("password-123"), role="admin"))
         batch = _batch(session, complete=True, game_id=4423, competition="male")
