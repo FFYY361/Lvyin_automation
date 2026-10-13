@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -110,6 +111,12 @@ class UpdateAdminUserRequest(BaseModel):
         if "is_active" in self.model_fields_set and self.is_active is None:
             raise ValueError("is_active must be a boolean")
         return self
+
+
+class UpdateUserRoleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["admin", "user"]
 
 
 class ResetPasswordRequest(BaseModel):

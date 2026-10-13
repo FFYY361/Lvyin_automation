@@ -1,3 +1,4 @@
+import { hasAdminRole, userRoleLabel } from "./utils";
 import { useState, type ReactNode } from "react";
 import { BookOpen, CalendarPlus, ClipboardList, Database, FileText, Layers3, LogOut, Menu, UserCog, UserRound, X } from "lucide-react";
 import { Navigate, NavLink, Outlet, createHashRouter, useLocation, useNavigate } from "react-router-dom";
@@ -45,7 +46,7 @@ function ProtectedLayout() {
   const location = useLocation();
   if (loading) return <LoadingScreen label="正在确认登录状态" />;
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  const navigation = user.role === "admin" ? adminNavigation : userNavigation;
+  const navigation = hasAdminRole(user) ? adminNavigation : userNavigation;
   const handleLogout = async () => { await logout(); navigate("/login", { replace: true }); };
   return (
     <div className="app-shell">
@@ -53,7 +54,7 @@ function ProtectedLayout() {
         <div className="brand"><div className="brand__mark">绿</div><div><strong>绿茵宣传部</strong><span>Media Department</span></div><button className="icon-button sidebar__close" onClick={() => setMenuOpen(false)} aria-label="关闭导航"><X size={18} /></button></div>
         <nav className="nav" aria-label="主导航">{navigation.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} onClick={() => setMenuOpen(false)} className={({ isActive }) => cx("nav__item", isActive && "nav__item--active")}><Icon size={18} aria-hidden />{label}</NavLink>)}</nav>
         <div className="sidebar__footer">
-          <NavLink to="/account" className="user-card"><span className="user-card__avatar">{user.display_name.slice(0, 1)}</span><div><strong>{user.display_name}</strong><span>@{user.username} · {user.role === "admin" ? "管理员" : "普通用户"}</span></div></NavLink>
+          <NavLink to="/account" className="user-card"><span className="user-card__avatar">{user.display_name.slice(0, 1)}</span><div><strong>{user.display_name}</strong><span>@{user.username} · {userRoleLabel(user.role)}</span></div></NavLink>
           <Button variant="quiet" onClick={handleLogout} className="logout-button"><LogOut size={17} />退出</Button>
         </div>
       </aside>
@@ -65,11 +66,11 @@ function ProtectedLayout() {
 
 function RoleHome() {
   const { user } = useAuth();
-  return <Navigate to={user?.role === "admin" ? "/previews" : "/tasks"} replace />;
+  return <Navigate to={hasAdminRole(user) ? "/previews" : "/tasks"} replace />;
 }
 function AdminOnly({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  return user?.role === "admin" ? children : <Navigate to="/tasks" replace />;
+  return hasAdminRole(user) ? children : <Navigate to="/tasks" replace />;
 }
 
 export const router = createHashRouter([

@@ -5,7 +5,7 @@ export interface User {
   id: number;
   username: string;
   display_name: string;
-  role: "admin" | "user";
+  role: "admin" | "user" | "super_admin";
   is_active: boolean;
 }
 

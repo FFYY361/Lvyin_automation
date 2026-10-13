@@ -1,3 +1,13 @@
+import type { User } from "./types";
+
+export function hasAdminRole(user: User | null | undefined): boolean {
+  return user?.role === "admin" || user?.role === "super_admin";
+}
+
+export function userRoleLabel(role: User["role"]): string {
+  return role === "super_admin" ? "超级管理员" : role === "admin" ? "管理员" : "普通用户";
+}
+
 export function formatDate(value: string): string {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;

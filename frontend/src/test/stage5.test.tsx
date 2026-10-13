@@ -32,8 +32,8 @@ function namedTask(gameId: number, name: string, kickoff: string, overrides: Par
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
-function renderPage(element: React.ReactNode, user: User, path = "/tasks", routePath = "/tasks") {
-  const router = createMemoryRouter([{ path: routePath, element }], { initialEntries: [path] });
+function renderPage(element: React.ReactNode, user: User, path = "/tasks", routePath = "/tasks", state?: { from: string }) {
+  const router = createMemoryRouter([{ path: routePath, element }], { initialEntries: [{ pathname: path, state }] });
   render(<AuthProvider initialUser={user}><RouterProvider router={router} /></AuthProvider>);
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -107,6 +107,41 @@ describe("stage 5 task center", () => {
 });
 
 describe("stage 5 user management", () => {
+  it.each(["admin", "super_admin"] as const)("limits account controls for %s", async (role) => {
+    const owner = { ...admin, id: 3, role: "super_admin" as const, display_name: "负责人" };
+    const metadata = { created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-02T00:00:00Z", claimed_task_count: 1 };
+    const users = [owner, admin, member].map((item) => ({ ...item, ...metadata }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const target = users.find((item) => String(input).includes(`/${item.id}/role`))!;
+        target.role = JSON.parse(String(init.body)).role;
+        return Promise.resolve(json(target));
+      }
+      return Promise.resolve(json({ items: users }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage(<UsersPage />, role === "super_admin" ? owner : admin, "/users", "/users");
+    await screen.findByText("负责人");
+    const rows = document.querySelectorAll(".user-row");
+    expect(within(rows[0] as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
+    if (role === "admin") {
+      expect(within(rows[1] as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "升级管理员" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "取消管理员" })).not.toBeInTheDocument();
+      return;
+    }
+    expect(within(rows[1] as HTMLElement).getByRole("button", { name: "重置密码" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "升级管理员" }));
+    expect(screen.getByText(/角色变更后该用户的旧会话失效/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认升级管理员" }));
+    await screen.findByText("已升级管理员。");
+    const writerRow = screen.getByText("成员甲").closest(".user-row") as HTMLElement;
+    fireEvent.click(within(writerRow).getByRole("button", { name: "取消管理员" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认取消管理员" }));
+    await screen.findByText("已取消管理员。");
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH").map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ role: "admin" }, { role: "user" }]);
+  });
+
   it("renders one full-width list row per user", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ items: [
       { ...admin, display_name: "系统管理员", created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z", claimed_task_count: 0 },
@@ -140,14 +175,17 @@ describe("stage 5 match permissions", () => {
     expect(screen.getByLabelText("署名")).toHaveAttribute("readonly");
   });
 
-  it("opens another member's match in read-only mode", async () => {
-    const batch = { id: 5, matches: [{ ...task, claimed_by_user_id: 9 }] } as unknown as PreviewBatch;
+  it.each([undefined, { from: "tasks" }])("opens another member's match read-only and returns to its origin %j", async (state) => {
+    const batch = { id: 5, matches: [{ ...task, claimed_by_user_id: 9 }, { ...task, game_id: 12, claimed_by_user_id: 9 }] } as unknown as PreviewBatch;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(batch)));
-    renderPage(<MatchPage />, member, "/previews/5/matches/11", "/previews/:batchId/matches/:gameId");
+    renderPage(<MatchPage />, member, "/previews/5/matches/11", "/previews/:batchId/matches/:gameId", state);
     expect(await screen.findByLabelText("前瞻正文")).toHaveAttribute("readonly");
     expect(screen.getByLabelText("署名")).toHaveAttribute("readonly");
     expect(screen.queryByRole("button", { name: "保存正文" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成前瞻" })).not.toBeInTheDocument();
+    const label = state ? "返回任务中心" : "返回批次";
+    expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", state ? "/tasks" : "/previews/5");
+    expect(screen.getByRole("link", { name: "下一场" })).toHaveAttribute("href", "/previews/5/matches/12");
   });
 });
 

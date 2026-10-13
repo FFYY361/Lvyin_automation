@@ -36,6 +36,7 @@ from thufootball.database import (
     InstitutionRecord,
 )
 
+from .auth import is_admin
 from .models import AIPreviewResult, AITitleResult, Batch, Match, PromptTemplate, User
 from .workflow import AIServiceFactory, WorkflowError
 
@@ -1053,6 +1054,6 @@ def require_match_access(session: Session, game_id: int, user: Any) -> Match:
     match = session.get(Match, game_id)
     if match is None:
         raise WorkflowError(404, "match_not_found", "比赛不存在。")
-    if user.role != "admin" and match.claimed_by_user_id != user.id:
+    if not is_admin(user) and match.claimed_by_user_id != user.id:
         raise WorkflowError(403, "match_access_denied", "你无权访问该场比赛。")
     return match

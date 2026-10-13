@@ -1,6 +1,7 @@
+import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight, Copy, Save, Sparkles } from "lucide-react";
-import { Link, useBlocker, useParams } from "react-router-dom";
+import { Link, useBlocker, useLocation, useParams } from "react-router-dom";
 import { ApiError, api, errorMessage, jsonBody } from "../api";
 import { useAuth } from "../auth";
 import { Alert, Badge, Button, Field, LoadingScreen, Modal, NameInput, PageHeader, Panel, SectionTitle } from "../components";
@@ -61,8 +62,11 @@ function ManualTeamEditor({ side, value, onTeamChange, onPlayerChange }: {
 
 export function MatchPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const { batchId, gameId } = useParams();
+  const location = useLocation();
+  const fromTasks = location.state?.from === "tasks";
+  const backLink = <Link className="button button--quiet" to={fromTasks ? "/tasks" : `/previews/${batchId}`}><ArrowLeft size={16} />{fromTasks ? "返回任务中心" : "返回批次"}</Link>;
   const [batch, setBatch] = useState<PreviewBatch | null>(null);
   const [match, setMatch] = useState<PreviewMatch | null>(null);
   const [writers, setWriters] = useState("");
@@ -261,7 +265,7 @@ export function MatchPage() {
   };
 
   if (loading && !match) return <LoadingScreen label="正在读取比赛详情" />;
-  if (!batch || !match) return <><PageHeader title="比赛不存在" actions={batchId ? <Link className="button button--quiet" to={`/previews/${batchId}`}><ArrowLeft size={16} />返回批次</Link> : undefined} /><Alert tone="danger">{error || "无法读取比赛"}</Alert></>;
+  if (!batch || !match) return <><PageHeader title="比赛不存在" actions={batchId || fromTasks ? backLink : undefined} /><Alert tone="danger">{error || "无法读取比赛"}</Alert></>;
 
   const matches = batch.matches ?? [];
   const index = matches.findIndex((item) => item.game_id === match.game_id);
@@ -273,12 +277,12 @@ export function MatchPage() {
   const selectedModelOption = aiContext?.models.find((model) => model.profile === selectedModel);
   const aiRunning = selectedResult?.status === "queued" || selectedResult?.status === "running";
   const navigation = (target: PreviewMatch | null, direction: "previous" | "next") => target
-    ? <Link className="button button--quiet" to={`/previews/${batch.id}/matches/${target.game_id}`}>{direction === "previous" ? <ChevronLeft size={16} /> : null}{direction === "previous" ? "上一场" : "下一场"}{direction === "next" ? <ChevronRight size={16} /> : null}</Link>
+    ? <Link className="button button--quiet" to={`/previews/${batch.id}/matches/${target.game_id}`} state={fromTasks ? { from: "tasks" } : undefined}>{direction === "previous" ? <ChevronLeft size={16} /> : null}{direction === "previous" ? "上一场" : "下一场"}{direction === "next" ? <ChevronRight size={16} /> : null}</Link>
     : <span className="button button--quiet button--disabled" aria-disabled="true">{direction === "previous" ? <ChevronLeft size={16} /> : null}{direction === "previous" ? "上一场" : "下一场"}{direction === "next" ? <ChevronRight size={16} /> : null}</span>;
 
   return (
     <>
-      <PageHeader eyebrow={`${batch.batch_date} · ${competitionLabels[batch.competition]}`} title={`${home} vs ${away}`} description={`${match.competition_name} · ${match.stage}`} actions={<><Link className="button button--quiet" to={`/previews/${batch.id}`}><ArrowLeft size={16} />返回批次</Link>{navigation(previous, "previous")}{navigation(next, "next")}</>} />
+      <PageHeader eyebrow={`${batch.batch_date} · ${competitionLabels[batch.competition]}`} title={`${home} vs ${away}`} description={`${match.competition_name} · ${match.stage}`} actions={<>{backLink}{navigation(previous, "previous")}{navigation(next, "next")}</>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
 

@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useEffect, useState, type FormEvent } from "react";
 import { LockKeyhole } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
@@ -16,7 +17,7 @@ export function LoginPage() {
 
   useEffect(() => { document.title = "登录 · 绿茵宣传部"; }, []);
   if (loading) return <LoadingScreen label="正在检查登录状态" />;
-  if (user) return <Navigate to={user.role === "admin" ? "/previews" : "/tasks"} replace />;
+  if (user) return <Navigate to={hasAdminRole(user) ? "/previews" : "/tasks"} replace />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -26,9 +27,9 @@ export function LoginPage() {
       const result = await login(username, password);
       const from = (location.state as { from?: string } | null)?.from;
       const adminOnly = from ? /^\/(create|users|settings|wechat-drafts)(\/|$)/.test(from) : false;
-      const destination = from && (result.role === "admin" || !adminOnly)
+      const destination = from && (hasAdminRole(result) || !adminOnly)
         ? from
-        : result.role === "admin" ? "/previews" : "/tasks";
+        : hasAdminRole(result) ? "/previews" : "/tasks";
       navigate(destination, { replace: true });
     } catch (value) {
       setError(errorMessage(value));

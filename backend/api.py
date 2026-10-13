@@ -57,7 +57,9 @@ from .ai_preview import (
 from .auth import (
     get_session,
     hash_password,
+    is_admin,
     require_admin,
+    require_super_admin,
     require_user,
     verify_password,
 )
@@ -105,6 +107,7 @@ from .schemas import (
     UpdateBodyRequest,
     UpdateMatchRequest,
     UpdateSelfRequest,
+    UpdateUserRoleRequest,
     WeatherRequest,
 )
 from .workflow import (
@@ -600,13 +603,15 @@ def create_app(
     def update_user(
         user_id: int,
         payload: UpdateAdminUserRequest,
-        _: User = Depends(require_admin),
+        actor: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         user = session.get(User, user_id)
         if user is None:
             raise _not_found("user")
-        if user.role == "admin":
+        if user.role == "super_admin" or (
+            user.role == "admin" and actor.role != "super_admin"
+        ):
             raise WorkflowError(
                 403,
                 "administrator_account_protected",
@@ -641,13 +646,15 @@ def create_app(
     def reset_user_password(
         user_id: int,
         payload: ResetPasswordRequest,
-        _: User = Depends(require_admin),
+        actor: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ) -> Response:
         user = session.get(User, user_id)
         if user is None:
             raise _not_found("user")
-        if user.role == "admin":
+        if user.role == "super_admin" or (
+            user.role == "admin" and actor.role != "super_admin"
+        ):
             raise WorkflowError(
                 403,
                 "administrator_account_protected",
@@ -658,6 +665,33 @@ def create_app(
         user.updated_at = datetime.now(UTC)
         session.commit()
         return Response(status_code=204)
+
+    @app.patch("/api/admin/users/{user_id}/role")
+    def update_user_role(
+        user_id: int,
+        payload: UpdateUserRoleRequest,
+        _: User = Depends(require_super_admin),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        user = session.get(User, user_id)
+        if user is None:
+            raise _not_found("user")
+        if user.role == "super_admin":
+            raise WorkflowError(
+                403,
+                "administrator_account_protected",
+                "super administrator accounts cannot be modified here",
+            )
+        if user.role != payload.role:
+            user.role = payload.role
+            user.auth_version += 1
+            user.updated_at = datetime.now(UTC)
+            session.commit()
+            session.refresh(user)
+        claimed_task_count = session.scalar(
+            select(func.count(Match.game_id)).where(Match.claimed_by_user_id == user.id)
+        )
+        return _admin_user_payload(user, claimed_task_count or 0)
 
     @app.get("/api/settings/thufootball-credentials")
     async def get_thufootball_credentials(
@@ -1028,7 +1062,7 @@ def create_app(
         claimed_by_user_id = current.claimed_by_user_id
         if claimed_by_user_id is None:
             raise WorkflowError(409, "task_not_claimed", "match is not claimed")
-        if user.role != "admin" and claimed_by_user_id != user.id:
+        if not is_admin(user) and claimed_by_user_id != user.id:
             raise WorkflowError(
                 403,
                 "not_claim_owner",
@@ -1072,7 +1106,7 @@ def create_app(
         if payload.user_id is not None and (
             target is None
             or not target.is_active
-            or target.role not in {"user", "admin"}
+            or target.role not in {"user", "admin", "super_admin"}
         ):
             raise WorkflowError(
                 409,
@@ -1133,7 +1167,7 @@ def create_app(
         current = session.get(Match, game_id)
         if current is None:
             raise _not_found("match")
-        if user.role != "admin" and current.claimed_by_user_id != user.id:
+        if not is_admin(user) and current.claimed_by_user_id != user.id:
             raise WorkflowError(
                 403,
                 "not_claim_owner",

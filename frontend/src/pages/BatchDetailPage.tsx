@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ChevronRight, CloudSun, Copy, FileImage, FileText, Save, Send, Sparkles, Users } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
@@ -30,7 +31,7 @@ function MatchCard({ batchId, match, claimantName }: { batchId: number; match: P
 
 export function BatchDetailPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const { batchId } = useParams();
   const [batch, setBatch] = useState<PreviewBatch | null>(null);
   const [loading, setLoading] = useState(true);

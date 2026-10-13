@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, RefreshCw, Search } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -13,7 +14,7 @@ function statusTone(status: BatchStatus): string {
 
 export function BatchesPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const [items, setItems] = useState<PreviewBatch[]>([]);
   const [date, setDate] = useState("");
   const [competition, setCompetition] = useState<Competition | "">("");

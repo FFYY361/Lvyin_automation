@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronRight, FileText, RefreshCw, Search } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -23,7 +24,7 @@ function articleStatus(batch: PreviewBatch) {
 
 export function ReportsPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const [items, setItems] = useState<PreviewBatch[]>([]);
   const [details, setDetails] = useState<Record<number, PreviewBatch>>({});
   const [expanded, setExpanded] = useState<number | null>(null);

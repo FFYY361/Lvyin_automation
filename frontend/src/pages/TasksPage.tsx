@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowRight, ClipboardCheck, Hand, Search, UserRoundCog } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -51,7 +52,7 @@ function TaskCard({
         {onClaim ? <Button variant="primary" loading={claiming} onClick={onClaim}><Hand size={15} />领取任务</Button> : null}
         {onAssign ? <Button onClick={onAssign}><UserRoundCog size={15} />转交</Button> : null}
         {onRelease ? <Button variant="quiet" onClick={onRelease}>释放</Button> : null}
-        {canEnter ? <Link className="button button--quiet" to={`/previews/${match.batch_id}/matches/${match.game_id}`}>进入比赛<ArrowRight size={15} /></Link> : null}
+        {canEnter ? <Link className="button button--quiet" to={`/previews/${match.batch_id}/matches/${match.game_id}`} state={{ from: "tasks" }}>进入比赛<ArrowRight size={15} /></Link> : null}
       </div>
     </article>
   );
@@ -80,7 +81,7 @@ function TaskSection({
 
 export function TasksPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const [myTasks, setMyTasks] = useState<TaskMatch[]>([]);
   const [waitingTasks, setWaitingTasks] = useState<TaskMatch[]>([]);
   const [openTasks, setOpenTasks] = useState<TaskMatch[]>([]);

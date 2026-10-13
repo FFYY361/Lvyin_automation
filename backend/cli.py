@@ -12,7 +12,7 @@ from .config import WebsiteSettings
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the lvyin website backend")
     commands = parser.add_subparsers(dest="command", required=True)
-    init = commands.add_parser("init-admin", help="create the first administrator")
+    init = commands.add_parser("init-admin", help="create the first super administrator")
     init.add_argument("--username", required=True)
     init.add_argument("--display-name", required=True)
     return parser
@@ -34,6 +34,6 @@ def main(argv: list[str] | None = None) -> int:
             display_name=args.display_name,
             password=password,
         )
-        print(f"created administrator id={user_id}")
+        print(f"created super administrator id={user_id}")
         return 0
     raise AssertionError("unreachable")

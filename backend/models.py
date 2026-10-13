@@ -34,7 +34,7 @@ from .database import Base
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'user')", name="ck_users_role"),
+        CheckConstraint("role IN ('admin', 'user', 'super_admin')", name="ck_users_role"),
         CheckConstraint("auth_version >= 0", name="ck_users_auth_version"),
         CheckConstraint(
             "length(username) BETWEEN 1 AND 64 "

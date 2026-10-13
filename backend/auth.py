@@ -44,16 +44,26 @@ def require_user(
         user is None
         or not user.is_active
         or user.auth_version != auth_version
-        or user.role not in {"user", "admin"}
+        or user.role not in {"user", "admin", "super_admin"}
     ):
         request.session.clear()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
     return user
 
 
+def is_admin(user: User) -> bool:
+    return user.role in {"admin", "super_admin"}
+
+
 def require_admin(user: User = Depends(require_user)) -> User:
-    if user.role != "admin":
+    if not is_admin(user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "administrator role required")
+    return user
+
+
+def require_super_admin(user: User = Depends(require_user)) -> User:
+    if user.role != "super_admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "super administrator role required")
     return user
 
 
@@ -73,6 +83,11 @@ def create_admin(
     factory = create_session_factory(engine)
     try:
         with factory.begin() as session:
+            if (
+                session.scalar(select(User.id).where(User.role == "super_admin"))
+                is not None
+            ):
+                raise ValueError("super administrator already exists")
             existing = session.scalar(select(User).where(User.username == username))
             if existing is not None:
                 raise ValueError("username already exists")
@@ -80,7 +95,7 @@ def create_admin(
                 username=username,
                 display_name=display_name.strip(),
                 password_hash=hash_password(password),
-                role="admin",
+                role="super_admin",
             )
             session.add(user)
             session.flush()

@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useEffect, useState, type FormEvent } from "react";
 import { UserPlus } from "lucide-react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
@@ -18,7 +19,7 @@ export function RegisterPage() {
 
   useEffect(() => { document.title = "注册 · 绿茵宣传部"; }, []);
   if (loading) return <LoadingScreen label="正在检查登录状态" />;
-  if (user) return <Navigate to={user.role === "admin" ? "/previews" : "/tasks"} replace />;
+  if (user) return <Navigate to={hasAdminRole(user) ? "/previews" : "/tasks"} replace />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

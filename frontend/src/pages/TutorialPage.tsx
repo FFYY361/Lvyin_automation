@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useEffect, useState } from "react";
 import { BookOpen, CheckCircle2, Eye, Info, Sparkles } from "lucide-react";
 import { useAuth } from "../auth";
@@ -332,7 +333,7 @@ function StepList({ steps, start = 1 }: { steps: TutorialStep[]; start?: number 
 
 export function TutorialPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const [section, setSection] = useState<"admin" | "user">(isAdmin ? "admin" : "user");
   useEffect(() => { document.title = "使用教程 · 绿茵宣传部"; }, []);
   const visibleSteps = section === "admin" ? adminSteps : [...userSteps, ...userExtras];

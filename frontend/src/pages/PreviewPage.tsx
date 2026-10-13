@@ -1,3 +1,4 @@
+import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Maximize2, RefreshCw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
@@ -10,7 +11,7 @@ import { formatDateTime } from "../utils";
 
 export function PreviewPage({ articleType = "preview" }: { articleType?: "preview" | "report" }) {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = hasAdminRole(user);
   const { batchId } = useParams();
   const [batch, setBatch] = useState<PreviewBatch | null>(null);
   const [article, setArticle] = useState<Article | null>(null);

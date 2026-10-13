@@ -2356,6 +2356,116 @@ def test_stage4_task_claim_content_release_assign_and_read_permissions(
         assert detail["current_preview_article_id"] == article_id
 
 
+def test_super_admin_roles_sessions_and_account_management(session_factory, settings):
+    from contextlib import ExitStack
+
+    with session_factory.begin() as session:
+        accounts = [User(username=name, display_name=name,
+                         password_hash=hash_password("password-123"), role=role)
+                    for name, role in [("Owner", "super_admin"), ("Manager", "admin"), ("Writer", "user")]]
+        session.add_all(accounts)
+        session.flush()
+        owner_id, manager_id, writer_id = [account.id for account in accounts]
+        _batch(session, target_date=date(2026, 9, 4), competition="male", complete=True, game_id=9555)
+    app = create_app(settings=settings, session_factory=session_factory)
+    with ExitStack() as stack:
+        owner, manager, writer = [stack.enter_context(TestClient(app)) for _ in accounts]
+        for client, account in zip([owner, manager, writer], accounts):
+            response = client.post("/api/auth/login", json={"username": account.username, "password": "password-123"})
+            assert response.status_code == 200
+            assert response.json()["role"] == account.role
+        role_url = f"/api/admin/users/{writer_id}/role"
+        assert manager.patch(role_url, json={"role": "admin"}).status_code == 403
+        assert writer.patch(role_url, json={"role": "admin"}).status_code == 403
+        assert owner.patch(role_url, json={"role": "super_admin"}).status_code == 422
+        assert owner.patch("/api/admin/users/999999/role", json={"role": "admin"}).status_code == 404
+        assert owner.patch(f"/api/admin/users/{owner_id}/role", json={"role": "user"}).status_code == 403
+        for target_id in [owner_id, manager_id]:
+            assert manager.patch(f"/api/admin/users/{target_id}", json={"display_name": "changed"}).status_code == 403
+            assert manager.post(f"/api/admin/users/{target_id}/reset-password", json={"new_password": "new-password"}).status_code == 403
+        assert owner.patch(f"/api/admin/users/{owner_id}", json={"is_active": False}).status_code == 403
+        assert owner.post(f"/api/admin/users/{owner_id}/reset-password", json={"new_password": "new-password"}).status_code == 403
+        # The new role must pass task-owner checks as well as require_admin.
+        claimed = owner.post("/api/matches/9555/assign", json={"user_id": writer_id})
+        claimed.raise_for_status()
+        assigned = owner.patch("/api/matches/9555/body", json={"expected_version": claimed.json()["body_version"], "body": "owner edited"})
+        assigned.raise_for_status()
+        owner.post("/api/matches/9555/assign", json={"user_id": owner_id}).raise_for_status()
+        owner.post("/api/matches/9555/assign", json={"user_id": writer_id}).raise_for_status()
+        promoted = owner.patch(role_url, json={"role": "admin"})
+        promoted.raise_for_status()
+        assert promoted.json()["claimed_task_count"] == 1
+        assert writer.get("/api/auth/me").status_code == 401
+        with session_factory() as session:
+            version = session.get(User, writer_id).auth_version
+        owner.patch(role_url, json={"role": "admin"}).raise_for_status()
+        with session_factory() as session:
+            assert session.get(User, writer_id).auth_version == version
+        writer.post("/api/auth/login", json={"username": "Writer", "password": "password-123"}).raise_for_status()
+        assert writer.get("/api/admin/users").status_code == 200
+        owner.patch(role_url, json={"role": "user"}).raise_for_status()
+        assert writer.get("/api/auth/me").status_code == 401
+        writer.post("/api/auth/login", json={"username": "Writer", "password": "password-123"}).raise_for_status()
+        assert writer.get("/api/admin/users").status_code == 403
+        with session_factory() as session:
+            assert session.get(Match, 9555).claimed_by_user_id == writer_id
+        owner.patch(f"/api/admin/users/{manager_id}", json={"display_name": "new manager", "is_active": False}).raise_for_status()
+        assert manager.get("/api/auth/me").status_code == 401
+        owner.patch(f"/api/admin/users/{manager_id}", json={"is_active": True}).raise_for_status()
+        owner.post(f"/api/admin/users/{manager_id}/reset-password", json={"new_password": "new-password"}).raise_for_status()
+        assert manager.post("/api/auth/login", json={"username": "Manager", "password": "new-password"}).status_code == 200
+
+
+@pytest.mark.parametrize("roles", [[], ["admin", "user"], ["user"], ["admin", "admin"]])
+def test_super_admin_migration(session_factory, monkeypatch, roles):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    from backend.migrations.versions import v5_super_admin
+
+    with session_factory() as session:
+        connection = session.connection()
+        connection.execute(text("ALTER TABLE users DROP CONSTRAINT ck_users_role"))
+        connection.execute(text("ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('admin', 'user'))"))
+        for index, role in enumerate(roles):
+            session.add(User(username=f"Migration{index}", display_name="migration", password_hash="unused", role=role))
+        session.flush()
+        monkeypatch.setattr(v5_super_admin, "op", Operations(MigrationContext.configure(connection)))
+        if roles and roles.count("admin") != 1:
+            with pytest.raises(RuntimeError, match="恰好一个"):
+                with connection.begin_nested():
+                    v5_super_admin.upgrade()
+            assert session.scalars(select(User.role).order_by(User.id)).all() == roles
+            constraint = connection.scalar(text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_users_role' AND conrelid = 'users'::regclass"))
+            assert "super_admin" not in constraint
+            return
+        v5_super_admin.upgrade()
+        upgraded = connection.execute(text("SELECT role, auth_version FROM users ORDER BY id")).all()
+        assert [row.role for row in upgraded] == ["super_admin" if role == "admin" else role for role in roles]
+        if roles:
+            assert upgraded[0].auth_version == 1
+            connection.execute(text("UPDATE users SET role = 'admin' WHERE role = 'user'"))
+        v5_super_admin.downgrade()
+        rolled_back = connection.execute(text("SELECT role, auth_version FROM users ORDER BY id")).all()
+        assert all(row.role == "admin" for row in rolled_back)
+        if roles:
+            assert rolled_back[0].auth_version == 2
+        constraint = connection.scalar(text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_users_role' AND conrelid = 'users'::regclass"))
+        assert "super_admin" not in constraint
+
+
+def test_init_admin_creates_only_first_super_admin(session_factory, monkeypatch):
+    import backend.auth as auth
+
+    monkeypatch.setattr(auth, "create_database_engine", lambda _: SimpleNamespace(dispose=lambda: None))
+    monkeypatch.setattr(auth, "create_session_factory", lambda _: session_factory)
+    user_id = auth.create_admin("unused", username="InitialOwner", display_name="owner", password="password-123")
+    with session_factory() as session:
+        assert session.get(User, user_id).role == "super_admin"
+    with pytest.raises(ValueError, match="already exists"):
+        auth.create_admin("unused", username="OtherOwner", display_name="owner", password="password-123")
+
+
 def test_stage4_concurrent_claim_has_one_winner(
     postgres_engine,
     settings: WebsiteSettings,
