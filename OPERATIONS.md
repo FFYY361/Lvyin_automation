@@ -128,5 +128,16 @@ AI 前瞻的网站模型需要 `AI_SERVICE_DEEPSEEK_API_KEY` 和 `AI_SERVICE_QWE
 
 2026–2027 当前男足为 `139、140、141`，女足为 `142`；五人制当前赛事为空。
 模板历史范围为此前三个赛季；AI `history_seasons=4` 包含目标赛季及此前三个赛季。
-女足从 2026–2027 起采用瑞士轮规则，thufootball 第一阶段的“循环赛”等明确阶段在展示中
-归为“瑞士轮”，原始快照保留接口事实。旧女足仍按目标赛季选择原规则。
+女足从 2026–2027 起采用类似欧冠联赛阶段的分档对阵、统一积分排名机制。
+AI Prompt 中的第一阶段统一称为“联赛阶段”，原始快照保留接口事实；旧赛季按当年赛制处理。
+
+## 4. 数据库 Prompt 与战报字体
+
+固定 Prompt 仅在数据库 `prompt_templates` / 管理页面维护，Git 不保存规则正文。
+发布若涉及规则改写，需按当次 `need_release.md` 将本地已确认的九个分区导入线上，
+先备份线上内容，再单事务更新；修改人置空，不复制本地用户 ID。
+
+Linux 战报使用 Pillow 渲染，必须配置 `THUFOOTBALL_FONT_DIR`。生产字体目录为
+`/home/xfy/lvyin_media/data/report-fonts`，包含 `simhei.ttf`、`NotoSansSC-VF.ttf`、
+`trebucbd.ttf`、`trebuc.ttf`、`STFANGSO.TTF`。字体不进入 Git 或前端制品；
+部署前验证可加载并在隔离环境生成 PNG。二维码缓存由现有配置管理。
