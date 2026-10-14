@@ -75,7 +75,7 @@ export function WechatDraftPage() {
           {!visibleCandidates.length ? <EmptyState title="暂时没有完整文章" description="请先完善前瞻批次，或渲染完整的战报文章。" /> : <div className="candidate-list" id="article-candidates">{displayedCandidates.map(({ batch, article }) => {
             const checked = selected.includes(article.id);
             return <label className="candidate-card" key={article.id}><input type="checkbox" checked={checked} disabled={!checked && selected.length >= 8} onChange={() => toggle(article.id)} /><div><strong>{article.title}</strong><span>{article.article_type === "preview" ? "前瞻" : "战报"} · {formatDate(batch.batch_date)} · {competitionLabels[batch.competition]}{article.article_type === "report" ? ` · 记录 #${article.version_number}` : ""}</span></div>{checked ? <Check size={18} /> : null}</label>;
-          })}{visibleCandidates.length > 8 ? <Button aria-expanded={candidatesExpanded} aria-controls="article-candidates" onClick={() => setCandidatesExpanded((current) => !current)}>{candidatesExpanded ? "收起" : `展开全部（${visibleCandidates.length} 篇）`}</Button> : null}</div>}
+          })}{visibleCandidates.length > 8 ? <Button aria-expanded={candidatesExpanded} aria-controls="article-candidates" onClick={() => setCandidatesExpanded((current) => !current)}>{candidatesExpanded ? "收起" : "展开全部"}</Button> : null}</div>}
         </Panel>
         <Panel>
           <SectionTitle title={`发布顺序（${selected.length}/8）`} description="第一篇为头条。拖动或使用按钮调整。" />
