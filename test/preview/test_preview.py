@@ -293,13 +293,17 @@ class TemplateTests(unittest.TestCase):
 
     def test_venue_short_names_cover_configured_fields_and_fallback(self) -> None:
         expected = {
+            "西大操场南": "西操南",
+            "西大操场北": "西操北",
             "紫荆足球场": "紫操",
             "西区足球场": "西操",
+            "东大操场": "东操",
             "东区足球场": "东操",
-            "紫荆足球场北侧场地": "紫北",
-            "紫荆足球场南侧场地": "紫南",
-            "西区足球场北侧场地": "西北",
-            "西区足球场南侧场地": "西南",
+            "红场足球场": "红场",
+            "紫荆足球场北侧场地": "紫操北",
+            "紫荆足球场南侧场地": "紫操南",
+            "西区足球场北侧场地": "西操北",
+            "西区足球场南侧场地": "西操南",
         }
         for full_name, short_name in expected.items():
             with self.subTest(full_name=full_name):
@@ -320,7 +324,7 @@ class TemplateTests(unittest.TestCase):
             _parse_source(raw),
         )
 
-        self.assertIn(">紫北</td>", rendered.body_html)
+        self.assertIn(">紫操北</td>", rendered.body_html)
         self.assertIn("紫荆足球场北侧场地</p>", rendered.body_html)
 
     def test_missing_outcome_and_head_to_head_have_explicit_fallbacks(self) -> None:
@@ -626,7 +630,9 @@ class QhlyPreviewV1AssetTests(unittest.TestCase):
             rendered.body_html.count("transform:translate3d(-6px,6px,0)"), 4
         )
         self.assertEqual(
-            rendered.body_html.count("background:#5a0383;height:2px;margin:5px 0"),
+            rendered.body_html.count(
+                "border-bottom:2px solid #5a0383;margin-bottom:5px;padding-bottom:5px"
+            ),
             2,
         )
         self.assertEqual(

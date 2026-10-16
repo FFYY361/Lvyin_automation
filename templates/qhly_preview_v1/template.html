@@ -76,131 +76,133 @@
     </section>
 
     <!-- wx:each source.matches as match -->
-    <section style="background:rgba(252,154,255,.08);padding:10px">
-      <!-- 比赛卡片左上角装饰线 -->
-      <section style="background:#5a0383;height:4px;line-height:0;margin:-10px 0 10px -10px;overflow:hidden;width:60px"></section>
+    <!-- 分隔线由包含比赛内容的外层容器绘制，避免被微信当作空节点清理。 -->
+    <section style="border-bottom:2px solid #5a0383;margin-bottom:5px;padding-bottom:5px">
+      <section style="background:rgba(252,154,255,.08);padding:10px">
+        <!-- 比赛卡片左上角装饰线 -->
+        <section style="background:#5a0383;height:4px;line-height:0;margin:-10px 0 10px -10px;overflow:hidden;width:60px"></section>
 
-      <!-- 对阵与比赛信息 -->
-      <!-- 长队名可越过中线少许；主客队上下错位，不会与居中的 VS 同行碰撞。 -->
-      <section style="color:#000;font-size:19px;line-height:1.2;margin:10px 24px 0;text-align:left">
-        <section style="width:{{match.home.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.home.name}}</strong></p></section>
-        <p style="color:#5a0383;margin:.8em 0;text-align:center"><strong>VS</strong></p>
-        <section style="margin-left:auto;text-align:right;width:{{match.away.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.away.name}}</strong></p></section>
-      </section>
-      <section style="color:#000;font-size:14px;letter-spacing:1px;line-height:1.8;margin:10px 24px;text-align:left">
-        <p style="margin:0">{{match.competition_name}} {{match.stage}}</p>
-        <p style="margin:0">{{match.kickoff|match_datetime}} {{match.venue}}</p>
-      </section>
+        <!-- 对阵与比赛信息 -->
+        <!-- 长队名可越过中线少许；主客队上下错位，不会与居中的 VS 同行碰撞。 -->
+        <section style="color:#000;font-size:19px;line-height:1.2;margin:10px 24px 0;text-align:left">
+          <section style="width:{{match.home.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.home.name}}</strong></p></section>
+          <p style="color:#5a0383;margin:.8em 0;text-align:center"><strong>VS</strong></p>
+          <section style="margin-left:auto;text-align:right;width:{{match.away.name|team_name_width}}"><p style="margin:0;word-break:break-all"><strong>{{match.away.name}}</strong></p></section>
+        </section>
+        <section style="color:#000;font-size:14px;letter-spacing:1px;line-height:1.8;margin:10px 24px;text-align:left">
+          <p style="margin:0">{{match.competition_name}} {{match.stage}}</p>
+          <p style="margin:0">{{match.kickoff|match_datetime}} {{match.venue}}</p>
+        </section>
 
-      <!-- 历史数据标签 -->
-      <section style="margin-bottom:-8px;margin-right:-84px;transform:scale(.8);transform-origin:left top">
-        <section style="display:flex;flex-flow:row;height:42px;margin-bottom:15px">
-          <section style="background:#5a0383;color:#fff;font-size:20px;height:42px;letter-spacing:1px;padding:0 13px;white-space:nowrap"><p style="line-height:42px;margin:0"><strong>历史数据</strong></p></section>
-          <section style="border-color:transparent transparent transparent #5a0383;border-style:solid;border-width:21px 0 21px 17px;height:0;width:0"></section>
+        <!-- 历史数据标签 -->
+        <section style="margin-bottom:-8px;margin-right:-84px;transform:scale(.8);transform-origin:left top">
+          <section style="display:flex;flex-flow:row;height:42px;margin-bottom:15px">
+            <section style="background:#5a0383;color:#fff;font-size:20px;height:42px;letter-spacing:1px;padding:0 13px;white-space:nowrap"><p style="line-height:42px;margin:0"><strong>历史数据</strong></p></section>
+            <section style="border-color:transparent transparent transparent #5a0383;border-style:solid;border-width:21px 0 21px 17px;height:0;width:0"></section>
+          </section>
+        </section>
+
+        <!-- 历史数据框 -->
+        <section style="margin:.5em 0;text-align:center">
+          <section style="display:flex;justify-content:space-between">
+            <section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(6px,-6px,0);width:15px"></section></section>
+            <section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(-6px,-6px,0);width:15px"></section></section>
+          </section>
+
+          <section style="margin:-8px 10px;padding:10px">
+            <!--
+              五个等宽底层列是公众号兼容性保险：即使微信清洗 table-layout、
+              colgroup 或百分比列宽，colspan=2/1/2 仍会保持 4:2:4。
+            -->
+            <table style="border:1px solid #d6d6d6;border-collapse:collapse;color:#000;font-size:14px;table-layout:fixed;text-align:center;width:100%;word-break:break-all" width="100%">
+              <tbody>
+                <tr style="font-size:0;height:0;line-height:0">
+                  <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
+                  <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
+                  <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
+                  <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
+                  <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
+                </tr>
+                <tr>
+                  <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;width:40%" width="40%"><strong>{{match.home.short_name}}</strong></td>
+                  <td style="border:1px solid #d6d6d6;color:#000;padding:5px;width:20%" width="20%"></td>
+                  <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;width:40%" width="40%"><strong>{{match.away.short_name}}</strong></td>
+                </tr>
+                <tr>
+                  <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
+                    <!-- wx:each match.home.previous_outcomes as outcome -->
+                    <p style="margin:0 0 2px">（{{outcome|outcome_heading}}）</p>
+                    <p style="margin:{{loop.last|history_item_margin}}">{{outcome.outcome}}</p>
+                    <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
+                  </td>
+                  <td style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle"><strong>过往三届战绩</strong></td>
+                  <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
+                    <!-- wx:each match.away.previous_outcomes as outcome -->
+                    <p style="margin:0 0 2px">（{{outcome|outcome_heading}}）</p>
+                    <p style="margin:{{loop.last|history_item_margin}}">{{outcome.outcome}}</p>
+                    <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
+                  </td>
+                </tr>
+                <tr>
+                  <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
+                    <!-- wx:each match.home.current_results as result -->
+                    <p style="margin:{{loop.last|history_item_margin}}">{{result|result_line}}</p>
+                    <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
+                  </td>
+                  <td style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle"><strong>本届赛事战绩</strong></td>
+                  <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
+                    <!-- wx:each match.away.current_results as result -->
+                    <p style="margin:{{loop.last|history_item_margin}}">{{result|result_line}}</p>
+                    <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
+                  </td>
+                </tr>
+                <tr>
+                  <td colspan="5" style="border:1px solid #d6d6d6;color:#000;padding:7px 5px">
+                    <p style="margin:0 0 4px"><strong>两队最近三年交手战绩：</strong></p>
+                    <!-- wx:each match.head_to_head as meeting -->
+                    <p style="margin:0">{{meeting|head_to_head_line}}</p>
+                    <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section style="display:flex;justify-content:space-between">
+            <section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;transform:translate3d(6px,6px,0);width:15px"></section></section>
+            <section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;transform:translate3d(-6px,6px,0);width:15px"></section></section>
+          </section>
+        </section>
+
+        <section style="height:25px"></section>
+
+        <!-- 比赛前瞻标签 -->
+        <section style="margin-bottom:-8px;margin-right:-84px;transform:scale(.8);transform-origin:left top">
+          <section style="display:flex;flex-flow:row;height:42px;margin-bottom:15px">
+            <section style="background:#5a0383;color:#fff;font-size:20px;height:42px;letter-spacing:1px;padding:0 13px;white-space:nowrap"><p style="line-height:42px;margin:0"><strong>比赛前瞻</strong></p></section>
+            <section style="border-color:transparent transparent transparent #5a0383;border-style:solid;border-width:21px 0 21px 17px;height:0;width:0"></section>
+          </section>
+        </section>
+
+        <!-- 比赛前瞻正文框 -->
+        <section style="margin:.5em 0;text-align:center">
+          <section style="display:flex;justify-content:space-between">
+            <section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(6px,-6px,0);width:15px"></section></section>
+            <section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(-6px,-6px,0);width:15px"></section></section>
+          </section>
+          <section style="margin:-8px 10px;padding:10px;text-align:justify">
+            <!-- wx:each match.preview_paragraphs as paragraph -->
+            <p style="margin:{{loop.last|paragraph_margin}};text-indent:2em">{{paragraph}}</p>
+            <!-- wx:endeach -->
+          </section>
+          <section style="display:flex;justify-content:space-between">
+            <section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;transform:translate3d(6px,6px,0);width:15px"></section></section>
+            <section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;transform:translate3d(-6px,6px,0);width:15px"></section></section>
+          </section>
         </section>
       </section>
 
-      <!-- 历史数据框 -->
-      <section style="margin:.5em 0;text-align:center">
-        <section style="display:flex;justify-content:space-between">
-          <section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(6px,-6px,0);width:15px"></section></section>
-          <section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(-6px,-6px,0);width:15px"></section></section>
-        </section>
-
-        <section style="margin:-8px 10px;padding:10px">
-          <!--
-            五个等宽底层列是公众号兼容性保险：即使微信清洗 table-layout、
-            colgroup 或百分比列宽，colspan=2/1/2 仍会保持 4:2:4。
-          -->
-          <table style="border:1px solid #d6d6d6;border-collapse:collapse;color:#000;font-size:14px;table-layout:fixed;text-align:center;width:100%;word-break:break-all" width="100%">
-            <tbody>
-              <tr style="font-size:0;height:0;line-height:0">
-                <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
-                <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
-                <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
-                <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
-                <td height="0" style="border:0;height:0;line-height:0;padding:0;width:20%" width="20%"></td>
-              </tr>
-              <tr>
-                <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;width:40%" width="40%"><strong>{{match.home.short_name}}</strong></td>
-                <td style="border:1px solid #d6d6d6;color:#000;padding:5px;width:20%" width="20%"></td>
-                <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;width:40%" width="40%"><strong>{{match.away.short_name}}</strong></td>
-              </tr>
-              <tr>
-                <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
-                  <!-- wx:each match.home.previous_outcomes as outcome -->
-                  <p style="margin:0 0 2px">（{{outcome|outcome_heading}}）</p>
-                  <p style="margin:{{loop.last|history_item_margin}}">{{outcome.outcome}}</p>
-                  <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
-                </td>
-                <td style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle"><strong>过往三届战绩</strong></td>
-                <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
-                  <!-- wx:each match.away.previous_outcomes as outcome -->
-                  <p style="margin:0 0 2px">（{{outcome|outcome_heading}}）</p>
-                  <p style="margin:{{loop.last|history_item_margin}}">{{outcome.outcome}}</p>
-                  <!-- wx:empty --><p style="margin:0">暂无数据</p><!-- wx:endeach -->
-                </td>
-              </tr>
-              <tr>
-                <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
-                  <!-- wx:each match.home.current_results as result -->
-                  <p style="margin:{{loop.last|history_item_margin}}">{{result|result_line}}</p>
-                  <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
-                </td>
-                <td style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle"><strong>本届赛事战绩</strong></td>
-                <td colspan="2" style="border:1px solid #d6d6d6;color:#000;padding:5px;vertical-align:middle">
-                  <!-- wx:each match.away.current_results as result -->
-                  <p style="margin:{{loop.last|history_item_margin}}">{{result|result_line}}</p>
-                  <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
-                </td>
-              </tr>
-              <tr>
-                <td colspan="5" style="border:1px solid #d6d6d6;color:#000;padding:7px 5px">
-                  <p style="margin:0 0 4px"><strong>两队最近三年交手战绩：</strong></p>
-                  <!-- wx:each match.head_to_head as meeting -->
-                  <p style="margin:0">{{meeting|head_to_head_line}}</p>
-                  <!-- wx:empty --><p style="margin:0">无</p><!-- wx:endeach -->
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-
-        <section style="display:flex;justify-content:space-between">
-          <section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;transform:translate3d(6px,6px,0);width:15px"></section></section>
-          <section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;transform:translate3d(-6px,6px,0);width:15px"></section></section>
-        </section>
-      </section>
-
-      <section style="height:25px"></section>
-
-      <!-- 比赛前瞻标签 -->
-      <section style="margin-bottom:-8px;margin-right:-84px;transform:scale(.8);transform-origin:left top">
-        <section style="display:flex;flex-flow:row;height:42px;margin-bottom:15px">
-          <section style="background:#5a0383;color:#fff;font-size:20px;height:42px;letter-spacing:1px;padding:0 13px;white-space:nowrap"><p style="line-height:42px;margin:0"><strong>比赛前瞻</strong></p></section>
-          <section style="border-color:transparent transparent transparent #5a0383;border-style:solid;border-width:21px 0 21px 17px;height:0;width:0"></section>
-        </section>
-      </section>
-
-      <!-- 比赛前瞻正文框 -->
-      <section style="margin:.5em 0;text-align:center">
-        <section style="display:flex;justify-content:space-between">
-          <section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-left:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(6px,-6px,0);width:15px"></section></section>
-          <section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;width:15px"><section style="border-right:2px solid #a65bcb;border-top:2px solid #a65bcb;height:15px;transform:translate3d(-6px,-6px,0);width:15px"></section></section>
-        </section>
-        <section style="margin:-8px 10px;padding:10px;text-align:justify">
-          <!-- wx:each match.preview_paragraphs as paragraph -->
-          <p style="margin:{{loop.last|paragraph_margin}};text-indent:2em">{{paragraph}}</p>
-          <!-- wx:endeach -->
-        </section>
-        <section style="display:flex;justify-content:space-between">
-          <section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-left:2px solid #a65bcb;height:15px;transform:translate3d(6px,6px,0);width:15px"></section></section>
-          <section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;width:15px"><section style="border-bottom:2px solid #a65bcb;border-right:2px solid #a65bcb;height:15px;transform:translate3d(-6px,6px,0);width:15px"></section></section>
-        </section>
-      </section>
     </section>
-
-    <section style="background:#5a0383;height:2px;margin:5px 0"></section>
     <!-- wx:endeach -->
 
     <section style="height:28px"></section>
