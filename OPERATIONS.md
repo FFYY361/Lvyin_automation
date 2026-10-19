@@ -46,6 +46,30 @@ tail -n 100 /home/xfy/lvyin_media/logs/web.log
 
 关闭 SSH 不会停止服务。服务器重启后，crontab 中的 `@reboot` 会启动 Supervisor；用 `crontab -l` 可以查看。
 
+### 每日备份与天气刷新
+
+北京时间每天 `04:00` 执行现有 `ops/backup.sh`。备份完成、网站恢复健康后，脚本在同一把
+`ops/backup.lock` 下执行 `python -m backend refresh-weather`；不新增独立定时任务。
+天气失败不改变已完成的备份结果，网站未恢复健康时跳过天气并记录原因。
+
+手动检查或刷新时，在服务器仓库和现有 `lvyin` 环境执行：
+
+```bash
+cd /home/xfy/lvyin_media/repo
+python -m backend refresh-weather --dry-run
+python -m backend refresh-weather
+tail -n 100 /home/xfy/lvyin_media/logs/weather-refresh.log
+```
+
+按上海时区刷新今天及未来三天内已创建批次的自动天气，保留人工天气。天气内容变化后同步更新
+同日期前瞻文章；仅预报发布时间变化时不重新生成文章。无预报正常跳过，真实失败退出码为 `1`。
+每个日期独立提交，失败日期保留原数据；微信公众号已有草稿不自动改写。
+
+天气日志由系统 `logrotate` 在备份后轮转，保留七份并压缩旧日志；配置为
+`ops/weather-logrotate.conf`，状态为 `ops/weather-logrotate.state`。需要暂停自动天气时，
+移除 `ops/backup.sh` 中 `BEGIN daily weather refresh` 到 `END daily weather refresh` 的附加块，
+保留原备份任务及时间。每天备份的退出清理逻辑仍会自动恢复网站，发布停站时继续使用独立回退备份。
+
 ## 2. 更新网站代码
 
 先在本地提交并推送代码，运行后端测试；前端运行测试、类型检查和构建后再上传。
