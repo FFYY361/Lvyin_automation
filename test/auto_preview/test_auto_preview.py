@@ -439,6 +439,73 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
             {},
         )
 
+    async def test_head_to_head_follows_current_sides_including_predecessors(self) -> None:
+        queries = _FakeQueries()
+        institutions = [
+            {"name": name, "short_name": short, "male_team_ids": [team_id],
+             "female_team_ids": [team_id], "futsal_team_ids": []}
+            for team_id, name, short in (
+                (1, "社会科学学院", "社会"), (2, "经济管理学院", "经济")
+            )
+        ]
+        institutions[0]["predecessors"] = [
+            {"name": "社会科学学院前身", "short_name": "社会前身",
+             "male_team_ids": [11], "female_team_ids": [11], "futsal_team_ids": []}
+        ]
+        queries.outcome_catalog = build_outcome_catalog(institutions, [])
+        queries.history = replace(
+            queries.history,
+            matches=tuple(
+                replace(game, home_team_id=home, away_team_id=away,
+                        home_score=home_score, away_score=away_score,
+                        home_penalty=home_penalty, away_penalty=away_penalty)
+                for game, (home, away, home_score, away_score,
+                           home_penalty, away_penalty) in zip(
+                    queries.history.matches,
+                    ((1, 2, 2, 1, None, None), (2, 1, 3, 0, None, None),
+                     (2, 11, 1, 1, 5, 4)),
+                )
+            ),
+        )
+        queries.targets.append(replace(
+            queries.target, game_id=501, home_team_id=2, away_team_id=1,
+        ))
+        logger, _ = _logger()
+        for competition in (Competition.MALE, Competition.FEMALE):
+            with self.subTest(competition=competition):
+                queries.h2h_calls.clear()
+                config = competition_config(competition)
+                queries.targets = [
+                    replace(game, tournament_id=config.current_tournament_ids[0])
+                    for game in queries.targets
+                ]
+                source = await PreviewSourceBuilder(
+                    queries, config, logger=logger,
+                ).build(date(2026, 4, 11))
+                first, second = source.matches
+                self.assertEqual(
+                    [(game.home.team_id, game.away.team_id)
+                     for game in first.head_to_head],
+                    [(1, 2), (1, 2), (11, 2)],
+                )
+                self.assertEqual(
+                    [(game.home.team_id, game.away.team_id)
+                     for game in second.head_to_head],
+                    [(2, 1), (2, 1), (2, 11)],
+                )
+                payload = preview_data_to_dict(source)
+                self.assertEqual(
+                    [[game["result_text"] for game in match["head_to_head"]]
+                     for match in payload["matches"]],
+                    [["2:1", "0:3", "1(4):1(5)"],
+                     ["1:2", "3:0", "1(5):1(4)"]],
+                )
+                self.assertIn(
+                    "社会前身 1(4):1(5) 经济",
+                    _head_to_head_line(first.head_to_head[-1]),
+                )
+                self.assertEqual(len(queries.h2h_calls), 1)
+
     def test_head_to_head_uses_configured_season_when_name_omits_year(
         self,
     ) -> None:

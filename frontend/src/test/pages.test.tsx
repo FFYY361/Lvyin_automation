@@ -78,7 +78,8 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("batch and match pages", () => {
   it("hides futsal batches until explicitly enabled", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ items: [batch, { ...batch, id: 2, competition: "futsal" }] })));
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ items: [{ ...batch, batch_date: today }, { ...batch, batch_date: today, id: 2, competition: "futsal" }] })));
     renderRoute("/previews", "/previews", <BatchesPage />);
 
     expect(await screen.findAllByRole("link", { name: "打开批次" })).toHaveLength(1);

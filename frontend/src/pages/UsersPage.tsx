@@ -7,6 +7,7 @@ import type { AdminUser } from "../types";
 import { formatDateTime, userRoleLabel } from "../utils";
 
 type UserAction = { kind: "edit" | "toggle" | "reset" | "role"; user: AdminUser } | null;
+const roleOrder = { super_admin: 0, admin: 1, user: 2 };
 
 export function UsersPage() {
   const { user } = useAuth();
@@ -31,7 +32,8 @@ export function UsersPage() {
   useEffect(() => { document.title = "用户管理 · 绿茵宣传部"; void load(); }, [load]);
   const filtered = useMemo(() => {
     const value = query.trim().toLocaleLowerCase();
-    return value ? items.filter((item) => `${item.username} ${item.display_name}`.toLocaleLowerCase().includes(value)) : items;
+    return items.filter((item) => `${item.username} ${item.display_name}`.toLocaleLowerCase().includes(value))
+      .sort((a, b) => roleOrder[a.role] - roleOrder[b.role]);
   }, [items, query]);
 
   const open = (kind: NonNullable<UserAction>["kind"], user: AdminUser) => {

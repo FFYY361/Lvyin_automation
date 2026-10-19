@@ -175,6 +175,10 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .data-table td { height: 65px; border-top: 1px solid var(--border); padding: 10px 16px; vertical-align: middle; }
 .data-table td strong, .data-table td small { display: block; }
 .data-table td small { margin-top: 3px; color: var(--muted); }
+.data-table .batch-group-row td { height: auto; padding: 12px 16px; background: var(--surface-subtle); }
+.batch-group-toggle { width: 100%; margin: 0; border: 0; padding: 6px 0; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; }
+.batch-group-toggle:hover { color: var(--primary); }
+.batch-group-toggle > svg { flex-shrink: 0; }
 .error-summary { display: block; max-width: 220px; overflow: hidden; color: var(--danger); text-overflow: ellipsis; white-space: nowrap; }
 .report-batch-table th:last-child, .report-batch-table td:last-child { width: 96px; }
 .report-batch-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
@@ -518,6 +522,9 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
   .data-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; }
   .data-table td:last-child { border-top: 1px solid var(--border); margin-top: 5px; padding-top: 10px; }
   .report-batch-table th:last-child, .report-batch-table td:last-child { width: auto; }
+  .data-table .batch-group-row { border: 0; padding: 0; background: transparent; box-shadow: none; }
+  .data-table .batch-group-row td { display: block; margin: 0; border: 0; padding: 10px 0; background: transparent; }
+  .data-table .batch-group-row td::before { display: none; }
   .report-expanded-row { margin-top: -12px; }
   .report-expanded-row td, .report-expanded-row td:last-child, .batch-feedback-row td, .batch-feedback-row td:last-child { display: block; border: 0; margin: 0; padding: 12px 0 2px; background: transparent; }
   .report-expanded-row td::before, .batch-feedback-row td::before { display: none; }

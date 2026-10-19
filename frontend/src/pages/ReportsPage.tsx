@@ -1,13 +1,12 @@
-import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronRight, FileText, RefreshCw, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, errorMessage, getReportDiagnostics } from "../api";
 import { useAuth } from "../auth";
-import { Alert, Badge, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
+import { Alert, Badge, BatchGroupDivider, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
 import { ReportDiagnostics, reportBatchFeedback } from "../ReportDiagnostics";
 import { competitionLabels, type Article, type Competition, type PreviewBatch, type ReportRenderDiagnostic } from "../types";
-import { formatDate, formatDateTime, teamName } from "../utils";
+import { formatDate, formatDateTime, groupBatchesByDate, hasAdminRole, teamName } from "../utils";
 
 const matchStatusLabels = {
   scheduled: "未开赛",
@@ -31,6 +30,7 @@ export function ReportsPage() {
   const [date, setDate] = useState("");
   const [competition, setCompetition] = useState<Competition | "">("");
   const [showUnfinished, setShowUnfinished] = useState(false);
+  const [showFuture, setShowFuture] = useState(false);
   const [refreshing, setRefreshing] = useState<number | null>(null);
   const [rendering, setRendering] = useState<Set<number>>(() => new Set());
   const [renderFeedback, setRenderFeedback] = useState<Record<number, { tone: "success" | "info" | "warning" | "danger"; message: string; diagnostics: ReportRenderDiagnostic[] }>>({});
@@ -120,6 +120,28 @@ export function ReportsPage() {
     }
   };
 
+  const { current, collapsed: future } = groupBatchesByDate(items, "report");
+
+  const renderBatch = (batch: PreviewBatch) => {
+    const detail = details[batch.id];
+    const matches = (detail?.matches ?? []).filter((match) => match.active && (showUnfinished || match.status === "finished"));
+    const status = articleStatus(batch);
+    const feedback = renderFeedback[batch.id];
+    return (
+      <tbody key={batch.id}>
+        <tr>
+          <td data-label="日期"><button className="report-batch-toggle" onClick={() => void toggle(batch.id)} aria-expanded={expanded === batch.id}>{expanded === batch.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}<span><strong>{formatDate(batch.batch_date)}</strong><small>#{batch.id}</small></span></button></td>
+          <td data-label="赛事">{competitionLabels[batch.competition]}</td>
+          <td data-label="战报文章"><Badge tone={status.tone}>{status.label}</Badge></td>
+          <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
+          <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询" aria-label="重新查询"><RefreshCw size={16} /></Button><Button variant="quiet" loading={rendering.has(batch.id)} onClick={() => void renderArticle(batch)} title="渲染战报文章" aria-label="渲染文章"><FileText size={16} /></Button></> : null}<Link className="icon-link" to={`/reports/${batch.id}/article`} aria-label="预览战报文章" title="预览战报文章"><ArrowRight size={17} /></Link></div></td>
+        </tr>
+        {feedback ? <tr className="batch-feedback-row"><td colSpan={5}><Alert tone={feedback.tone} onDismiss={() => setRenderFeedback((current) => { const next = { ...current }; delete next[batch.id]; return next; })}>{feedback.message}</Alert><ReportDiagnostics diagnostics={feedback.diagnostics} matches={detail?.matches ?? []} /></td></tr> : null}
+        {expanded === batch.id ? <tr className="report-expanded-row"><td colSpan={5}>{!detail ? <LoadingScreen label="正在读取比赛" /> : !matches.length ? <EmptyState title="没有可显示的比赛" description={showUnfinished ? "该批次当前没有有效比赛。" : "当前没有已完赛比赛，可勾选显示未完赛比赛。"} /> : <div className="match-card-list">{matches.map((match) => <Link className="match-card" key={match.game_id} to={`/reports/${batch.id}/matches/${match.game_id}`}><div className="match-card__heading"><span>{match.competition_name} · {match.stage}</span><Badge tone={match.status === "finished" ? "success" : "neutral"}>{matchStatusLabels[match.status]}</Badge></div><strong>{teamName(match.home)} <em>vs</em> {teamName(match.away)}</strong><div className="match-card__meta"><span>{formatDateTime(match.kickoff)}</span><span>{match.venue}</span><span>{match.report.available ? "战报已生成" : "尚未生成战报"}</span></div><ChevronRight className="match-card__arrow" size={18} /></Link>)}</div>}</td></tr> : null}
+      </tbody>
+    );
+  };
+
   return (
     <>
       <PageHeader eyebrow="内容管理" title="战报批次" description="展开批次查看比赛；比赛数据只在管理员手动重新查询时更新。" />
@@ -135,25 +157,9 @@ export function ReportsPage() {
           <div className="data-table-wrap">
             <table className="data-table report-batch-table">
               <thead><tr><th>日期</th><th>赛事</th><th>战报文章</th><th>更新时间</th><th><span className="sr-only">操作</span></th></tr></thead>
-              {items.map((batch) => {
-                const detail = details[batch.id];
-                const matches = (detail?.matches ?? []).filter((match) => match.active && (showUnfinished || match.status === "finished"));
-                const status = articleStatus(batch);
-                const feedback = renderFeedback[batch.id];
-                return (
-                  <tbody key={batch.id}>
-                    <tr>
-                      <td data-label="日期"><button className="report-batch-toggle" onClick={() => void toggle(batch.id)} aria-expanded={expanded === batch.id}>{expanded === batch.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}<span><strong>{formatDate(batch.batch_date)}</strong><small>#{batch.id}</small></span></button></td>
-                      <td data-label="赛事">{competitionLabels[batch.competition]}</td>
-                      <td data-label="战报文章"><Badge tone={status.tone}>{status.label}</Badge></td>
-                      <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
-                      <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询" aria-label="重新查询"><RefreshCw size={16} /></Button><Button variant="quiet" loading={rendering.has(batch.id)} onClick={() => void renderArticle(batch)} title="渲染战报文章" aria-label="渲染文章"><FileText size={16} /></Button></> : null}<Link className="icon-link" to={`/reports/${batch.id}/article`} aria-label="预览战报文章" title="预览战报文章"><ArrowRight size={17} /></Link></div></td>
-                    </tr>
-                    {feedback ? <tr className="batch-feedback-row"><td colSpan={5}><Alert tone={feedback.tone} onDismiss={() => setRenderFeedback((current) => { const next = { ...current }; delete next[batch.id]; return next; })}>{feedback.message}</Alert><ReportDiagnostics diagnostics={feedback.diagnostics} matches={detail?.matches ?? []} /></td></tr> : null}
-                    {expanded === batch.id ? <tr className="report-expanded-row"><td colSpan={5}>{!detail ? <LoadingScreen label="正在读取比赛" /> : !matches.length ? <EmptyState title="没有可显示的比赛" description={showUnfinished ? "该批次当前没有有效比赛。" : "当前没有已完赛比赛，可勾选显示未完赛比赛。"} /> : <div className="match-card-list">{matches.map((match) => <Link className="match-card" key={match.game_id} to={`/reports/${batch.id}/matches/${match.game_id}`}><div className="match-card__heading"><span>{match.competition_name} · {match.stage}</span><Badge tone={match.status === "finished" ? "success" : "neutral"}>{matchStatusLabels[match.status]}</Badge></div><strong>{teamName(match.home)} <em>vs</em> {teamName(match.away)}</strong><div className="match-card__meta"><span>{formatDateTime(match.kickoff)}</span><span>{match.venue}</span><span>{match.report.available ? "战报已生成" : "尚未生成战报"}</span></div><ChevronRight className="match-card__arrow" size={18} /></Link>)}</div>}</td></tr> : null}
-                  </tbody>
-                );
-              })}
+              {current.map(renderBatch)}
+              {future.length ? <tbody><BatchGroupDivider label="未来批次" count={future.length} expanded={showFuture} colSpan={5} onToggle={() => setShowFuture(!showFuture)} /></tbody> : null}
+              {showFuture ? future.map(renderBatch) : null}
             </table>
           </div>
         </Panel>

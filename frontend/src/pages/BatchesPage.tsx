@@ -1,12 +1,11 @@
-import { hasAdminRole } from "../utils";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, RefreshCw, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api";
 import { useAuth } from "../auth";
-import { Alert, Badge, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
+import { Alert, Badge, BatchGroupDivider, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
 import { competitionLabels, labelMissingField, statusLabels, type BatchStatus, type Competition, type PreviewBatch } from "../types";
-import { formatDate, formatDateTime } from "../utils";
+import { formatDate, formatDateTime, groupBatchesByDate, hasAdminRole } from "../utils";
 
 function statusTone(status: BatchStatus): string {
   return status === "ready" ? "success" : status === "drafted" ? "info" : "warning";
@@ -20,6 +19,7 @@ export function BatchesPage() {
   const [competition, setCompetition] = useState<Competition | "">("");
   const [status, setStatus] = useState<BatchStatus | "">("");
   const [showFutsal, setShowFutsal] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +57,18 @@ export function BatchesPage() {
   };
 
   const visibleItems = showFutsal ? items : items.filter((batch) => batch.competition !== "futsal");
+  const { current, collapsed: history } = groupBatchesByDate(visibleItems, "preview");
+
+  const renderBatch = (batch: PreviewBatch) => (
+    <tr key={batch.id}>
+      <td data-label="日期"><strong>{formatDate(batch.batch_date)}</strong><small>#{batch.id}</small></td>
+      <td data-label="赛事">{competitionLabels[batch.competition]}</td>
+      <td data-label="状态"><Badge tone={statusTone(batch.preview_status)}>{statusLabels[batch.preview_status]}</Badge></td>
+      <td data-label="缺项">{batch.missing_fields.length ? <span title={batch.missing_fields.map((item) => labelMissingField(item)).join("、")}>{batch.missing_fields.length} 项待补充</span> : <span className="success-text">完整</span>}</td>
+      <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
+      <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询"><RefreshCw size={16} /></Button></> : null}<Link className="icon-link" to={`/previews/${batch.id}`} aria-label="打开批次"><ArrowRight size={17} /></Link></div></td>
+    </tr>
+  );
 
   return (
     <>
@@ -74,16 +86,11 @@ export function BatchesPage() {
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>日期</th><th>赛事</th><th>状态</th><th>缺项</th><th>更新时间</th><th><span className="sr-only">操作</span></th></tr></thead>
-              <tbody>{visibleItems.map((batch) => {
-                return <tr key={batch.id}>
-                    <td data-label="日期"><strong>{formatDate(batch.batch_date)}</strong><small>#{batch.id}</small></td>
-                    <td data-label="赛事">{competitionLabels[batch.competition]}</td>
-                    <td data-label="状态"><Badge tone={statusTone(batch.preview_status)}>{statusLabels[batch.preview_status]}</Badge></td>
-                    <td data-label="缺项">{batch.missing_fields.length ? <span title={batch.missing_fields.map((item) => labelMissingField(item)).join("、")}>{batch.missing_fields.length} 项待补充</span> : <span className="success-text">完整</span>}</td>
-                    <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
-                    <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询"><RefreshCw size={16} /></Button></> : null}<Link className="icon-link" to={`/previews/${batch.id}`} aria-label="打开批次"><ArrowRight size={17} /></Link></div></td>
-                  </tr>;
-              })}</tbody>
+              <tbody>
+                {current.map(renderBatch)}
+                {history.length ? <BatchGroupDivider label="历史批次" count={history.length} expanded={showHistory} colSpan={6} onToggle={() => setShowHistory(!showHistory)} /> : null}
+                {showHistory ? history.map(renderBatch) : null}
+              </tbody>
             </table>
           </div>
         </Panel>

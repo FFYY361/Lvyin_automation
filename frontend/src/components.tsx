@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
-import { AlertCircle, CheckCircle2, LoaderCircle, X, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, LoaderCircle, X, XCircle } from "lucide-react";
 
 export function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
@@ -32,6 +32,25 @@ export function Button({
 
 export function Panel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return <section className={cx("panel", className)} {...props} />;
+}
+
+export function BatchGroupDivider({ label, count, expanded, colSpan, onToggle }: {
+  label: string;
+  count: number;
+  expanded: boolean;
+  colSpan: number;
+  onToggle: () => void;
+}) {
+  return (
+    <tr className="batch-group-row">
+      <td colSpan={colSpan}>
+        <button className="divider batch-group-toggle" aria-expanded={expanded} onClick={onToggle}>
+          {expanded ? <ChevronDown size={16} aria-hidden /> : <ChevronRight size={16} aria-hidden />}
+          <span>{label}</span><span>{expanded ? "收起" : "展开"}（{count}）</span>
+        </button>
+      </td>
+    </tr>
+  );
 }
 
 export function PageHeader({

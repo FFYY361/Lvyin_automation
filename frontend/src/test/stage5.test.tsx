@@ -110,7 +110,7 @@ describe("stage 5 user management", () => {
   it.each(["admin", "super_admin"] as const)("limits account controls for %s", async (role) => {
     const owner = { ...admin, id: 3, role: "super_admin" as const, display_name: "负责人" };
     const metadata = { created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-02T00:00:00Z", claimed_task_count: 1 };
-    const users = [owner, admin, member].map((item) => ({ ...item, ...metadata }));
+    const users = [member, admin, owner].map((item) => ({ ...item, ...metadata }));
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PATCH") {
         const target = users.find((item) => String(input).includes(`/${item.id}/role`))!;
@@ -123,6 +123,7 @@ describe("stage 5 user management", () => {
     renderPage(<UsersPage />, role === "super_admin" ? owner : admin, "/users", "/users");
     await screen.findByText("负责人");
     const rows = document.querySelectorAll(".user-row");
+    expect(Array.from(rows, (row) => row.querySelector(".user-row__identity strong")?.textContent)).toEqual(["负责人", "管理员", "成员甲"]);
     expect(within(rows[0] as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
     if (role === "admin") {
       expect(within(rows[1] as HTMLElement).queryByRole("button")).not.toBeInTheDocument();

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { AuthProvider } from "../auth";
@@ -74,7 +74,46 @@ function deferred<T>() {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("batch date groups", () => {
+  it.each([
+    { path: "/previews", Page: BatchesPage, label: "历史批次", link: "打开批次", current: [3, 6, 5, 2], collapsed: [4, 1] },
+    { path: "/reports", Page: ReportsPage, label: "未来批次", link: "预览战报文章", current: [3, 6, 4, 1], collapsed: [5, 2] },
+  ])("sorts $path around today and toggles $label", async ({ path, Page, label, link, current, collapsed }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2025-12-31T16:30:00Z"));
+    let items = [
+      { ...detail, id: 2, batch_date: "2026-01-03" },
+      { ...detail, id: 1, batch_date: "2025-12-30" },
+      { ...detail, id: 3, batch_date: "2026-01-01" },
+      { ...detail, id: 5, batch_date: "2026-01-02" },
+      { ...detail, id: 6, batch_date: "2026-01-01", competition: "female" as const },
+      { ...detail, id: 4, batch_date: "2025-12-31" },
+    ];
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json({ items }))));
+    const router = createMemoryRouter([{ path, element: <Page /> }], { initialEntries: [path] });
+    render(<AuthProvider initialUser={admin}><RouterProvider router={router} /></AuthProvider>);
+    const ids = () => screen.queryAllByRole("link", { name: link }).map((item) => Number(item.getAttribute("href")!.split("/")[2]));
+
+    const toggle = await screen.findByRole("button", { name: new RegExp(label) });
+    expect(ids()).toEqual(current);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(ids()).toEqual([...current, ...collapsed]);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(ids()).toEqual(current);
+
+    items = items.filter((item) => collapsed.includes(item.id));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    const onlyGroup = await screen.findByRole("button", { name: new RegExp(label) });
+    expect(ids()).toEqual([]);
+    fireEvent.click(onlyGroup);
+    expect(ids()).toEqual(collapsed);
+  });
 });
 
 describe("stage 6 report batches", () => {
@@ -153,7 +192,8 @@ describe("stage 6 report batches", () => {
     const router = createMemoryRouter([{ path: "/reports", element: <ReportsPage /> }], { initialEntries: ["/reports"] });
     render(<AuthProvider initialUser={admin}><RouterProvider router={router} /></AuthProvider>);
 
-    const buttons = await screen.findAllByRole("button", { name: "渲染文章" });
+    await screen.findAllByRole("button", { name: "渲染文章" });
+    const buttons = [7, 8].map((id) => within(screen.getByText(`#${id}`).closest("tr")!).getByRole("button", { name: "渲染文章" }));
     fireEvent.click(buttons[0]);
     fireEvent.click(buttons[1]);
     await waitFor(() => expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(true));

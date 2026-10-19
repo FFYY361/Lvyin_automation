@@ -1,4 +1,4 @@
-import type { User } from "./types";
+import type { PreviewBatch, User } from "./types";
 
 export function hasAdminRole(user: User | null | undefined): boolean {
   return user?.role === "admin" || user?.role === "super_admin";
@@ -6,6 +6,20 @@ export function hasAdminRole(user: User | null | undefined): boolean {
 
 export function userRoleLabel(role: User["role"]): string {
   return role === "super_admin" ? "超级管理员" : role === "admin" ? "管理员" : "普通用户";
+}
+
+export function groupBatchesByDate(items: PreviewBatch[], mode: "preview" | "report") {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const isPreview = mode === "preview";
+  const current: PreviewBatch[] = [];
+  const collapsed: PreviewBatch[] = [];
+  for (const batch of items) {
+    const isCurrent = isPreview ? batch.batch_date >= today : batch.batch_date <= today;
+    (isCurrent ? current : collapsed).push(batch);
+  }
+  current.sort((a, b) => isPreview ? a.batch_date.localeCompare(b.batch_date) : b.batch_date.localeCompare(a.batch_date));
+  collapsed.sort((a, b) => isPreview ? b.batch_date.localeCompare(a.batch_date) : a.batch_date.localeCompare(b.batch_date));
+  return { current, collapsed };
 }
 
 export function formatDate(value: string): string {

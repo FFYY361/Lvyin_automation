@@ -137,12 +137,9 @@ class PreviewSourceBuilder:
         self,
         game: GameSummary,
         *,
-        current_results_team_id: int | None = None,
+        home_team_ids: Sequence[int] = (),
     ) -> PlayedMatch:
-        swap_sides = (
-            current_results_team_id is not None
-            and game.away_team_id == current_results_team_id
-        )
+        swap_sides = game.away_team_id in home_team_ids
         if swap_sides:
             home = self._team_ref(
                 game.away_team_id,
@@ -220,7 +217,7 @@ class PreviewSourceBuilder:
         return tuple(
             self._played_match(
                 result.game,
-                current_results_team_id=team_id,
+                home_team_ids=(team_id,),
             )
             for result in eligible
         )
@@ -257,11 +254,14 @@ class PreviewSourceBuilder:
 
     async def _meetings(
         self,
-        team_a_id: int,
-        team_b_id: int,
+        home_team_id: int,
+        away_team_id: int,
         before: datetime,
     ) -> tuple[PlayedMatch, ...]:
-        key = tuple(sorted((team_a_id, team_b_id)))
+        home_team_ids = self._catalog.history_ids(
+            self._catalog.resolve_identity(home_team_id, self._category)
+        )
+        key = tuple(sorted((home_team_id, away_team_id)))
         matches = self._head_to_head.get(key)
         if matches is None:
             history = await self._queries.query_team_sets_matches(
@@ -288,7 +288,9 @@ class PreviewSourceBuilder:
             key=lambda game: (game.kickoff_local, game.game_id),
             reverse=True,
         )
-        return tuple(self._played_match(game) for game in eligible)
+        return tuple(
+            self._played_match(game, home_team_ids=home_team_ids) for game in eligible
+        )
 
     async def _preview_team(
         self,
