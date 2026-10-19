@@ -74,7 +74,7 @@ from thufootball import (
 from thufootball.qr_cache import GameQRCodeCache
 from thufootball.rankings import StaticOutcomeCatalog
 from thufootball.report_validation import report_has_blocking_issues
-from weather import DailyWeather, WeatherQueryService
+from weather import DailyWeather, ForecastUnavailable, WeatherQueryService
 from wechat_official import (
     Article,
     CoverFile,
@@ -279,6 +279,12 @@ _WEATHER_RENDER_FIELDS = (
 )
 
 
+def _weather_content_changed(existing: Weather | None, values: dict[str, Any]) -> bool:
+    return existing is None or any(
+        getattr(existing, name) != values[name] for name in _WEATHER_RENDER_FIELDS
+    )
+
+
 def upsert_automatic_weather(session: Session, value: DailyWeather) -> bool:
     existing = session.get(Weather, value.forecast_date)
     if existing is not None and existing.source == "manual":
@@ -288,9 +294,7 @@ def upsert_automatic_weather(session: Session, value: DailyWeather) -> bool:
         session.add(Weather(date=value.forecast_date, source="auto", **values))
         _invalidate_date(session, value.forecast_date)
         return True
-    content_changed = any(
-        getattr(existing, name) != values[name] for name in _WEATHER_RENDER_FIELDS
-    )
+    content_changed = _weather_content_changed(existing, values)
     record_changed = existing.source != "auto" or any(
         getattr(existing, name) != item for name, item in values.items()
     )
@@ -343,6 +347,88 @@ def set_manual_weather(
         _invalidate_date(session, target_date)
     session.flush()
     return existing
+
+
+async def refresh_weather(
+    factory: sessionmaker[Session],
+    settings: WebsiteSettings,
+    factories: ExternalFactories,
+    *,
+    dry_run: bool = False,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Refresh forecast dates and their previews, committing each date together."""
+    today = today or _now().astimezone(SHANGHAI).date()
+    through = today + timedelta(days=3)
+    with factory() as session:
+        targets = list(
+            session.execute(
+                select(Batch.batch_date, Weather.source)
+                .outerjoin(Weather, Weather.date == Batch.batch_date)
+                .where(Batch.batch_date.between(today, through))
+                .distinct()
+                .order_by(Batch.batch_date)
+            )
+        )
+
+    items: list[dict[str, Any]] = []
+    for target_date, source in targets:
+        item: dict[str, Any] = {
+            "date": target_date.isoformat(),
+            "status": "manual",
+            "batch_ids": [],
+        }
+        if source == "manual":
+            items.append(item)
+            continue
+        try:
+            async with factories.weather() as service:
+                value = await service.get_weather(HAIDIAN_ADCODE, target_date)
+            with factory() as session:
+                # Re-read after HTTP, so weather edited by a user is preserved.
+                existing = session.get(
+                    Weather, target_date, with_for_update=None if dry_run else True
+                )
+                if existing is not None and existing.source == "manual":
+                    items.append(item)
+                    continue
+                if dry_run:
+                    changed = _weather_content_changed(existing, _weather_values(value))
+                    if changed:
+                        item["batch_ids"] = list(
+                            session.scalars(
+                                select(Batch.id)
+                                .where(Batch.batch_date == target_date)
+                                .order_by(Batch.id)
+                            )
+                        )
+                else:
+                    changed = upsert_automatic_weather(session, value)
+                    item["batch_ids"] = sorted(
+                        session.info.get("preview_batches_to_render", ())
+                    )
+                    refresh_preview_articles(session, settings)
+                    session.commit()
+                if changed:
+                    item["status"] = "would_update" if dry_run else "updated"
+                else:
+                    item["status"] = "unchanged"
+        except ForecastUnavailable:
+            item["status"] = "unavailable"
+        except Exception as exc:
+            item.update(status="failed", batch_ids=[], error=str(exc))
+        items.append(item)
+
+    statuses = ("updated", "would_update", "unchanged", "manual", "unavailable", "failed")
+    return {
+        "dry_run": dry_run,
+        "today": today.isoformat(),
+        "through": through.isoformat(),
+        "items": items,
+        "summary": {
+            status: sum(item["status"] == status for item in items) for status in statuses
+        },
+    }
 
 
 def _source_match_payload(source: PreviewSourceData) -> dict[int, dict[str, Any]]:

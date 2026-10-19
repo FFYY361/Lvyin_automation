@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import time
 import uuid
@@ -71,6 +72,8 @@ from backend.workflow import (
     create_wechat_draft,
     match_payload,
     refresh_batch,
+    refresh_preview_articles,
+    refresh_weather,
     render_batch,
     save_batch_cover,
     set_batch_cover_media_id,
@@ -90,6 +93,7 @@ from thufootball import (
     UserProbe,
 )
 from thufootball.database import FootballDataBase, FootballDataRepository, GameRecord
+from weather import DailyWeather, ForecastUnavailable
 from wechat_official import CoverMediaId, DraftReceipt
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -228,20 +232,21 @@ def _batch(
     session.flush()
     if not complete:
         return batch
-    session.add(
-        Weather(
-            date=target_date,
-            adcode="110108",
-            region_name="海淀区",
-            condition="晴",
-            low_c=20,
-            high_c=30,
-            wind_direction="南风",
-            wind_level="2级",
-            source="manual",
-            report_time=datetime.now(UTC),
+    if session.get(Weather, target_date) is None:
+        session.add(
+            Weather(
+                date=target_date,
+                adcode="110108",
+                region_name="海淀区",
+                condition="晴",
+                low_c=20,
+                high_c=30,
+                wind_direction="南风",
+                wind_level="2级",
+                source="manual",
+                report_time=datetime.now(UTC),
+            )
         )
-    )
     session.add(
         Match(
             game_id=game_id,
@@ -649,6 +654,220 @@ def test_default_media_id_draft_is_ordered_and_idempotent(
         updated, _ = render_batch(session, settings, first_batch)
         assert updated.id == first.id
         assert batch_status(session, first_batch) == "ready"
+
+
+def _daily_weather(target_date: date, condition: str = "多云") -> DailyWeather:
+    return DailyWeather(
+        adcode="110108", region_name="海淀区", forecast_date=target_date,
+        condition=condition, low_c=20, high_c=30,
+        wind_direction="南风", wind_level="2级",
+        report_time=datetime(2026, 8, 8, 8, tzinfo=SHANGHAI),
+    )
+
+
+def _weather_refresh_factory(values, calls, on_query=None) -> ExternalFactories:
+    @asynccontextmanager
+    async def weather():
+        async def get_weather(adcode, target_date):
+            calls.append((adcode, target_date))
+            if on_query is not None:
+                on_query(target_date)
+            value = values[target_date]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        yield SimpleNamespace(get_weather=get_weather)
+
+    return ExternalFactories(weather=weather)
+
+
+def test_weather_refresh_updates_all_competitions_and_preserves_tasks(
+    session_factory, settings, monkeypatch,
+) -> None:
+    today = date(2026, 8, 8)
+    with session_factory.begin() as session:
+        first = _batch(session, complete=True)
+        second = _batch(session, complete=True, competition="male", game_id=9002)
+        for target_date, game_id in (
+            (today - timedelta(days=1), 9003),
+            (today + timedelta(days=1), 9004),
+            (today + timedelta(days=4), 9005),
+        ):
+            _batch(session, target_date=target_date, complete=True, game_id=game_id)
+        session.get(Weather, today).source = "auto"
+        records = [render_batch(session, settings, batch)[0] for batch in (first, second)]
+        article_ids = [record.id for record in records]
+        asyncio.run(create_wechat_draft(
+            session, settings, ExternalFactories(wechat=_FakeWechat),
+            [article_ids[0]], confirm=True,
+        ))
+        member = User(
+            username="WeatherWriter", display_name="作者", password_hash="unused",
+            role="user",
+        )
+        session.add(member)
+        session.flush()
+        match = session.get(Match, 9001)
+        match.claimed_by_user_id = member.id
+        match.task_open = True
+        task = (match.body, match.writers, match.claimed_by_user_id, match.task_open)
+        batch_ids = [first.id, second.id]
+        assert batch_status(session, first) == "drafted"
+
+    monkeypatch.setattr("backend.workflow._now", lambda: datetime(2026, 8, 7, 16, 30, tzinfo=UTC))
+    calls = []
+    result = asyncio.run(refresh_weather(
+        session_factory, settings,
+        _weather_refresh_factory({today: _daily_weather(today)}, calls),
+    ))
+    assert result["today"] == today.isoformat()
+    assert calls == [("110108", today)]
+    assert [(item["status"], item["batch_ids"]) for item in result["items"]] == [
+        ("updated", batch_ids), ("manual", []),
+    ]
+    with session_factory() as session:
+        for batch_id, article_id in zip(batch_ids, article_ids):
+            batch = session.get(Batch, batch_id)
+            article = session.get(ArticleRecord, article_id)
+            assert batch.current_preview_article_id == article_id
+            assert article.input_snapshot["weather"]["condition"] == "多云"
+        assert batch_status(session, session.get(Batch, batch_ids[0])) == "ready"
+        match = session.get(Match, 9001)
+        assert (match.body, match.writers, match.claimed_by_user_id, match.task_open) == task
+        assert session.scalar(select(func.count()).select_from(WechatDraft)) == 1
+
+
+@pytest.mark.parametrize(
+    ("dry_run", "condition", "status"),
+    [(True, "多云", "would_update"), (False, "晴", "unchanged")],
+)
+def test_weather_refresh_preview_and_report_time_only_do_not_render(
+    session_factory, settings, monkeypatch, dry_run, condition, status,
+) -> None:
+    today = date(2026, 8, 8)
+    with session_factory.begin() as session:
+        batch = _batch(session, complete=True)
+        weather = session.get(Weather, today)
+        weather.source = "auto"
+        weather.report_time = datetime(2026, 8, 7, 18, tzinfo=SHANGHAI)
+        old_report_time = weather.report_time
+        article, _ = render_batch(session, settings, batch)
+        article_id, article_time = article.id, article.created_at
+
+    def no_render(*_args):
+        pytest.fail("unchanged weather and dry runs must not render articles")
+
+    monkeypatch.setattr("backend.workflow.render_batch", no_render)
+    result = asyncio.run(refresh_weather(
+        session_factory, settings,
+        _weather_refresh_factory({today: _daily_weather(today, condition)}, []),
+        today=today, dry_run=dry_run,
+    ))
+    assert result["items"][0]["status"] == status
+    with session_factory() as session:
+        weather = session.get(Weather, today)
+        assert weather.condition == "晴"
+        assert weather.report_time == (old_report_time if dry_run else _daily_weather(today).report_time)
+        article = session.get(ArticleRecord, article_id)
+        assert article.created_at == article_time
+        assert article.input_snapshot["weather"]["condition"] == "晴"
+
+
+def test_weather_refresh_preserves_manual_edit_during_query(session_factory, settings):
+    today = date(2026, 8, 8)
+    with session_factory.begin() as session:
+        batch = _batch(session, complete=True)
+        session.get(Weather, today).source = "auto"
+        batch_id = batch.id
+
+    def edit_weather(target_date):
+        with session_factory.begin() as session:
+            set_manual_weather(
+                session, target_date, condition="雨", low_c=18, high_c=22,
+                wind_direction="北风", wind_level="3级",
+            )
+            refresh_preview_articles(session, settings)
+
+    result = asyncio.run(refresh_weather(
+        session_factory, settings,
+        _weather_refresh_factory({today: _daily_weather(today)}, [], edit_weather),
+        today=today,
+    ))
+    assert result["items"][0]["status"] == "manual"
+    with session_factory() as session:
+        weather = session.get(Weather, today)
+        article = session.get(ArticleRecord, session.get(Batch, batch_id).current_preview_article_id)
+        assert (weather.source, weather.condition) == ("manual", "雨")
+        assert article.input_snapshot["weather"]["condition"] == "雨"
+
+
+@pytest.mark.parametrize("failure", ["query", "render"])
+def test_weather_refresh_rolls_back_failed_date_and_continues(
+    session_factory, settings, monkeypatch, failure,
+) -> None:
+    today = date(2026, 8, 8)
+    tomorrow = today + timedelta(days=1)
+    unavailable = today + timedelta(days=3)
+    with session_factory.begin() as session:
+        batches = [
+            _batch(session, target_date=target_date, complete=True, game_id=game_id)
+            for target_date, game_id in ((today, 9001), (tomorrow, 9002), (unavailable, 9003))
+        ]
+        for target_date in (today, tomorrow, unavailable):
+            session.get(Weather, target_date).source = "auto"
+        records = [render_batch(session, settings, batch)[0] for batch in batches]
+        first_id, first_html = records[0].id, records[0].body_html
+        second_id = records[1].id
+        batch_ids = [batch.id for batch in batches]
+        session.delete(session.get(Weather, tomorrow))
+
+    def render(session, settings, batch):
+        if failure == "render" and batch.batch_date == today:
+            raise RuntimeError("render failed")
+        return render_batch(session, settings, batch)
+
+    monkeypatch.setattr("backend.workflow.render_batch", render)
+    values = {
+        today: RuntimeError("query failed") if failure == "query" else _daily_weather(today),
+        tomorrow: _daily_weather(tomorrow),
+        unavailable: ForecastUnavailable("not in forecast", stage="forecast"),
+    }
+    result = asyncio.run(refresh_weather(
+        session_factory, settings, _weather_refresh_factory(values, []), today=today,
+    ))
+    assert [item["status"] for item in result["items"]] == ["failed", "updated", "unavailable"]
+    assert result["summary"]["failed"] == 1
+    with session_factory() as session:
+        assert session.get(Weather, today).condition == "晴"
+        assert session.get(Batch, batch_ids[0]).current_preview_article_id == first_id
+        assert session.get(ArticleRecord, first_id).body_html == first_html
+        assert session.get(Weather, tomorrow).condition == "多云"
+        assert session.get(Batch, batch_ids[1]).current_preview_article_id == second_id
+        assert session.get(ArticleRecord, second_id).input_snapshot["weather"]["condition"] == "多云"
+        assert session.get(Weather, unavailable).condition == "晴"
+
+
+@pytest.mark.parametrize(("dry_run", "failed"), [(False, 0), (True, 0), (False, 1)])
+def test_weather_refresh_cli_outputs_json_and_failure_exit_code(
+    settings, monkeypatch, capsys, dry_run, failed,
+):
+    from backend import cli
+
+    calls = []
+    engine = SimpleNamespace(dispose=lambda: calls.append("disposed"))
+
+    async def refresh(factory, settings, factories, *, dry_run):
+        calls.append(dry_run)
+        return {"dry_run": dry_run, "summary": {"failed": failed}}
+
+    monkeypatch.setattr(cli.WebsiteSettings, "from_environment", lambda: settings)
+    monkeypatch.setattr(cli, "create_database_engine", lambda _url: engine)
+    monkeypatch.setattr(cli, "create_session_factory", lambda _engine: None)
+    monkeypatch.setattr("backend.workflow.refresh_weather", refresh)
+    assert cli.main(["refresh-weather", *(["--dry-run"] if dry_run else [])]) == int(failed > 0)
+    assert json.loads(capsys.readouterr().out)["dry_run"] == dry_run
+    assert calls == [dry_run, "disposed"]
 
 
 def test_wechat_draft_closes_preview_batches_only(
