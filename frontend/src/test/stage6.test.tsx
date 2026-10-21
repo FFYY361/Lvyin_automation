@@ -116,6 +116,49 @@ describe("batch date groups", () => {
   });
 });
 
+describe("batch refresh", () => {
+  it.each([
+    { path: "/previews", Page: BatchesPage },
+    { path: "/reports", Page: ReportsPage },
+  ])("keeps concurrent refresh states independent on $path", async ({ path, Page }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-08T04:00:00Z"));
+    const items = [detail, { ...detail, id: 8 }];
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const updatedList = deferred<Response>();
+    let listRequests = 0;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === "/api/batches/7/refresh-data") return first.promise;
+      if (String(input) === "/api/batches/8/refresh-data") return second.promise;
+      listRequests += 1;
+      return listRequests === 1 ? Promise.resolve(json({ items })) : updatedList.promise;
+    }));
+    const router = createMemoryRouter([{ path, element: <Page /> }], { initialEntries: [path] });
+    render(<AuthProvider initialUser={admin}><RouterProvider router={router} /></AuthProvider>);
+    const [firstButton, secondButton] = await screen.findAllByTitle("重新查询");
+
+    fireEvent.click(firstButton);
+    fireEvent.click(secondButton);
+    expect(firstButton).toBeDisabled();
+    expect(secondButton).toBeDisabled();
+
+    await act(async () => first.resolve(json(items[0])));
+    expect(listRequests).toBe(2);
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(firstButton).toBeDisabled();
+    expect(secondButton).toBeDisabled();
+
+    await act(async () => updatedList.resolve(json({ items })));
+    expect(firstButton).toBeEnabled();
+    expect(secondButton).toBeDisabled();
+
+    await act(async () => second.resolve(new Response(JSON.stringify({ detail: "刷新失败" }), { status: 502 })));
+    expect(secondButton).toBeEnabled();
+    expect(screen.getByText("刷新失败")).toBeInTheDocument();
+  });
+});
+
 describe("stage 6 report batches", () => {
   it("summarizes warning matches and technical failures separately", () => {
     const issue = { severity: "warning", code: "duplicate_start", message: "球员 8号张三在首发中重复出现", event_ids: [11], player_id: 99, side: "home", minute: 0, stoppage_minute: 0 } as const;

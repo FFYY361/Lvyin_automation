@@ -61,10 +61,6 @@ class PromptBundle:
         automatic = json.dumps(self.automatic_context, ensure_ascii=False, indent=2)
         return (
             "请根据以下资料，撰写一篇完整的比赛前瞻正文。\n\n"
-            "往届成绩的 outcome 是公开展示口径；sources、history_teams 和 head_to_head 保留完整历史背景。"
-            "从近到远遇到同项目同赛季多个参赛前身时，该赛季及更早历史不归入现球队。"
-            "这些前身资料仅供理解背景，不得在正文展开或作为现球队的成绩、交锋引用。"
-            "head_to_head 中 display_allowed=false 的交锋也仅供背景理解，不得在正文引用。\n\n"
             "<match_context>\n" + "\n".join(match_lines) + "\n</match_context>\n\n"
             "<manual_context>\n```json\n" + manual + "\n```\n</manual_context>\n\n"
             "<automatic_context>\n```json\n" + automatic + "\n```\n</automatic_context>"
@@ -256,7 +252,7 @@ def build_prompt_bundle(
         _integer(item.game.get("game_id"), "game_id") for item in direct_matches
     }
 
-    home_context, home_display_ids = _automatic_team_context(
+    home_context = _automatic_team_context(
         stored,
         selected_tournaments,
         prior_matches,
@@ -268,7 +264,7 @@ def build_prompt_bundle(
         competition_kind,
         resolved_config,
     )
-    away_context, away_display_ids = _automatic_team_context(
+    away_context = _automatic_team_context(
         stored,
         selected_tournaments,
         prior_matches,
@@ -284,14 +280,8 @@ def build_prompt_bundle(
         "home_team": home_context,
         "away_team": away_context,
         "head_to_head": [
-            dict(
-                _head_to_head_match(
-                    stored, item, home_tournament_team_ids, away_tournament_team_ids
-                ),
-                display_allowed=(
-                    _has_any_team(item.game, home_display_ids)
-                    and _has_any_team(item.game, away_display_ids)
-                ),
+            _head_to_head_match(
+                stored, item, home_tournament_team_ids, away_tournament_team_ids
             )
             for item in sorted(
                 direct_matches,
@@ -384,7 +374,7 @@ def _automatic_team_context(
     identity: StaticTeamIdentity,
     competition_kind: str,
     config: PromptConfig,
-) -> tuple[dict[str, object], set[int]]:
+) -> dict[str, object]:
     target_tournament_id = _integer(target_game.get("tournament_id"), "tournament_id")
     target_season = _canonical_season(
         _object(target_tournament.get("tournament"), "tournament").get("season")
@@ -435,30 +425,22 @@ def _automatic_team_context(
         },
         reverse=True,
     )
-    season_tournament_ids = [
-        tuple(
+    season_outcomes = []
+    for season in seasons:
+        tournament_ids = tuple(
             _integer(_object(document.get("tournament"), "tournament").get("id"), "id")
             for document, label, _ in selected_tournaments
             if label == season
         )
-        for season in seasons
-    ]
-    display_history_ids = repository.catalog.display_history_tournament_team_ids(
-        identity, season_tournament_ids
-    )
-    display_ids = set(display_history_ids)
-    season_outcomes = []
-    for season, tournament_ids in zip(seasons, season_tournament_ids):
         outcomes = repository.catalog.season_outcomes(identity, tournament_ids)
-        displayed = [
-            item for item in outcomes if item.tournament_team_id in display_ids
-        ]
-        if len(displayed) > 1:
-            raise ValueError(f"同赛季存在多个可展示成绩：{identity.team_name} {season}")
+        own = [item for item in outcomes if item.team_name == identity.team_name]
+        # Multiple predecessors keep their individual sources; no combined best rank.
+        selected = own or outcomes
+        outcome = selected[0].rank if len(selected) == 1 else "未参赛"
         season_outcomes.append(
             {
                 "season": season,
-                "outcome": displayed[0].rank if displayed else "未参赛",
+                "outcome": outcome,
                 "sources": [
                     {
                         "name": repository.catalog.teams_by_name[
@@ -505,7 +487,7 @@ def _automatic_team_context(
             }
         )
     rules = competition_rules(_COMPETITION_VALUES[competition_kind], target_season)
-    context = {
+    return {
         "name": identity.brief_name,
         "current_tournament": {
             "competition": _competition_label(competition_kind, tournament_info),
@@ -528,7 +510,6 @@ def _automatic_team_context(
         "season_outcomes": season_outcomes,
         "history_teams": history_teams,
     }
-    return context, {tournament_team_id, *display_history_ids}
 
 
 def _past_seasons(

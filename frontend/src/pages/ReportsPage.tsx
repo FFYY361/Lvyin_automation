@@ -31,7 +31,7 @@ export function ReportsPage() {
   const [competition, setCompetition] = useState<Competition | "">("");
   const [showUnfinished, setShowUnfinished] = useState(false);
   const [showFuture, setShowFuture] = useState(false);
-  const [refreshing, setRefreshing] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState<Set<number>>(() => new Set());
   const [rendering, setRendering] = useState<Set<number>>(() => new Set());
   const [renderFeedback, setRenderFeedback] = useState<Record<number, { tone: "success" | "info" | "warning" | "danger"; message: string; diagnostics: ReportRenderDiagnostic[] }>>({});
   const [loading, setLoading] = useState(true);
@@ -72,16 +72,20 @@ export function ReportsPage() {
   };
 
   const refresh = async (batchId: number) => {
-    setRefreshing(batchId);
+    setRefreshing((current) => new Set(current).add(batchId));
     setError(null);
     try {
       const value = await api<PreviewBatch>(`/api/batches/${batchId}/refresh-data`, { method: "POST" });
       setDetails((current) => ({ ...current, [batchId]: value }));
-      await load();
+      await load(true);
     } catch (value) {
       setError(errorMessage(value));
     } finally {
-      setRefreshing(null);
+      setRefreshing((current) => {
+        const next = new Set(current);
+        next.delete(batchId);
+        return next;
+      });
     }
   };
 
@@ -134,7 +138,7 @@ export function ReportsPage() {
           <td data-label="赛事">{competitionLabels[batch.competition]}</td>
           <td data-label="战报文章"><Badge tone={status.tone}>{status.label}</Badge></td>
           <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
-          <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询" aria-label="重新查询"><RefreshCw size={16} /></Button><Button variant="quiet" loading={rendering.has(batch.id)} onClick={() => void renderArticle(batch)} title="渲染战报文章" aria-label="渲染文章"><FileText size={16} /></Button></> : null}<Link className="icon-link" to={`/reports/${batch.id}/article`} aria-label="预览战报文章" title="预览战报文章"><ArrowRight size={17} /></Link></div></td>
+          <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing.has(batch.id)} onClick={() => void refresh(batch.id)} title="重新查询" aria-label="重新查询"><RefreshCw size={16} /></Button><Button variant="quiet" loading={rendering.has(batch.id)} onClick={() => void renderArticle(batch)} title="渲染战报文章" aria-label="渲染文章"><FileText size={16} /></Button></> : null}<Link className="icon-link" to={`/reports/${batch.id}/article`} aria-label="预览战报文章" title="预览战报文章"><ArrowRight size={17} /></Link></div></td>
         </tr>
         {feedback ? <tr className="batch-feedback-row"><td colSpan={5}><Alert tone={feedback.tone} onDismiss={() => setRenderFeedback((current) => { const next = { ...current }; delete next[batch.id]; return next; })}>{feedback.message}</Alert><ReportDiagnostics diagnostics={feedback.diagnostics} matches={detail?.matches ?? []} /></td></tr> : null}
         {expanded === batch.id ? <tr className="report-expanded-row"><td colSpan={5}>{!detail ? <LoadingScreen label="正在读取比赛" /> : !matches.length ? <EmptyState title="没有可显示的比赛" description={showUnfinished ? "该批次当前没有有效比赛。" : "当前没有已完赛比赛，可勾选显示未完赛比赛。"} /> : <div className="match-card-list">{matches.map((match) => <Link className="match-card" key={match.game_id} to={`/reports/${batch.id}/matches/${match.game_id}`}><div className="match-card__heading"><span>{match.competition_name} · {match.stage}</span><Badge tone={match.status === "finished" ? "success" : "neutral"}>{matchStatusLabels[match.status]}</Badge></div><strong>{teamName(match.home)} <em>vs</em> {teamName(match.away)}</strong><div className="match-card__meta"><span>{formatDateTime(match.kickoff)}</span><span>{match.venue}</span><span>{match.report.available ? "战报已生成" : "尚未生成战报"}</span></div><ChevronRight className="match-card__arrow" size={18} /></Link>)}</div>}</td></tr> : null}

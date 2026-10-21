@@ -21,7 +21,7 @@ export function BatchesPage() {
   const [showFutsal, setShowFutsal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
@@ -44,15 +44,19 @@ export function BatchesPage() {
   useEffect(() => { document.title = "批次管理 · 绿茵宣传部"; void load(); }, [load]);
 
   const refresh = async (id: number) => {
-    setRefreshing(id);
+    setRefreshing((current) => new Set(current).add(id));
     setError(null);
     try {
       await api(`/api/batches/${id}/refresh-data`, { method: "POST" });
-      await load();
+      await load(true);
     } catch (value) {
       setError(errorMessage(value));
     } finally {
-      setRefreshing(null);
+      setRefreshing((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -66,7 +70,7 @@ export function BatchesPage() {
       <td data-label="状态"><Badge tone={statusTone(batch.preview_status)}>{statusLabels[batch.preview_status]}</Badge></td>
       <td data-label="缺项">{batch.missing_fields.length ? <span title={batch.missing_fields.map((item) => labelMissingField(item)).join("、")}>{batch.missing_fields.length} 项待补充</span> : <span className="success-text">完整</span>}</td>
       <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
-      <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing === batch.id} onClick={() => void refresh(batch.id)} title="重新查询"><RefreshCw size={16} /></Button></> : null}<Link className="icon-link" to={`/previews/${batch.id}`} aria-label="打开批次"><ArrowRight size={17} /></Link></div></td>
+      <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing.has(batch.id)} onClick={() => void refresh(batch.id)} title="重新查询"><RefreshCw size={16} /></Button></> : null}<Link className="icon-link" to={`/previews/${batch.id}`} aria-label="打开批次"><ArrowRight size={17} /></Link></div></td>
     </tr>
   );
 

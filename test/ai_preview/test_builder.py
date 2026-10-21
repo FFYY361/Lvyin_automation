@@ -394,7 +394,7 @@ class PromptBuilderTests(unittest.TestCase):
         bundle = build_prompt_bundle(20, repository=self.repository)
         home = bundle.automatic_context["home_team"]
         groups = {item["short_name"]: item for item in home["history_teams"]}
-        self.assertEqual(home["season_outcomes"][0]["outcome"], "未参赛")
+        self.assertEqual(home["season_outcomes"][0]["outcome"], "32强")
         self.assertEqual(
             {item["rank"] for item in home["season_outcomes"][0]["sources"]},
             {"32强", "16强", "八强"},
@@ -404,7 +404,11 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertEqual(groups["乙旧"]["past_seasons"][0]["wins"], 1)
         self.assertEqual(home["current_tournament"]["record_before_match"]["played"], 1)
         self.assertEqual(len(bundle.automatic_context["head_to_head"]), 1)
-        self.assertFalse(bundle.automatic_context["head_to_head"][0]["display_allowed"])
+        self.assertNotIn("display_allowed", bundle.automatic_context["head_to_head"][0])
+        self.assertEqual(
+            bundle.render_user_message().split("<match_context>")[0],
+            "请根据以下资料，撰写一篇完整的比赛前瞻正文。\n\n",
+        )
         self.assertNotIn(
             8,
             [
