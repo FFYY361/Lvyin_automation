@@ -138,7 +138,7 @@ AI 前瞻的网站模型需要 `AI_SERVICE_DEEPSEEK_API_KEY` 和 `AI_SERVICE_QWE
 院系合并通过 `institutions.predecessors` 保存前身全称、简称和报名归属。v6 起，本体和前身均使用
 `tournament_teams = {male: {赛事ID: 报名ID}, female: {...}, futsal: {...}}`。新赛季报名后填写对应
 赛事与报名 ID，不把前身报名复制给本体。排名按报名 ID 保存；纯更名修改配置名称和简称。
-v6 迁移操作见 `docs/ai_preview/football_data_database.md`；本次仅本地实施，未部署生产。
+v6 已随 `1.5.0` 上线；迁移操作见 `docs/ai_preview/football_data_database.md`，发布与回退记录见 `RELEASES.md`。
 
 球队、赛事、比赛和最终排名统一维护在 PostgreSQL 的 `institutions`、`tournaments` 和
 `games` 表中，不再维护 notes 文件。新赛季赛事先写入 `tournaments` 并保持
@@ -167,7 +167,7 @@ Linux 战报使用 Pillow 渲染，必须配置 `THUFOOTBALL_FONT_DIR`。生产�
 `trebucbd.ttf`、`trebuc.ttf`、`STFANGSO.TTF`。字体不进入 Git 或前端制品；
 部署前验证可加载并在隔离环境生成 PNG。二维码缓存由现有配置管理。
 
-## 5. 2026-10-21 本地赛事球队 ID 迁移（未上线）
+## 5. 2026-10-21 本地赛事球队 ID 迁移（演练记录）
 
 - 本地数据库由 `v5_super_admin` 升至 `v6_tournament_team_identity`。52 个院系及前身改用按项目、
   赛事组织的报名映射；347 项排名、39 场写作任务快照和 12 篇前瞻输入完成转换。
@@ -179,9 +179,9 @@ Linux 战报使用 Pillow 渲染，必须配置 `THUFOOTBALL_FONT_DIR`。生产�
   冒烟默认跳过；前端 38 项测试、类型检查和构建通过。
 - 本地完整备份、转换清单和核验记录位于 `data/backups/tournament-identity-20261021/`，完整备份为
   `before.dump`，CLI 原文件位于 `runs-before/`。操作方法见 `docs/ai_preview/football_data_database.md`。
-  本次未连接生产数据库、未发布应用；生产执行前需要另行确认版本和备份。
+  当次为本地演练；后续 `1.5.0` 生产迁移、验证及备份记录见 `RELEASES.md`。
 
-### 同日前身配置调整（本地，未上线）
+### 同日前身配置调整（本地演练）
 
 - 土水保留土木-建管、水利两个前身，新闻-马院保留新闻、马院两个前身；历史报名和排名不变。
 - 交叉-AI 添加前身“交叉信息研究院”（简称“交叉”）：男足 `88→988`、`100→1523`，
@@ -193,7 +193,7 @@ Linux 战报使用 Pillow 渲染，必须配置 `THUFOOTBALL_FONT_DIR`。生产�
   撤销前备份为 `data/backups/restore-predecessors-20261021T074940864250.json`。
 - 重复预检无待修改项；已有成绩与数据库测试 12 项通过，覆盖三项目前身归属和交叉分界。
 
-### 同日前瞻历史继承规则调整（未上线）
+### 同日前瞻历史继承规则调整
 
 - 历史赛季从近到远追溯，同项目有多个参赛前身时，该赛季及更早赛季不再继承排名、交锋；
   男足甲乙丙级一起判断，缺少排名仍计入参赛前身数。单前身正常继承，删除排名择优代码。
