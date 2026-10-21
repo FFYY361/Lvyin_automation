@@ -68,28 +68,33 @@ class _FakeQueryService:
 
     async def query_team_matches(
         self,
-        team_id: int,
+        tournament_team_id: int,
         tournament_id: int | None,
         *,
         include_unfinished: bool,
     ) -> list[_Result]:
         self.calls.append(
-            ("query_team_matches", team_id, tournament_id, include_unfinished)
+            (
+                "query_team_matches",
+                tournament_team_id,
+                tournament_id,
+                include_unfinished,
+            )
         )
         return [_Result("team-matches")]
 
     async def query_team_outcomes(
         self,
-        team_id: int,
+        tournament_team_id: int,
         tournament_ids: tuple[int, ...] | None,
     ) -> list[_Result]:
-        self.calls.append(("query_team_outcomes", team_id, tournament_ids))
+        self.calls.append(("query_team_outcomes", tournament_team_id, tournament_ids))
         return [_Result("team-outcomes")]
 
     async def query_team_to_team_matches(
         self,
-        team_a_id: int,
-        team_b_id: int,
+        team_a_tournament_team_id: int,
+        team_b_tournament_team_id: int,
         tournament_ids: tuple[int, ...] | None,
         *,
         include_unfinished: bool,
@@ -97,8 +102,8 @@ class _FakeQueryService:
         self.calls.append(
             (
                 "query_team_to_team_matches",
-                team_a_id,
-                team_b_id,
+                team_a_tournament_team_id,
+                team_b_tournament_team_id,
                 tournament_ids,
                 include_unfinished,
             )
@@ -163,9 +168,9 @@ class ThufootballCliTests(unittest.TestCase):
                     "123",
                     "--match-date",
                     "2026-07-15",
-                    "--team-id",
+                    "--tournament-team-id",
                     "48",
-                    "--team-id",
+                    "--tournament-team-id",
                     "163",
                     "--team-match",
                     "all",
@@ -176,7 +181,7 @@ class ThufootballCliTests(unittest.TestCase):
                     GameQuery(
                         tournament_ids=(122, 123),
                         match_date=date(2026, 7, 15),
-                        team_ids=(48, 163),
+                        tournament_team_ids=(48, 163),
                         team_match="all",
                         include_unfinished=False,
                     ),

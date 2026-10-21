@@ -57,10 +57,10 @@ def _parser() -> argparse.ArgumentParser:
         "--match-date", type=_date, help="Beijing calendar date (YYYY-MM-DD)"
     )
     games.add_argument(
-        "--team-id",
+        "--tournament-team-id",
         type=_positive_id,
         action="append",
-        help="limit the query to this global team ID; may be repeated twice",
+        help="limit the query to this tournament registration ID; may be repeated twice",
     )
     games.add_argument(
         "--team-match",
@@ -77,7 +77,7 @@ def _parser() -> argparse.ArgumentParser:
     team_matches = commands.add_parser(
         "team-matches", help="query one team's matches from its own perspective"
     )
-    team_matches.add_argument("team_id", type=_positive_id)
+    team_matches.add_argument("tournament_team_id", type=_positive_id)
     team_matches.add_argument(
         "--tournament-id", type=_positive_id, help="limit the query to one tournament"
     )
@@ -90,7 +90,7 @@ def _parser() -> argparse.ArgumentParser:
     team_outcomes = commands.add_parser(
         "team-outcomes", help="read final tournament outcomes for one team"
     )
-    team_outcomes.add_argument("team_id", type=_positive_id)
+    team_outcomes.add_argument("tournament_team_id", type=_positive_id)
     team_outcomes.add_argument(
         "--tournament-id",
         type=_positive_id,
@@ -101,8 +101,8 @@ def _parser() -> argparse.ArgumentParser:
     head_to_head = commands.add_parser(
         "head-to-head", help="query the history between two teams"
     )
-    head_to_head.add_argument("team_a_id", type=_positive_id)
-    head_to_head.add_argument("team_b_id", type=_positive_id)
+    head_to_head.add_argument("team_a_tournament_team_id", type=_positive_id)
+    head_to_head.add_argument("team_b_tournament_team_id", type=_positive_id)
     head_to_head.add_argument(
         "--tournament-id",
         type=_positive_id,
@@ -191,14 +191,14 @@ async def _run(args: argparse.Namespace) -> object:
                 GameQuery(
                     tournament_ids=tuple(args.tournament_id or ()),
                     match_date=args.match_date,
-                    team_ids=tuple(args.team_id or ()),
+                    tournament_team_ids=tuple(args.tournament_team_id or ()),
                     team_match=args.team_match,
                     include_unfinished=not args.finished_only,
                 )
             )
         if args.command == "team-matches":
             return await queries.query_team_matches(
-                args.team_id,
+                args.tournament_team_id,
                 args.tournament_id,
                 include_unfinished=args.include_unfinished,
             )
@@ -206,14 +206,16 @@ async def _run(args: argparse.Namespace) -> object:
             tournament_ids = (
                 tuple(args.tournament_id) if args.tournament_id is not None else None
             )
-            return await queries.query_team_outcomes(args.team_id, tournament_ids)
+            return await queries.query_team_outcomes(
+                args.tournament_team_id, tournament_ids
+            )
         if args.command == "head-to-head":
             tournament_ids = (
                 tuple(args.tournament_id) if args.tournament_id is not None else None
             )
             return await queries.query_team_to_team_matches(
-                args.team_a_id,
-                args.team_b_id,
+                args.team_a_tournament_team_id,
+                args.team_b_tournament_team_id,
                 tournament_ids,
                 include_unfinished=args.include_unfinished,
             )

@@ -11,6 +11,7 @@ from types import MappingProxyType
 from .client import THUFootballClient
 from .errors import (
     BatchQueryError,
+    ConfigurationError,
     DataConflict,
     InvalidResponse,
     QueryValidationError,
@@ -29,7 +30,6 @@ from .models import (
     TournamentSnapshot,
 )
 from .policy import (
-    BLACKLISTED_TOURNAMENT_IDS,
     blacklisted_tournament_ids,
 )
 from .rankings import StaticOutcomeCatalog, load_outcome_catalog
@@ -39,7 +39,7 @@ from .rankings import StaticOutcomeCatalog, load_outcome_catalog
 class _ValidatedGameQuery:
     tournament_ids: tuple[int, ...]
     match_date: date | None
-    team_ids: tuple[int, ...]
+    tournament_team_ids: tuple[int, ...]
     team_match: str
     include_unfinished: bool
 
@@ -90,17 +90,6 @@ def _include_unfinished(value: object) -> bool:
     if not isinstance(value, bool):
         raise _validation_error("include_unfinished must be a boolean")
     return value
-
-
-def _team_alias_ids(team_id: int, catalog: StaticOutcomeCatalog) -> frozenset[int]:
-    team_names = catalog.team_names_by_id.get(team_id)
-    if team_names is None:
-        return frozenset((team_id,))
-    return frozenset(
-        alias_id
-        for team_name in team_names
-        for alias_id in catalog.team_ids_by_name[team_name]
-    )
 
 
 def _reject_blacklisted_tournaments(tournament_ids: tuple[int, ...]) -> None:
@@ -205,24 +194,24 @@ def _resolve_finished_game(
 def _team_game_result(
     game: GameSummary,
     *,
-    team_id: int,
+    tournament_team_id: int,
     home_result: MatchResult | None,
 ) -> TeamGameResult:
-    is_home = game.home_team_id == team_id
+    is_home = game.home_tournament_team_id == tournament_team_id
     if is_home:
-        opponent_id = game.away_team_id
+        opponent_tournament_team_id = game.away_tournament_team_id
         opponent_name = game.away_team_name
         venue = "home"
     else:
-        opponent_id = game.home_team_id
+        opponent_tournament_team_id = game.home_tournament_team_id
         opponent_name = game.home_team_name
         venue = "away"
 
     if home_result is None:
         return TeamGameResult(
             game=game,
-            team_id=team_id,
-            opponent_id=opponent_id,
+            tournament_team_id=tournament_team_id,
+            opponent_tournament_team_id=opponent_tournament_team_id,
             opponent_name=opponent_name,
             venue=venue,
             goals_for=None,
@@ -247,8 +236,8 @@ def _team_game_result(
         score_text = f"{goals_for}:{goals_against}"
     return TeamGameResult(
         game=game,
-        team_id=team_id,
-        opponent_id=opponent_id,
+        tournament_team_id=tournament_team_id,
+        opponent_tournament_team_id=opponent_tournament_team_id,
         opponent_name=opponent_name,
         venue=venue,
         goals_for=goals_for,
@@ -282,14 +271,18 @@ def _validate_query(query: object) -> _ValidatedGameQuery:
         raise _validation_error("query must be a GameQuery")
     tournament_ids = _normalise_ids(query.tournament_ids, "tournament_ids")
     _reject_blacklisted_tournaments(tournament_ids)
-    team_ids = _normalise_ids(query.team_ids, "team_ids")
+    tournament_team_ids = _normalise_ids(
+        query.tournament_team_ids, "tournament_team_ids"
+    )
     match_date = query.match_date
     if match_date is not None and (
         isinstance(match_date, datetime) or not isinstance(match_date, date)
     ):
         raise _validation_error("match_date must be a date")
-    if len(team_ids) > 2:
-        raise _validation_error("team_ids may contain at most two distinct IDs")
+    if len(tournament_team_ids) > 2:
+        raise _validation_error(
+            "tournament_team_ids may contain at most two distinct IDs"
+        )
     if query.team_match not in {"any", "all"}:
         raise _validation_error("team_match must be either 'any' or 'all'")
     if not isinstance(query.include_unfinished, bool):
@@ -297,7 +290,7 @@ def _validate_query(query: object) -> _ValidatedGameQuery:
     return _ValidatedGameQuery(
         tournament_ids=tournament_ids,
         match_date=match_date,
-        team_ids=team_ids,
+        tournament_team_ids=tournament_team_ids,
         team_match=query.team_match,
         include_unfinished=query.include_unfinished,
     )
@@ -392,16 +385,6 @@ class THUFootballQueryService:
         if self._close_client:
             await self._client.aclose()
 
-    async def _all_accessible_tournament_ids(self) -> tuple[int, ...]:
-        tournaments = await self._client.get_accessible_tournaments()
-        return tuple(
-            tournament_id
-            for tournament_id in dict.fromkeys(
-                tournament.tournament_id for tournament in tournaments
-            )
-            if tournament_id not in BLACKLISTED_TOURNAMENT_IDS
-        )
-
     async def _read_tournaments(
         self, tournament_ids: tuple[int, ...]
     ) -> tuple[TournamentSnapshot, ...]:
@@ -490,6 +473,15 @@ class THUFootballQueryService:
     async def query_games(self, query: GameQuery) -> list[GameSummary]:
         validated = _validate_query(query)
         if validated.tournament_ids:
+            if validated.tournament_team_ids:
+                for registration in validated.tournament_team_ids:
+                    known = self.outcome_catalog.registration_tournament_ids.get(
+                        registration
+                    )
+                    if known is not None and known not in validated.tournament_ids:
+                        raise _validation_error(
+                            "tournament_team_id does not belong to the requested tournaments"
+                        )
             snapshots = await self._read_tournaments(validated.tournament_ids)
             batch = self._tournament_batch(snapshots)
             games = batch.games
@@ -499,13 +491,22 @@ class THUFootballQueryService:
                 future_bound=validated.match_date + timedelta(days=1),
             )
         else:
-            tournament_ids = await self._all_accessible_tournament_ids()
+            if not validated.tournament_team_ids:
+                raise _validation_error(
+                    "tournament_ids, match_date or tournament_team_ids is required"
+                )
+            tournament_ids = tuple(
+                dict.fromkeys(
+                    self._registration_tournament(value)
+                    for value in validated.tournament_team_ids
+                )
+            )
             snapshots = await self._read_tournaments(tournament_ids)
             batch = self._tournament_batch(snapshots)
             games = batch.games
 
         filtered: list[GameSummary] = []
-        requested_teams = set(validated.team_ids)
+        requested_teams = set(validated.tournament_team_ids)
         for game in self._deduplicate(games):
             if (
                 validated.match_date is not None
@@ -518,7 +519,10 @@ class THUFootballQueryService:
             ):
                 continue
             if requested_teams:
-                game_teams = {game.home_team_id, game.away_team_id}
+                game_teams = {
+                    game.home_tournament_team_id,
+                    game.away_tournament_team_id,
+                }
                 if validated.team_match == "any":
                     matches = bool(requested_teams & game_teams)
                 else:
@@ -534,25 +538,24 @@ class THUFootballQueryService:
 
     async def query_team_matches(
         self,
-        team_id: int,
+        tournament_team_id: int,
         tournament_id: int | None = None,
         *,
         include_unfinished: bool = False,
     ) -> list[TeamGameResult]:
-        team_id = _positive_id(team_id, "team_id")
+        tournament_team_id = _positive_id(tournament_team_id, "tournament_team_id")
         include_unfinished = _include_unfinished(include_unfinished)
-        if tournament_id is None:
-            tournament_ids = await self._all_accessible_tournament_ids()
-            snapshots = await self._read_tournaments(tournament_ids)
-        else:
-            tournament_id = _positive_id(tournament_id, "tournament_id")
-            snapshots = await self._read_tournaments((tournament_id,))
+        tournament_id = self._registration_tournament(tournament_team_id, tournament_id)
+        snapshots = await self._read_tournaments((tournament_id,))
 
         batch = self._tournament_batch(snapshots)
 
         results: list[TeamGameResult] = []
         for game in batch.games:
-            if team_id not in {game.home_team_id, game.away_team_id}:
+            if tournament_team_id not in {
+                game.home_tournament_team_id,
+                game.away_tournament_team_id,
+            }:
                 continue
             if not game.record_active or game.valid is not True:
                 continue
@@ -566,13 +569,15 @@ class THUFootballQueryService:
                 results.append(
                     _team_game_result(
                         resolved.game,
-                        team_id=team_id,
+                        tournament_team_id=tournament_team_id,
                         home_result=resolved.home_result,
                     )
                 )
             elif include_unfinished:
                 results.append(
-                    _team_game_result(game, team_id=team_id, home_result=None)
+                    _team_game_result(
+                        game, tournament_team_id=tournament_team_id, home_result=None
+                    )
                 )
 
         return sorted(
@@ -581,103 +586,223 @@ class THUFootballQueryService:
             reverse=True,
         )
 
-    async def query_team_outcomes(
-        self,
-        team_id: int,
-        tournament_ids: Sequence[int] | None = None,
-    ) -> list[TeamTournamentOutcome]:
-        team_id = _positive_id(team_id, "team_id")
-        catalog = self.outcome_catalog
-        team_names = catalog.team_names_by_id.get(team_id)
-        if team_names is None:
+    def _registration_tournament(
+        self, tournament_team_id: int, tournament_id: int | None = None
+    ) -> int:
+        if tournament_id is not None:
+            tournament_id = _positive_id(tournament_id, "tournament_id")
+            _reject_blacklisted_tournaments((tournament_id,))
+        known = self.outcome_catalog.registration_tournament_ids.get(tournament_team_id)
+        if known is not None and tournament_id is not None and known != tournament_id:
             raise _validation_error(
-                "team_id is not present in the supported team catalog"
+                "tournament_team_id does not belong to the requested tournament"
             )
+        resolved = tournament_id if tournament_id is not None else known
+        if resolved is None:
+            raise _validation_error(
+                "Unknown tournament_team_id; supply its tournament_id"
+            )
+        _reject_blacklisted_tournaments((resolved,))
+        return resolved
 
-        if tournament_ids is None:
-            selected_tournament_ids = catalog.tournament_ids
-        else:
-            selected_tournament_ids = _normalise_sequence_ids(
-                tournament_ids, "tournament_ids"
-            )
-            if not selected_tournament_ids:
-                raise _validation_error("tournament_ids must not be empty")
-            unsupported_ids = tuple(
-                tournament_id
-                for tournament_id in selected_tournament_ids
-                if tournament_id not in catalog.tournaments_by_id
-            )
-            if unsupported_ids:
+    async def query_team_outcomes(
+        self, tournament_team_id: int, tournament_ids: Sequence[int] | None = None
+    ) -> list[TeamTournamentOutcome]:
+        tournament_team_id = _positive_id(tournament_team_id, "tournament_team_id")
+        catalog = self.outcome_catalog
+        try:
+            identity = catalog.resolve_identity(tournament_team_id)
+        except ConfigurationError as exc:
+            raise _validation_error(
+                "Unknown tournament_team_id in the outcome catalog"
+            ) from exc
+        tournament_id = catalog.registration_tournament_ids[tournament_team_id]
+        if tournament_ids is not None:
+            selected = _normalise_sequence_ids(tournament_ids, "tournament_ids")
+            if selected != (tournament_id,):
                 raise _validation_error(
-                    f"tournament_ids contains unsupported IDs {unsupported_ids}"
+                    "A registration outcome belongs to exactly one tournament"
                 )
-
-        outcomes: list[TeamTournamentOutcome] = []
-        seen: set[tuple[str, int]] = set()
-        for tournament_id in selected_tournament_ids:
-            tournament = catalog.tournaments_by_id[tournament_id]
-            for team_name in team_names:
-                rank = tournament.ranks.get(team_name)
-                identity = (team_name, tournament_id)
-                if rank is None or identity in seen:
-                    continue
-                seen.add(identity)
-                outcomes.append(
-                    TeamTournamentOutcome(
-                        team_name=team_name,
-                        tournament_id=tournament_id,
-                        tournament_name=tournament.name,
-                        season=tournament.season,
-                        rank=rank,
-                    )
-                )
-        return outcomes
+        tournament = catalog.tournaments_by_id.get(tournament_id)
+        rank = tournament.ranks.get(str(tournament_team_id)) if tournament else None
+        if rank is None:
+            return []
+        return [
+            TeamTournamentOutcome(
+                identity.team_name,
+                tournament_id,
+                tournament.name,
+                tournament.season,
+                rank,
+                tournament_team_id,
+            )
+        ]
 
     async def query_team_to_team_matches(
         self,
-        team_a_id: int,
-        team_b_id: int,
+        team_a_tournament_team_id: int,
+        team_b_tournament_team_id: int,
         tournament_ids: Sequence[int] | None = None,
         *,
         include_unfinished: bool = False,
     ) -> HeadToHeadHistory:
-        team_a_id = _positive_id(team_a_id, "team_a_id")
-        team_b_id = _positive_id(team_b_id, "team_b_id")
-        if team_a_id == team_b_id:
-            raise _validation_error("team_a_id and team_b_id must be different")
-        include_unfinished = _include_unfinished(include_unfinished)
-        catalog = self.outcome_catalog
-        team_a_ids = _team_alias_ids(team_a_id, catalog)
-        team_b_ids = _team_alias_ids(team_b_id, catalog)
-        history = await self.query_team_sets_matches(
-            tuple(sorted(team_a_ids)),
-            tuple(sorted(team_b_ids)),
-            tournament_ids,
-            include_unfinished=include_unfinished,
+        a = _positive_id(team_a_tournament_team_id, "team_a_tournament_team_id")
+        b = _positive_id(team_b_tournament_team_id, "team_b_tournament_team_id")
+        if a == b:
+            raise _validation_error("The two registrations must be different")
+        requested = (
+            None
+            if tournament_ids is None
+            else _normalise_sequence_ids(tournament_ids, "tournament_ids")
         )
-        return replace(history, team_a_id=team_a_id, team_b_id=team_b_id)
+        if requested is not None and len(requested) != 1:
+            raise _validation_error(
+                "A registration pair belongs to exactly one tournament"
+            )
+        tournament_id = self._registration_tournament(
+            a, requested[0] if requested else None
+        )
+        self._registration_tournament(b, tournament_id)
+        return await self.query_team_sets_matches(
+            (a,), (b,), (tournament_id,), include_unfinished=include_unfinished
+        )
+
+    def _institution_scope(
+        self,
+        institution_name: str,
+        competition: str | None,
+        tournament_ids: Sequence[int] | None,
+    ):
+        if competition is None and tournament_ids is None:
+            raise _validation_error("competition or tournament_ids is required")
+        catalog = self.outcome_catalog
+        names = catalog.institution_identities(institution_name, competition)
+        identities = [catalog.teams_by_name[name] for name in names]
+        if tournament_ids is None:
+            selected = tuple(
+                dict.fromkeys(
+                    tid for item in identities for tid in item.tournament_teams
+                )
+            )
+        else:
+            selected = _normalise_sequence_ids(tournament_ids, "tournament_ids")
+            if not selected:
+                raise _validation_error("tournament_ids must not be empty")
+            if competition is not None:
+                category = {"male": "男足", "female": "女足", "futsal": "五人制"}.get(
+                    competition
+                )
+                if any(
+                    item.category != category
+                    and set(selected) & item.tournament_teams.keys()
+                    for item in catalog.teams_by_name.values()
+                ):
+                    raise _validation_error(
+                        "competition does not match the requested tournaments"
+                    )
+        _reject_blacklisted_tournaments(selected)
+        registrations = tuple(
+            registration
+            for item in identities
+            for tid, registration in item.tournament_teams.items()
+            if tid in selected
+        )
+        return selected, registrations
+
+    async def query_institution_games(
+        self,
+        institution_name: str,
+        *,
+        competition: str | None = None,
+        tournament_ids: Sequence[int] | None = None,
+        include_unfinished: bool = False,
+    ) -> list[GameSummary]:
+        include_unfinished = _include_unfinished(include_unfinished)
+        selected, registrations = self._institution_scope(
+            institution_name, competition, tournament_ids
+        )
+        if not registrations:
+            return []
+        snapshots = await self._read_tournaments(selected)
+        wanted = set(registrations)
+        return sorted(
+            (
+                game
+                for game in self._tournament_batch(snapshots).games
+                if wanted & {game.home_tournament_team_id, game.away_tournament_team_id}
+                and (include_unfinished or game.status is GameStatus.FINISHED)
+            ),
+            key=lambda game: (game.kickoff_local, game.tournament_id, game.game_id),
+        )
+
+    async def query_institution_head_to_head(
+        self,
+        home_institution_name: str,
+        away_institution_name: str,
+        *,
+        competition: str,
+        tournament_ids: Sequence[int],
+        include_unfinished: bool = False,
+    ) -> HeadToHeadHistory:
+        selected, home = self._institution_scope(
+            home_institution_name, competition, tournament_ids
+        )
+        _, away = self._institution_scope(away_institution_name, competition, selected)
+        if not home or not away:
+            return HeadToHeadHistory(
+                home,
+                away,
+                selected,
+                (),
+                HeadToHeadSummary(0, 0, 0),
+                MappingProxyType({tid: HeadToHeadSummary(0, 0, 0) for tid in selected}),
+            )
+        return await self.query_team_sets_matches(
+            home, away, selected, include_unfinished=include_unfinished
+        )
 
     async def query_team_sets_matches(
         self,
-        team_a_ids: Sequence[int],
-        team_b_ids: Sequence[int],
+        team_a_tournament_team_ids: Sequence[int],
+        team_b_tournament_team_ids: Sequence[int],
         tournament_ids: Sequence[int] | None = None,
         *,
         include_unfinished: bool = False,
     ) -> HeadToHeadHistory:
         """Query explicit identity sets without implicitly adding other institutions."""
-        team_a_ids = frozenset(_normalise_sequence_ids(team_a_ids, "team_a_ids"))
-        team_b_ids = frozenset(_normalise_sequence_ids(team_b_ids, "team_b_ids"))
-        if not team_a_ids or not team_b_ids:
+        team_a_tournament_team_ids = frozenset(
+            _normalise_sequence_ids(
+                team_a_tournament_team_ids, "team_a_tournament_team_ids"
+            )
+        )
+        team_b_tournament_team_ids = frozenset(
+            _normalise_sequence_ids(
+                team_b_tournament_team_ids, "team_b_tournament_team_ids"
+            )
+        )
+        if not team_a_tournament_team_ids or not team_b_tournament_team_ids:
             raise _validation_error("team ID sets must not be empty")
         include_unfinished = _include_unfinished(include_unfinished)
-        if team_a_ids & team_b_ids:
+        if team_a_tournament_team_ids & team_b_tournament_team_ids:
             raise _validation_error(
-                "team_a_id and team_b_id resolve to overlapping team ID aliases"
+                "The two registration sets must not overlap"
             )
 
         if tournament_ids is None:
-            normalised_tournament_ids = await self._all_accessible_tournament_ids()
+            catalog = self.outcome_catalog
+            normalised_tournament_ids = tuple(
+                dict.fromkeys(
+                    catalog.registration_tournament_ids[registration]
+                    for registration in sorted(
+                        team_a_tournament_team_ids | team_b_tournament_team_ids
+                    )
+                    if registration in catalog.registration_tournament_ids
+                )
+            )
+            if not normalised_tournament_ids:
+                raise _validation_error(
+                    "tournament_ids is required for unknown registrations"
+                )
         else:
             normalised_tournament_ids = _normalise_sequence_ids(
                 tournament_ids, "tournament_ids"
@@ -698,9 +823,15 @@ class THUFootballQueryService:
             if game.game_id in seen:
                 continue
             seen.add(game.game_id)
-            if game.home_team_id in team_a_ids and game.away_team_id in team_b_ids:
+            if (
+                game.home_tournament_team_id in team_a_tournament_team_ids
+                and game.away_tournament_team_id in team_b_tournament_team_ids
+            ):
                 team_a_is_home = True
-            elif game.home_team_id in team_b_ids and game.away_team_id in team_a_ids:
+            elif (
+                game.home_tournament_team_id in team_b_tournament_team_ids
+                and game.away_tournament_team_id in team_a_tournament_team_ids
+            ):
                 team_a_is_home = False
             else:
                 continue
@@ -732,8 +863,8 @@ class THUFootballQueryService:
             }
         )
         return HeadToHeadHistory(
-            team_a_id=min(team_a_ids),
-            team_b_id=min(team_b_ids),
+            team_a_tournament_team_ids=tuple(sorted(team_a_tournament_team_ids)),
+            team_b_tournament_team_ids=tuple(sorted(team_b_tournament_team_ids)),
             tournament_ids=normalised_tournament_ids,
             matches=tuple(matches),
             summary=_summary(overall_counts),

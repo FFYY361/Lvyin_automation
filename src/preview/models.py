@@ -25,7 +25,7 @@ class PreviewWeather:
 
 @dataclass(frozen=True)
 class TeamRef:
-    team_id: int
+    tournament_team_id: int | None
     name: str
     short_name: str
 
@@ -54,7 +54,7 @@ class PlayedMatch:
 
 @dataclass(frozen=True)
 class PreviewTeam:
-    team_id: int
+    tournament_team_id: int | None
     name: str
     short_name: str
     previous_outcomes: tuple[SeasonOutcome, ...] = ()
@@ -247,12 +247,19 @@ def _parse_team_ref(value: object, path: str, stage: str) -> TeamRef:
     obj = _ObjectReader(
         value,
         path=path,
-        required=("team_id", "name", "short_name"),
+        required=("tournament_team_id", "name", "short_name"),
         stage=stage,
     )
     return TeamRef(
-        team_id=_integer(
-            obj.get("team_id"), obj.child_path("team_id"), stage=stage, minimum=1
+        tournament_team_id=(
+            None
+            if obj.get("tournament_team_id") is None
+            else _integer(
+                obj.get("tournament_team_id"),
+                obj.child_path("tournament_team_id"),
+                stage=stage,
+                minimum=1,
+            )
         ),
         name=_string(obj.get("name"), obj.child_path("name"), stage=stage),
         short_name=_string(
@@ -339,7 +346,7 @@ def _parse_team(value: object, path: str, stage: str) -> PreviewTeam:
         value,
         path=path,
         required=(
-            "team_id",
+            "tournament_team_id",
             "name",
             "short_name",
             "previous_outcomes",
@@ -348,8 +355,15 @@ def _parse_team(value: object, path: str, stage: str) -> PreviewTeam:
         stage=stage,
     )
     return PreviewTeam(
-        team_id=_integer(
-            obj.get("team_id"), obj.child_path("team_id"), stage=stage, minimum=1
+        tournament_team_id=(
+            None
+            if obj.get("tournament_team_id") is None
+            else _integer(
+                obj.get("tournament_team_id"),
+                obj.child_path("tournament_team_id"),
+                stage=stage,
+                minimum=1,
+            )
         ),
         name=_string(obj.get("name"), obj.child_path("name"), stage=stage),
         short_name=_string(
@@ -497,7 +511,10 @@ def _validate_names(values: Sequence[str], path: str, *, stage: str) -> None:
 
 
 def _validate_team_ref(team: TeamRef, path: str, *, stage: str) -> None:
-    _validate_positive_id(team.team_id, f"{path}.team_id", stage=stage)
+    if team.tournament_team_id is not None:
+        _validate_positive_id(
+            team.tournament_team_id, f"{path}.tournament_team_id", stage=stage
+        )
     _validate_nonempty(team.name, f"{path}.name", stage=stage)
     _validate_nonempty(team.short_name, f"{path}.short_name", stage=stage)
 
@@ -506,7 +523,14 @@ def _validate_played_match(match: PlayedMatch, path: str, *, stage: str) -> None
     _validate_game_id(match.game_id, f"{path}.game_id", stage=stage)
     _validate_team_ref(match.home, f"{path}.home", stage=stage)
     _validate_team_ref(match.away, f"{path}.away", stage=stage)
-    if match.home.team_id == match.away.team_id:
+    if match.game_id != -1 and (
+        match.home.tournament_team_id is None or match.away.tournament_team_id is None
+    ):
+        raise _error(path, "Real games require tournament_team_id", stage=stage)
+    if (
+        match.home.tournament_team_id is not None
+        and match.home.tournament_team_id == match.away.tournament_team_id
+    ):
         raise _error(path, "主客队不能相同", stage=stage)
 
     score_pair = (match.home_score is None, match.away_score is None)
@@ -546,7 +570,10 @@ def _validate_played_match(match: PlayedMatch, path: str, *, stage: str) -> None
 
 
 def _validate_preview_team(team: PreviewTeam, path: str, *, stage: str) -> None:
-    _validate_positive_id(team.team_id, f"{path}.team_id", stage=stage)
+    if team.tournament_team_id is not None:
+        _validate_positive_id(
+            team.tournament_team_id, f"{path}.tournament_team_id", stage=stage
+        )
     _validate_nonempty(team.name, f"{path}.name", stage=stage)
     _validate_nonempty(team.short_name, f"{path}.short_name", stage=stage)
     for index, outcome in enumerate(team.previous_outcomes):
@@ -609,7 +636,15 @@ def validate_preview_source(source: PreviewSourceData) -> None:
             raise _error(f"{path}.kickoff", "日期必须与 preview_date 相同", stage=stage)
         _validate_preview_team(match.home, f"{path}.home", stage=stage)
         _validate_preview_team(match.away, f"{path}.away", stage=stage)
-        if match.home.team_id == match.away.team_id:
+        if match.game_id != -1 and (
+            match.home.tournament_team_id is None
+            or match.away.tournament_team_id is None
+        ):
+            raise _error(path, "Real games require tournament_team_id", stage=stage)
+        if (
+            match.home.tournament_team_id is not None
+            and match.home.tournament_team_id == match.away.tournament_team_id
+        ):
             raise _error(path, "主客队不能相同", stage=stage)
         for h2h_index, result in enumerate(match.head_to_head):
             _validate_played_match(

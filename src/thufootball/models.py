@@ -27,7 +27,7 @@ class MatchResult(StrEnum):
 class GameQuery:
     tournament_ids: tuple[int, ...] = ()
     match_date: date | None = None
-    team_ids: tuple[int, ...] = ()
+    tournament_team_ids: tuple[int, ...] = ()
     team_match: Literal["any", "all"] = "any"
     include_unfinished: bool = True
 
@@ -108,8 +108,8 @@ class TournamentSnapshot:
 @dataclass(frozen=True)
 class TeamGameResult:
     game: GameSummary
-    team_id: int
-    opponent_id: int
+    tournament_team_id: int
+    opponent_tournament_team_id: int
     opponent_name: str
     venue: Literal["home", "away"]
     goals_for: int | None
@@ -129,8 +129,8 @@ class HeadToHeadSummary:
 
 @dataclass(frozen=True)
 class HeadToHeadHistory:
-    team_a_id: int
-    team_b_id: int
+    team_a_tournament_team_ids: tuple[int, ...]
+    team_b_tournament_team_ids: tuple[int, ...]
     tournament_ids: tuple[int, ...]
     matches: tuple[GameSummary, ...]
     summary: HeadToHeadSummary
@@ -144,6 +144,7 @@ class TeamTournamentOutcome:
     tournament_name: str
     season: str
     rank: str
+    tournament_team_id: int | None = None
 
 
 @dataclass(frozen=True)

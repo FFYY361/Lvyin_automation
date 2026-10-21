@@ -13,8 +13,8 @@ const member: User = { id: 2, username: "member", display_name: "成员甲", rol
 const task: TaskMatch = {
   game_id: 11, batch_id: 5, tournament_id: 122, tournament_name: "马杯男足", competition_name: "男足甲级", competition: "male", stage: "小组赛",
   kickoff: "2026-08-08T15:30:00+08:00", venue: "紫荆足球场",
-  home: { team_id: 1, name: "环境学院", short_name: "环境", previous_outcomes: [], current_results: [] },
-  away: { team_id: 2, name: "探微书院", short_name: "探微", previous_outcomes: [], current_results: [] },
+  home: { tournament_team_id: 1, name: "环境学院", short_name: "环境", previous_outcomes: [], current_results: [] },
+  away: { tournament_team_id: 2, name: "探微书院", short_name: "探微", previous_outcomes: [], current_results: [] },
   head_to_head: [], active: true, task_open: true, claimed_by_user_id: 2, writers: ["成员甲"], body: "已经填写", body_version: 3, updated_at: "2026-08-01T00:00:00Z",
   status: "scheduled", report: { available: false, content_sha256: null, rendered_at: null },
 };

@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import replace
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
@@ -66,6 +66,36 @@ from wechat_official import Article, CoverMediaId, DraftReceipt
 SHANGHAI = timezone(timedelta(hours=8))
 
 
+FIXTURE_TOURNAMENTS = {
+    "male": (139, 140, 141, 122, 124, 126, 99, 100, 101, 88, 89, 72, 73),
+    "female": (142, 123, 102, 90, 74),
+    "futsal": (128, 111, 93, 82),
+}
+
+
+def _institution(name, short_name, seed):
+    return {
+        "name": name,
+        "short_name": short_name,
+        "tournament_teams": {
+            kind: {str(tid): tid * 10000 + seed for tid in tids}
+            for kind, tids in FIXTURE_TOURNAMENTS.items()
+        },
+    }
+
+
+def replace(value, **changes):
+    if isinstance(value, GameSummary):
+        tid = changes.get("tournament_id", value.tournament_id)
+        for side in ("home", "away"):
+            changes.setdefault(
+                side + "_tournament_team_id",
+                tid * 10000
+                + changes.get(side + "_team_id", getattr(value, side + "_team_id")),
+            )
+    return dataclass_replace(value, **changes)
+
+
 def _game(
     game_id: int,
     tournament_id: int,
@@ -94,10 +124,10 @@ def _game(
         stage="小组赛",
         group_name=None,
         round=1,
-        home_tournament_team_id=home_id + 1000,
+        home_tournament_team_id=tournament_id * 10000 + home_id,
         home_team_id=home_id,
         home_team_name=home_name,
-        away_tournament_team_id=away_id + 1000,
+        away_tournament_team_id=tournament_id * 10000 + away_id,
         away_team_id=away_id,
         away_team_name=away_name,
         home_score=home_score,
@@ -124,8 +154,12 @@ def _team_result(game: GameSummary, team_id: int) -> TeamGameResult:
     goals_against = game.away_score if is_home else game.home_score
     return TeamGameResult(
         game=game,
-        team_id=team_id,
-        opponent_id=game.away_team_id if is_home else game.home_team_id,
+        tournament_team_id=game.home_tournament_team_id
+        if is_home
+        else game.away_tournament_team_id,
+        opponent_tournament_team_id=game.away_tournament_team_id
+        if is_home
+        else game.home_tournament_team_id,
         opponent_name=game.away_team_name if is_home else game.home_team_name,
         venue="home" if is_home else "away",
         goals_for=goals_for,
@@ -162,16 +196,29 @@ def _logger() -> tuple[logging.Logger, _ListHandler]:
 class _FakeQueries:
     def __init__(self) -> None:
         institutions = [
-            {"name": name, "short_name": short, "male_team_ids": [team_id],
-             "female_team_ids": [team_id], "futsal_team_ids": [team_id]}
-            for team_id, name, short in ((1, "社会科学学院", "社会"), (2, "经济管理学院", "经济"),
-                                        (33, "计算机科学与技术系-全球创新学院", "计算机-GIX"))
+            _institution(name, short, team_id)
+            for team_id, name, short in (
+                (1, "社会科学学院", "社会"),
+                (2, "经济管理学院", "经济"),
+                (33, "计算机科学与技术系-全球创新学院", "计算机-GIX"),
+            )
         ]
-        self.outcome_catalog = build_outcome_catalog(institutions, [
-            {"id": tid, "name": f"马杯女足{season}",
-             "final_rankings": {"社会科学学院女足": rank, "经济管理学院女足": rank}}
-            for tid, season, rank in ((102, "2024~2025", "八强"), (90, "2023~2024", "四强"))
-        ])
+        self.outcome_catalog = build_outcome_catalog(
+            institutions,
+            [
+                {
+                    "id": tid,
+                    "name": f"马杯女足{season}",
+                    "final_rankings": {
+                        str(tid * 10000 + seed): rank for seed in (1, 2)
+                    },
+                }
+                for tid, season, rank in (
+                    (102, "2024~2025", "八强"),
+                    (90, "2023~2024", "四强"),
+                )
+            ],
+        )
         self.target = _game(
             500,
             123,
@@ -230,8 +277,8 @@ class _FakeQueries:
             )
         )
         self.history = HeadToHeadHistory(
-            team_a_id=1,
-            team_b_id=2,
+            team_a_tournament_team_ids=(1230001,),
+            team_b_tournament_team_ids=(1230002,),
             tournament_ids=(123, 102, 90, 74),
             matches=history_games,
             summary=HeadToHeadSummary(0, 4, 0),
@@ -250,7 +297,12 @@ class _FakeQueries:
         include_unfinished: bool = False,
     ) -> list[TeamGameResult]:
         self.team_match_calls.append((team_id, tournament_id, include_unfinished))
-        return self.results[team_id]
+        return [
+            _team_result(
+                replace(result.game, tournament_id=tournament_id), team_id % 10000
+            )
+            for result in self.results[team_id % 10000]
+        ]
 
     async def query_team_outcomes(
         self, team_id: int, tournament_ids: tuple[int, ...]
@@ -280,7 +332,28 @@ class _FakeQueries:
         include_unfinished: bool = False,
     ) -> HeadToHeadHistory:
         self.h2h_calls.append((team_a_ids[0], team_b_ids[0], tournament_ids))
-        return self.history
+        kind = (
+            "male"
+            if tournament_ids[0] in FIXTURE_TOURNAMENTS["male"]
+            else "female"
+            if tournament_ids[0] in FIXTURE_TOURNAMENTS["female"]
+            else "futsal"
+        )
+        remap = {
+            "male": {102: 100, 90: 88, 74: 73},
+            "female": {},
+            "futsal": {102: 111, 90: 93, 74: 82},
+        }[kind]
+        return dataclass_replace(
+            self.history,
+            matches=tuple(
+                replace(
+                    game,
+                    tournament_id=remap.get(game.tournament_id, game.tournament_id),
+                )
+                for game in self.history.matches
+            ),
+        )
 
 
 class _BatchQueries(_FakeQueries):
@@ -362,13 +435,13 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queries.game_queries[0].tournament_ids, (123,))
         self.assertEqual(
             queries.team_match_calls,
-            [(1, 123, False), (2, 123, False)],
+            [(1230001, 123, False), (1230002, 123, False)],
         )
         self.assertEqual(
             queries.outcome_calls,
             [],
         )
-        self.assertEqual(queries.h2h_calls, [(1, 2, (123, 102, 90, 74))])
+        self.assertEqual(queries.h2h_calls, [(1230001, 1230002, (123, 102, 90, 74))])
         self.assertEqual(len(source.matches), 2)
         self.assertEqual(source.matches[0].competition_name, "女足")
         self.assertEqual(len(source.matches[0].home.previous_outcomes), 3)
@@ -393,7 +466,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source.matches[0].away.short_name, "经济")
         self.assertTrue(
             all(
-                result.home.team_id == 2
+                result.home.tournament_team_id == 1230002
                 for result in source.matches[0].away.current_results
             )
         )
@@ -439,37 +512,60 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
             {},
         )
 
-    async def test_head_to_head_follows_current_sides_including_predecessors(self) -> None:
+    async def test_head_to_head_follows_current_sides_including_predecessors(
+        self,
+    ) -> None:
         queries = _FakeQueries()
         institutions = [
-            {"name": name, "short_name": short, "male_team_ids": [team_id],
-             "female_team_ids": [team_id], "futsal_team_ids": []}
+            _institution(name, short, team_id)
             for team_id, name, short in (
-                (1, "社会科学学院", "社会"), (2, "经济管理学院", "经济")
+                (1, "社会科学学院", "社会"),
+                (2, "经济管理学院", "经济"),
             )
         ]
         institutions[0]["predecessors"] = [
-            {"name": "社会科学学院前身", "short_name": "社会前身",
-             "male_team_ids": [11], "female_team_ids": [11], "futsal_team_ids": []}
+            _institution("社会科学学院前身", "社会前身", 11)
         ]
+        for kind, tournament_id in (("male", "72"), ("male", "73"), ("female", "74")):
+            institutions[0]["tournament_teams"][kind].pop(tournament_id)
         queries.outcome_catalog = build_outcome_catalog(institutions, [])
         queries.history = replace(
             queries.history,
             matches=tuple(
-                replace(game, home_team_id=home, away_team_id=away,
-                        home_score=home_score, away_score=away_score,
-                        home_penalty=home_penalty, away_penalty=away_penalty)
-                for game, (home, away, home_score, away_score,
-                           home_penalty, away_penalty) in zip(
+                replace(
+                    game,
+                    home_team_id=home,
+                    away_team_id=away,
+                    home_score=home_score,
+                    away_score=away_score,
+                    home_penalty=home_penalty,
+                    away_penalty=away_penalty,
+                )
+                for game, (
+                    home,
+                    away,
+                    home_score,
+                    away_score,
+                    home_penalty,
+                    away_penalty,
+                ) in zip(
                     queries.history.matches,
-                    ((1, 2, 2, 1, None, None), (2, 1, 3, 0, None, None),
-                     (2, 11, 1, 1, 5, 4)),
+                    (
+                        (1, 2, 2, 1, None, None),
+                        (2, 1, 3, 0, None, None),
+                        (2, 11, 1, 1, 5, 4),
+                    ),
                 )
             ),
         )
-        queries.targets.append(replace(
-            queries.target, game_id=501, home_team_id=2, away_team_id=1,
-        ))
+        queries.targets.append(
+            replace(
+                queries.target,
+                game_id=501,
+                home_team_id=2,
+                away_team_id=1,
+            )
+        )
         logger, _ = _logger()
         for competition in (Competition.MALE, Competition.FEMALE):
             with self.subTest(competition=competition):
@@ -480,31 +576,122 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
                     for game in queries.targets
                 ]
                 source = await PreviewSourceBuilder(
-                    queries, config, logger=logger,
+                    queries,
+                    config,
+                    logger=logger,
                 ).build(date(2026, 4, 11))
                 first, second = source.matches
                 self.assertEqual(
-                    [(game.home.team_id, game.away.team_id)
-                     for game in first.head_to_head],
-                    [(1, 2), (1, 2), (11, 2)],
+                    [
+                        (game.home.tournament_team_id, game.away.tournament_team_id)
+                        for game in first.head_to_head
+                    ],
+                    [
+                        (tid * 10000 + home, tid * 10000 + away)
+                        for tid, home, away in (
+                            (100 if competition is Competition.MALE else 102, 1, 2),
+                            (88 if competition is Competition.MALE else 90, 1, 2),
+                            (73 if competition is Competition.MALE else 74, 11, 2),
+                        )
+                    ],
                 )
                 self.assertEqual(
-                    [(game.home.team_id, game.away.team_id)
-                     for game in second.head_to_head],
-                    [(2, 1), (2, 1), (2, 11)],
+                    [
+                        (game.home.tournament_team_id, game.away.tournament_team_id)
+                        for game in second.head_to_head
+                    ],
+                    [
+                        (tid * 10000 + home, tid * 10000 + away)
+                        for tid, home, away in (
+                            (100 if competition is Competition.MALE else 102, 2, 1),
+                            (88 if competition is Competition.MALE else 90, 2, 1),
+                            (73 if competition is Competition.MALE else 74, 2, 11),
+                        )
+                    ],
                 )
                 payload = preview_data_to_dict(source)
                 self.assertEqual(
-                    [[game["result_text"] for game in match["head_to_head"]]
-                     for match in payload["matches"]],
-                    [["2:1", "0:3", "1(4):1(5)"],
-                     ["1:2", "3:0", "1(5):1(4)"]],
+                    [
+                        [game["result_text"] for game in match["head_to_head"]]
+                        for match in payload["matches"]
+                    ],
+                    [["2:1", "0:3", "1(4):1(5)"], ["1:2", "3:0", "1(5):1(4)"]],
                 )
                 self.assertIn(
                     "社会前身 1(4):1(5) 经济",
                     _head_to_head_line(first.head_to_head[-1]),
                 )
                 self.assertEqual(len(queries.h2h_calls), 1)
+
+    async def test_merge_cutoff_applies_to_rankings_and_both_sides_of_head_to_head(
+        self,
+    ) -> None:
+        queries = _FakeQueries()
+        body = _institution("社会科学学院", "社会", 1)
+        first = _institution("甲前身", "甲旧", 11)
+        second = _institution("乙前身", "乙旧", 12)
+        body["tournament_teams"]["female"] = {"123": 1230001}
+        first["tournament_teams"]["female"] = {
+            "102": 1020011, "90": 900011, "74": 740011,
+        }
+        second["tournament_teams"]["female"] = {"90": 900012}
+        body["predecessors"] = [first, second]
+        queries.outcome_catalog = build_outcome_catalog(
+            [body, _institution("经济管理学院", "经济", 2)],
+            [
+                {
+                    "id": 102,
+                    "name": "马杯女足2024~2025",
+                    "final_rankings": {"1020011": "八强", "1020002": "四强"},
+                },
+                {
+                    "id": 90,
+                    "name": "马杯女足2023~2024",
+                    "final_rankings": {"900011": "冠军"},
+                },
+            ],
+        )
+        queries.history = dataclass_replace(
+            queries.history,
+            matches=tuple(
+                replace(game, home_team_id=11) for game in queries.history.matches
+            ),
+        )
+        original_query = queries.query_team_sets_matches
+
+        async def query_matches(home_ids, away_ids, tournament_ids, **kwargs):
+            history = await original_query(home_ids, away_ids, tournament_ids, **kwargs)
+            return dataclass_replace(
+                history,
+                matches=tuple(
+                    game for game in history.matches
+                    if (
+                        game.home_tournament_team_id in home_ids
+                        and game.away_tournament_team_id in away_ids
+                    ) or (
+                        game.away_tournament_team_id in home_ids
+                        and game.home_tournament_team_id in away_ids
+                    )
+                ),
+            )
+
+        queries.query_team_sets_matches = query_matches
+        queries.targets.append(
+            replace(queries.target, game_id=501, home_team_id=2, away_team_id=1)
+        )
+        logger, _ = _logger()
+        source = await PreviewSourceBuilder(
+            queries, competition_config(Competition.FEMALE), logger=logger
+        ).build(date(2026, 4, 11))
+        self.assertEqual(
+            [item.outcome for item in source.matches[0].home.previous_outcomes],
+            ["八强", "未参赛", "未参赛"],
+        )
+        self.assertEqual(
+            [[item.game_id for item in match.head_to_head] for match in source.matches],
+            [[700], [700]],
+        )
+        self.assertEqual(source.matches[1].head_to_head[0].away.short_name, "甲旧")
 
     def test_head_to_head_uses_configured_season_when_name_omits_year(
         self,
@@ -542,11 +729,24 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         queries = _FakeQueries()
-        queries.outcome_catalog = replace(queries.outcome_catalog, tournaments_by_id=MappingProxyType({
-            tid: replace(tournament, ranks=MappingProxyType({name: rank for name, rank in tournament.ranks.items()
-                                                            if name != "社会科学学院女足"}))
-            for tid, tournament in queries.outcome_catalog.tournaments_by_id.items()
-        }))
+        queries.outcome_catalog = replace(
+            queries.outcome_catalog,
+            tournaments_by_id=MappingProxyType(
+                {
+                    tid: replace(
+                        tournament,
+                        ranks=MappingProxyType(
+                            {
+                                name: rank
+                                for name, rank in tournament.ranks.items()
+                                if int(name) % 10000 != 1
+                            }
+                        ),
+                    )
+                    for tid, tournament in queries.outcome_catalog.tournaments_by_id.items()
+                }
+            ),
+        )
         logger, _ = _logger()
         builder = PreviewSourceBuilder(
             queries,  # type: ignore[arg-type]
@@ -634,7 +834,7 @@ class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         # 直接验证目录解析，避免将网络查询行为混入此单元测试。
         team = builder._team_ref(
-            33,
+            competition_config(Competition.MALE).current_tournament_ids[0] * 10000 + 33,
             "数据库计算机队全称",
             "数据库中的超长简称",
         )

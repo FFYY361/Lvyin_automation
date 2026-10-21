@@ -61,6 +61,10 @@ class PromptBundle:
         automatic = json.dumps(self.automatic_context, ensure_ascii=False, indent=2)
         return (
             "请根据以下资料，撰写一篇完整的比赛前瞻正文。\n\n"
+            "往届成绩的 outcome 是公开展示口径；sources、history_teams 和 head_to_head 保留完整历史背景。"
+            "从近到远遇到同项目同赛季多个参赛前身时，该赛季及更早历史不归入现球队。"
+            "这些前身资料仅供理解背景，不得在正文展开或作为现球队的成绩、交锋引用。"
+            "head_to_head 中 display_allowed=false 的交锋也仅供背景理解，不得在正文引用。\n\n"
             "<match_context>\n" + "\n".join(match_lines) + "\n</match_context>\n\n"
             "<manual_context>\n```json\n" + manual + "\n```\n</manual_context>\n\n"
             "<automatic_context>\n```json\n" + automatic + "\n```\n</automatic_context>"
@@ -106,8 +110,12 @@ class _Repository:
         self._game_details[game_id] = document
         return document
 
-    def institution(self, team_id: int, competition: str) -> InstitutionRecord:
-        return self.database.find_institution(team_id, _COMPETITION_VALUES[competition])
+    def institution(
+        self, tournament_team_id: int, competition: str
+    ) -> InstitutionRecord:
+        return self.database.find_institution(
+            tournament_team_id, _COMPETITION_VALUES[competition]
+        )
 
     def configured_game(self, game: dict[str, Any]) -> dict[str, Any]:
         competition = self.entries[
@@ -120,7 +128,10 @@ class _Repository:
         result["stage"] = rules.stage_label(game.get("stage"))
         for side in ("home", "away"):
             identity = self.catalog.resolve_identity(
-                _integer(game.get(f"{side}_team_id"), f"{side}_team_id"), competition
+                _integer(
+                    game.get(f"{side}_tournament_team_id"), f"{side}_tournament_team_id"
+                ),
+                competition,
             )
             result[f"{side}_team_name"] = identity.institution_name
             result[f"{side}_team_brief_name"] = identity.brief_name
@@ -171,15 +182,27 @@ def build_prompt_bundle(
     target_season = _canonical_season(target_info.get("season"))
     target_season_start = _season_start(target_season)
     target_kickoff = _datetime(target_game.get("kickoff_local"), "kickoff_local")
-    home_team_id = _integer(target_game.get("home_team_id"), "home_team_id")
-    away_team_id = _integer(target_game.get("away_team_id"), "away_team_id")
+    home_tournament_team_id = _integer(
+        target_game.get("home_tournament_team_id"), "home_tournament_team_id"
+    )
+    away_tournament_team_id = _integer(
+        target_game.get("away_tournament_team_id"), "away_tournament_team_id"
+    )
 
-    home_record = stored.institution(home_team_id, competition_kind)
-    away_record = stored.institution(away_team_id, competition_kind)
-    home_identity = stored.catalog.resolve_identity(home_team_id, competition_kind)
-    away_identity = stored.catalog.resolve_identity(away_team_id, competition_kind)
-    home_team_ids = set(stored.catalog.history_ids(home_identity))
-    away_team_ids = set(stored.catalog.history_ids(away_identity))
+    home_record = stored.institution(home_tournament_team_id, competition_kind)
+    away_record = stored.institution(away_tournament_team_id, competition_kind)
+    home_identity = stored.catalog.resolve_identity(
+        home_tournament_team_id, competition_kind
+    )
+    away_identity = stored.catalog.resolve_identity(
+        away_tournament_team_id, competition_kind
+    )
+    home_tournament_team_ids = set(
+        stored.catalog.history_tournament_team_ids(home_identity)
+    )
+    away_tournament_team_ids = set(
+        stored.catalog.history_tournament_team_ids(away_identity)
+    )
     manual_context = {
         "home_team": _manual_team_context(
             home_record,
@@ -225,34 +248,34 @@ def build_prompt_bundle(
     direct_matches = [
         item
         for item in prior_matches
-        if _has_any_team(item.game, home_team_ids)
-        and _has_any_team(item.game, away_team_ids)
-        and not (home_team_ids & away_team_ids)
+        if _has_any_team(item.game, home_tournament_team_ids)
+        and _has_any_team(item.game, away_tournament_team_ids)
+        and not (home_tournament_team_ids & away_tournament_team_ids)
     ]
     direct_ids = {
         _integer(item.game.get("game_id"), "game_id") for item in direct_matches
     }
 
-    home_context = _automatic_team_context(
+    home_context, home_display_ids = _automatic_team_context(
         stored,
         selected_tournaments,
         prior_matches,
         direct_ids,
         target_tournament,
         target_game,
-        home_team_id,
+        home_tournament_team_id,
         home_identity,
         competition_kind,
         resolved_config,
     )
-    away_context = _automatic_team_context(
+    away_context, away_display_ids = _automatic_team_context(
         stored,
         selected_tournaments,
         prior_matches,
         direct_ids,
         target_tournament,
         target_game,
-        away_team_id,
+        away_tournament_team_id,
         away_identity,
         competition_kind,
         resolved_config,
@@ -261,11 +284,14 @@ def build_prompt_bundle(
         "home_team": home_context,
         "away_team": away_context,
         "head_to_head": [
-            _head_to_head_match(
-                stored,
-                item,
-                home_team_ids,
-                away_team_ids,
+            dict(
+                _head_to_head_match(
+                    stored, item, home_tournament_team_ids, away_tournament_team_ids
+                ),
+                display_allowed=(
+                    _has_any_team(item.game, home_display_ids)
+                    and _has_any_team(item.game, away_display_ids)
+                ),
             )
             for item in sorted(
                 direct_matches,
@@ -280,7 +306,8 @@ def build_prompt_bundle(
         "season": target_season,
         "stage": competition_rules(
             _COMPETITION_VALUES[competition_kind], target_season
-        ).stage_label(target_game.get("stage")) or "未标注",
+        ).stage_label(target_game.get("stage"))
+        or "未标注",
         "group": target_game.get("group_name"),
         "round": target_game.get("round"),
         "home_team": home_identity.institution_name,
@@ -332,7 +359,9 @@ def build_system_message(
         engine = create_football_engine()
         try:
             with create_football_session_factory(engine)() as session:
-                prompt_documents = FootballDataRepository(session).load_prompt_documents()
+                prompt_documents = FootballDataRepository(
+                    session
+                ).load_prompt_documents()
         finally:
             engine.dispose()
     parts = []
@@ -351,11 +380,11 @@ def _automatic_team_context(
     direct_ids: set[int],
     target_tournament: dict[str, Any],
     target_game: dict[str, Any],
-    team_id: int,
+    tournament_team_id: int,
     identity: StaticTeamIdentity,
     competition_kind: str,
     config: PromptConfig,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], set[int]]:
     target_tournament_id = _integer(target_game.get("tournament_id"), "tournament_id")
     target_season = _canonical_season(
         _object(target_tournament.get("tournament"), "tournament").get("season")
@@ -365,13 +394,13 @@ def _automatic_team_context(
         for item in prior_matches
         if _integer(item.game.get("tournament_id"), "tournament_id")
         == target_tournament_id
-        and _has_team(item.game, team_id)
+        and _has_team(item.game, tournament_team_id)
     ]
     tournament_info = _object(target_tournament.get("tournament"), "tournament")
     histories = []
     non_direct: list[_StoredMatch] = []
     for historical_identity in repository.catalog.history_identities(identity):
-        ids = set(historical_identity.team_ids)
+        ids = set(historical_identity.tournament_team_ids)
         eligible = [
             item
             for item in prior_matches
@@ -406,18 +435,30 @@ def _automatic_team_context(
         },
         reverse=True,
     )
-    season_outcomes = []
-    for season in seasons:
-        tournament_ids = tuple(
+    season_tournament_ids = [
+        tuple(
             _integer(_object(document.get("tournament"), "tournament").get("id"), "id")
             for document, label, _ in selected_tournaments
             if label == season
         )
+        for season in seasons
+    ]
+    display_history_ids = repository.catalog.display_history_tournament_team_ids(
+        identity, season_tournament_ids
+    )
+    display_ids = set(display_history_ids)
+    season_outcomes = []
+    for season, tournament_ids in zip(seasons, season_tournament_ids):
         outcomes = repository.catalog.season_outcomes(identity, tournament_ids)
+        displayed = [
+            item for item in outcomes if item.tournament_team_id in display_ids
+        ]
+        if len(displayed) > 1:
+            raise ValueError(f"同赛季存在多个可展示成绩：{identity.team_name} {season}")
         season_outcomes.append(
             {
                 "season": season,
-                "outcome": outcomes[0].rank if outcomes else "未参赛",
+                "outcome": displayed[0].rank if displayed else "未参赛",
                 "sources": [
                     {
                         "name": repository.catalog.teams_by_name[
@@ -449,14 +490,14 @@ def _automatic_team_context(
                 "past_seasons": _past_seasons(eligible, target_season, ids),
                 "recent_matches": [
                     _relative_detailed_match(
-                        repository, item, _matching_team_id(item.game, ids)
+                        repository, item, _matching_tournament_team_id(item.game, ids)
                     )
                     for item in matches
                     if _integer(item.game.get("game_id"), "game_id") in recent_ids
                 ],
                 "earlier_matches": [
                     _relative_match_summary(
-                        repository, item, _matching_team_id(item.game, ids)
+                        repository, item, _matching_tournament_team_id(item.game, ids)
                     )
                     for item in matches
                     if _integer(item.game.get("game_id"), "game_id") not in recent_ids
@@ -464,7 +505,7 @@ def _automatic_team_context(
             }
         )
     rules = competition_rules(_COMPETITION_VALUES[competition_kind], target_season)
-    return {
+    context = {
         "name": identity.brief_name,
         "current_tournament": {
             "competition": _competition_label(competition_kind, tournament_info),
@@ -473,24 +514,27 @@ def _automatic_team_context(
             "group_standing": (
                 None
                 if rules.league_phase
-                else _group_standing(target_tournament, target_game, team_id)
+                else _group_standing(target_tournament, target_game, tournament_team_id)
             ),
             "league_phase_standing": (
-                _league_phase_standing(target_tournament, target_game, team_id, rules)
+                _league_phase_standing(
+                    target_tournament, target_game, tournament_team_id, rules
+                )
                 if rules.league_phase
                 else None
             ),
-            "record_before_match": _record(current_games, {team_id}),
+            "record_before_match": _record(current_games, {tournament_team_id}),
         },
         "season_outcomes": season_outcomes,
         "history_teams": history_teams,
     }
+    return context, {tournament_team_id, *display_history_ids}
 
 
 def _past_seasons(
     matches: list[_StoredMatch],
     target_season: str,
-    team_ids: set[int],
+    tournament_team_ids: set[int],
 ) -> list[dict[str, object]]:
     result = []
     groups: dict[tuple[int, str, str], list[dict[str, Any]]] = {}
@@ -508,14 +552,14 @@ def _past_seasons(
             "season": season,
             "competition": competition,
         }
-        entry.update(_record(games, team_ids))
+        entry.update(_record(games, tournament_team_ids))
         result.append(entry)
     result.sort(key=lambda item: _season_start(str(item["season"])), reverse=True)
     return result
 
 
 def _group_standing(
-    tournament: dict[str, Any], target_game: dict[str, Any], team_id: int
+    tournament: dict[str, Any], target_game: dict[str, Any], tournament_team_id: int
 ) -> dict[str, object] | None:
     games = [
         _object(game, "games[]") for game in _array(tournament.get("games"), "games")
@@ -527,7 +571,7 @@ def _group_standing(
             for game in games
             if game.get("stage") == "小组赛"
             and game.get("group_name")
-            and _has_team(game, team_id)
+            and _has_team(game, tournament_team_id)
         }
         if len(groups) == 1:
             group = groups.pop()
@@ -543,16 +587,16 @@ def _group_standing(
     participants = {
         _integer(game.get(field), field)
         for game in group_games
-        for field in ("home_team_id", "away_team_id")
+        for field in ("home_tournament_team_id", "away_tournament_team_id")
     }
-    standing = _standing(group_games, participants, target_time, team_id)
+    standing = _standing(group_games, participants, target_time, tournament_team_id)
     return None if standing is None else {"group": group, **standing}
 
 
 def _league_phase_standing(
     tournament: dict[str, Any],
     target_game: dict[str, Any],
-    team_id: int,
+    tournament_team_id: int,
     rules: CompetitionRules,
 ) -> dict[str, object] | None:
     if not rules.is_first_stage(target_game.get("stage")):
@@ -563,17 +607,23 @@ def _league_phase_standing(
         if rules.is_first_stage(_object(game, "games[]").get("stage"))
     ]
     participants = {
-        _integer(team.get("team_id"), "registered_teams[].team_id")
+        _integer(
+            team.get("tournament_team_id"), "registered_teams[].tournament_team_id"
+        )
         for raw in _array(tournament.get("registered_teams"), "registered_teams")
         if (team := _object(raw, "registered_teams[]")).get("status")
     }
-    standing = _standing(games, participants, _game_time(target_game), team_id)
+    standing = _standing(
+        games, participants, _game_time(target_game), tournament_team_id
+    )
     if standing is not None and any(
         _game_time(game) < _game_time(target_game) and not _is_finished_game(game)
         for game in games
     ):
         standing["rank"] = None
-        standing["rank_note"] = "本场之前的联赛阶段比赛尚未全部完成录入，无法确定准确顺位"
+        standing["rank_note"] = (
+            "本场之前的联赛阶段比赛尚未全部完成录入，无法确定准确顺位"
+        )
     return standing
 
 
@@ -581,14 +631,18 @@ def _standing(
     games: list[dict[str, Any]],
     participants: set[int],
     target_time: datetime,
-    team_id: int,
+    tournament_team_id: int,
 ) -> dict[str, object] | None:
     table = {participant: _empty_group_record() for participant in participants}
     for game in games:
         if _game_time(game) >= target_time or not _is_finished_game(game):
             continue
-        home_id = _integer(game.get("home_team_id"), "home_team_id")
-        away_id = _integer(game.get("away_team_id"), "away_team_id")
+        home_id = _integer(
+            game.get("home_tournament_team_id"), "home_tournament_team_id"
+        )
+        away_id = _integer(
+            game.get("away_tournament_team_id"), "away_tournament_team_id"
+        )
         if home_id not in table or away_id not in table:
             raise ValueError("积分统计比赛包含未登记的球队")
         for current_id in (home_id, away_id):
@@ -600,7 +654,7 @@ def _standing(
             record["goals_for"] += score_for
             record["goals_against"] += score_against
             record["points"] += {"win": 3, "draw": 1, "loss": 0}[outcome]
-    team_record = table.get(team_id)
+    team_record = table.get(tournament_team_id)
     if team_record is None:
         return None
     tied = (
@@ -634,7 +688,9 @@ def _empty_group_record() -> dict[str, int]:
     }
 
 
-def _record(games: list[dict[str, Any]], team_ids: set[int]) -> dict[str, int]:
+def _record(
+    games: list[dict[str, Any]], tournament_team_ids: set[int]
+) -> dict[str, int]:
     result = {
         "played": 0,
         "wins": 0,
@@ -646,14 +702,14 @@ def _record(games: list[dict[str, Any]], team_ids: set[int]) -> dict[str, int]:
         "awarded_losses": 0,
     }
     for game in games:
-        team_id = _matching_team_id(game, team_ids)
-        score_for, score_against = _relative_score(game, team_id)
-        outcome = _outcome(game, team_id)
+        tournament_team_id = _matching_tournament_team_id(game, tournament_team_ids)
+        score_for, score_against = _relative_score(game, tournament_team_id)
+        outcome = _outcome(game, tournament_team_id)
         result["played"] += 1
         result[_outcome_count_key(outcome)] += 1
         result["goals_for"] += score_for
         result["goals_against"] += score_against
-        side = _team_side(game, team_id)
+        side = _team_side(game, tournament_team_id)
         opponent_side = "away" if side == "home" else "home"
         if outcome == "win" and game.get(f"{opponent_side}_abandon"):
             result["awarded_wins"] += 1
@@ -663,12 +719,12 @@ def _record(games: list[dict[str, Any]], team_ids: set[int]) -> dict[str, int]:
 
 
 def _relative_match_summary(
-    repository: _Repository, item: _StoredMatch, team_id: int
+    repository: _Repository, item: _StoredMatch, tournament_team_id: int
 ) -> dict[str, object]:
     game = repository.configured_game(item.game)
-    side = _team_side(game, team_id)
+    side = _team_side(game, tournament_team_id)
     opponent_side = "away" if side == "home" else "home"
-    score_for, score_against = _relative_score(game, team_id)
+    score_for, score_against = _relative_score(game, tournament_team_id)
     penalties = _relative_penalties(game, side)
     return {
         "date": _game_time(game).date().isoformat(),
@@ -681,7 +737,7 @@ def _relative_match_summary(
         "side": side,
         "goals_for": score_for,
         "goals_against": score_against,
-        "outcome": _outcome(game, team_id),
+        "outcome": _outcome(game, tournament_team_id),
         "result_type": _relative_result_type(game, side),
         "penalty_goals_for": penalties[0] if penalties else None,
         "penalty_goals_against": penalties[1] if penalties else None,
@@ -689,17 +745,17 @@ def _relative_match_summary(
 
 
 def _relative_detailed_match(
-    repository: _Repository, item: _StoredMatch, team_id: int
+    repository: _Repository, item: _StoredMatch, tournament_team_id: int
 ) -> dict[str, object]:
     game_id = _integer(item.game.get("game_id"), "game_id")
     detail = repository.game_detail(game_id)
     game = repository.configured_game(_object(detail.get("game"), "game"))
     events = _valid_events(detail)
-    side = _team_side(game, team_id)
+    side = _team_side(game, tournament_team_id)
     opponent_side = "away" if side == "home" else "home"
     labels = {side: "self", opponent_side: "opponent"}
     sections = _event_sections(events, labels)
-    score_for, score_against = _relative_score(game, team_id)
+    score_for, score_against = _relative_score(game, tournament_team_id)
     penalties = _relative_penalties(game, side)
     return {
         "date": _game_time(game).date().isoformat(),
@@ -714,7 +770,7 @@ def _relative_detailed_match(
         "side": side,
         "goals_for": score_for,
         "goals_against": score_against,
-        "outcome": _outcome(game, team_id),
+        "outcome": _outcome(game, tournament_team_id),
         "result_type": _relative_result_type(game, side),
         "penalty_shootout": _penalty_shootout(
             sections["penalty_attempts"], "self", "opponent", penalties
@@ -740,8 +796,8 @@ def _head_to_head_match(
     detail = repository.game_detail(game_id)
     game = repository.configured_game(_object(detail.get("game"), "game"))
     events = _valid_events(detail)
-    historical_target_home_id = _matching_team_id(game, target_home_ids)
-    _matching_team_id(game, target_away_ids)
+    historical_target_home_id = _matching_tournament_team_id(game, target_home_ids)
+    _matching_tournament_team_id(game, target_away_ids)
     target_home_side = _team_side(game, historical_target_home_id)
     target_away_side = "away" if target_home_side == "home" else "home"
     labels = {target_home_side: "home_team", target_away_side: "away_team"}
@@ -1019,32 +1075,44 @@ def _season_start(season: str) -> int:
     return int(season.split("-", 1)[0])
 
 
-def _team_side(game: dict[str, Any], team_id: int) -> str:
-    if game.get("home_team_id") == team_id:
+def _team_side(game: dict[str, Any], tournament_team_id: int) -> str:
+    if game.get("home_tournament_team_id") == tournament_team_id:
         return "home"
-    if game.get("away_team_id") == team_id:
+    if game.get("away_tournament_team_id") == tournament_team_id:
         return "away"
-    raise ValueError(f"比赛不包含球队：team_id={team_id}")
+    raise ValueError(f"比赛不包含球队：tournament_team_id={tournament_team_id}")
 
 
-def _has_team(game: dict[str, Any], team_id: int) -> bool:
-    return game.get("home_team_id") == team_id or game.get("away_team_id") == team_id
+def _has_team(game: dict[str, Any], tournament_team_id: int) -> bool:
+    return (
+        game.get("home_tournament_team_id") == tournament_team_id
+        or game.get("away_tournament_team_id") == tournament_team_id
+    )
 
 
-def _has_any_team(game: dict[str, Any], team_ids: set[int]) -> bool:
-    return any(_has_team(game, team_id) for team_id in team_ids)
+def _has_any_team(game: dict[str, Any], tournament_team_ids: set[int]) -> bool:
+    return any(
+        _has_team(game, tournament_team_id)
+        for tournament_team_id in tournament_team_ids
+    )
 
 
-def _matching_team_id(game: dict[str, Any], team_ids: set[int]) -> int:
-    matches = [team_id for team_id in team_ids if _has_team(game, team_id)]
+def _matching_tournament_team_id(
+    game: dict[str, Any], tournament_team_ids: set[int]
+) -> int:
+    matches = [
+        tournament_team_id
+        for tournament_team_id in tournament_team_ids
+        if _has_team(game, tournament_team_id)
+    ]
     if len(matches) != 1:
         game_id = game.get("game_id")
         raise ValueError(f"无法唯一定位比赛 {game_id} 中的球队身份")
     return matches[0]
 
 
-def _relative_score(game: dict[str, Any], team_id: int) -> tuple[int, int]:
-    side = _team_side(game, team_id)
+def _relative_score(game: dict[str, Any], tournament_team_id: int) -> tuple[int, int]:
+    side = _team_side(game, tournament_team_id)
     opponent = "away" if side == "home" else "home"
     return (
         _integer(game.get(f"{side}_score"), f"{side}_score"),
@@ -1060,13 +1128,13 @@ def _relative_penalties(game: dict[str, Any], side: str) -> tuple[int, int] | No
     return (home, away) if side == "home" else (away, home)
 
 
-def _outcome(game: dict[str, Any], team_id: int) -> str:
-    score_for, score_against = _relative_score(game, team_id)
+def _outcome(game: dict[str, Any], tournament_team_id: int) -> str:
+    score_for, score_against = _relative_score(game, tournament_team_id)
     if score_for > score_against:
         return "win"
     if score_for < score_against:
         return "loss"
-    penalties = _relative_penalties(game, _team_side(game, team_id))
+    penalties = _relative_penalties(game, _team_side(game, tournament_team_id))
     if penalties and penalties[0] != penalties[1]:
         return "win" if penalties[0] > penalties[1] else "loss"
     return "draw"

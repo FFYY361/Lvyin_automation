@@ -914,7 +914,7 @@ def batch_status(session: Session, batch: Batch) -> str:
 
 def _team_ref(value: dict[str, Any]) -> TeamRef:
     return TeamRef(
-        team_id=int(value["team_id"]),
+        tournament_team_id=value["tournament_team_id"],
         name=str(value["name"]),
         short_name=str(value["short_name"]),
     )
@@ -938,7 +938,7 @@ def _played(value: dict[str, Any]) -> PlayedMatch:
 
 def _team(value: dict[str, Any]) -> PreviewTeam:
     return PreviewTeam(
-        team_id=int(value["team_id"]),
+        tournament_team_id=value["tournament_team_id"],
         name=str(value["name"]),
         short_name=str(value["short_name"]),
         previous_outcomes=tuple(
@@ -1014,8 +1014,12 @@ def assemble_source(session: Session, batch: Batch) -> PreviewSourceData:
                     tzinfo=SHANGHAI,
                 ),
                 venue="待定",
-                home=PreviewTeam(team_id=1, name="主队待定", short_name="主队待定"),
-                away=PreviewTeam(team_id=2, name="客队待定", short_name="客队待定"),
+                home=PreviewTeam(
+                    tournament_team_id=None, name="主队待定", short_name="主队待定"
+                ),
+                away=PreviewTeam(
+                    tournament_team_id=None, name="客队待定", short_name="客队待定"
+                ),
                 head_to_head=(),
                 preview_paragraphs=("【待补充比赛与前瞻内容】",),
                 writers=(WRITER_PLACEHOLDER,),

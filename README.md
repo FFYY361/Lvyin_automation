@@ -84,6 +84,10 @@ CLI 仅推荐直接使用两条自动化管线。赛事参数支持 `male`、`fe
 和赛事均可传多个值并自动展开。`publish` 只创建微信公众号草稿，不会正式发布或
 群发。
 
+球队业务参数统一使用 `tournament_team_id`，只查询该次赛事报名。跨赛事历史由院系全名和项目／
+赛事范围展开 `institutions.tournament_teams`。旧全局 ID 参数不再接受；升级现有数据库和运行目录
+前先执行 [赛事球队 ID 迁移](docs/ai_preview/football_data_database.md)。
+
 ### Auto Preview
 
 ```powershell

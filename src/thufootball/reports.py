@@ -89,15 +89,12 @@ def resolve_report_team_name(
 ) -> str:
     """Resolve the displayed report name, preferring the canonical full name."""
 
-    team_id = game.home_team_id if side == "home" else game.away_team_id
-    catalog = outcome_catalog or load_outcome_catalog()
-    static_names = catalog.team_names_by_id.get(team_id)
-    if static_names:
-        identity = catalog.teams_by_name[static_names[0]]
-        return identity.brief_name if brief else identity.institution_name
-    raise ConfigurationError(
-        f"team_id={team_id} has no configured identity", stage="configuration"
+    registration = (
+        game.home_tournament_team_id if side == "home" else game.away_tournament_team_id
     )
+    catalog = outcome_catalog or load_outcome_catalog()
+    identity = catalog.resolve_identity(registration)
+    return identity.brief_name if brief else identity.institution_name
 
 
 def _awarded_score(detail: GameDetail) -> int:

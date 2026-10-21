@@ -39,14 +39,14 @@ const batch: PreviewBatch = {
     kickoff: "2026-08-08T15:30:00+08:00",
     venue: "紫荆足球场",
     home: {
-      team_id: 1,
+      tournament_team_id: 1,
       name: "环境学院",
       short_name: "环境",
       previous_outcomes: [{ season: "2024~2025", competition_label: "甲", outcome: "八强" }],
       current_results: [],
     },
     away: {
-      team_id: 2,
+      tournament_team_id: 2,
       name: "探微书院",
       short_name: "探微",
       previous_outcomes: [{ season: "2024~2025", competition_label: null, outcome: "未参赛" }],

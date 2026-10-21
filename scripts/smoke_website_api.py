@@ -97,14 +97,14 @@ def _seed(factory, default_cover_media_id: str) -> tuple[int, int]:
                 kickoff=datetime(2026, 8, 8, 15, tzinfo=SHANGHAI),
                 venue="紫荆操场",
                 home_snapshot={
-                    "team_id": 990001,
+                    "tournament_team_id": 990001,
                     "name": "主队",
                     "short_name": "主队",
                     "previous_outcomes": [],
                     "current_results": [],
                 },
                 away_snapshot={
-                    "team_id": 990002,
+                    "tournament_team_id": 990002,
                     "name": "客队",
                     "short_name": "客队",
                     "previous_outcomes": [],

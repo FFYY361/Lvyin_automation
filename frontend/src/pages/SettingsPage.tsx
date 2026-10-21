@@ -6,11 +6,7 @@ import { Alert, Badge, Button, Field, LoadingScreen, NameInput, PageHeader, Pane
 import { competitionLabels, type CredentialStatus, type EditorialDefaults, type InstitutionSummary, type PromptTemplate } from "../types";
 import { namesText, parseNames } from "../utils";
 
-const competitionIdFields = [
-  ["male", "male_team_ids"],
-  ["female", "female_team_ids"],
-  ["futsal", "futsal_team_ids"],
-] as const;
+const competitions = ["male", "female", "futsal"] as const;
 
 export function SettingsPage() {
   const [credentials, setCredentials] = useState<CredentialStatus | null>(null);
@@ -113,9 +109,9 @@ export function SettingsPage() {
             <Link className="institution-card" key={item.name} to={`/settings/institutions/${encodeURIComponent(item.name)}`}>
               <div className="institution-card__heading"><div><strong>{item.name}</strong><span>{item.short_name}</span></div><ChevronRight size={18} /></div>
               <div className="institution-competition-status">
-                {competitionIdFields
-                  .filter(([, idsField]) => item[idsField].length > 0)
-                  .map(([competition]) => <Badge key={competition} tone={item.team_descriptions_complete[competition] ? "success" : "warning"}>{competitionLabels[competition]}{item.team_descriptions_complete[competition] ? "已填写" : "待补充"}</Badge>)}
+                {competitions
+                  .filter((competition) => Object.keys(item.tournament_teams[competition]).length > 0)
+                  .map((competition) => <Badge key={competition} tone={item.team_descriptions_complete[competition] ? "success" : "warning"}>{competitionLabels[competition]}{item.team_descriptions_complete[competition] ? "已填写" : "待补充"}</Badge>)}
               </div>
               <p>球员描述 {item.player_description_count} / {item.player_count}</p>
             </Link>

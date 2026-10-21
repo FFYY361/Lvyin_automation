@@ -29,6 +29,7 @@ from thufootball import (
     TeamGameResult,
     THUFootballQueryService,
 )
+from thufootball.errors import ConfigurationError
 from thufootball.rankings import (
     StaticOutcomeCatalog,
     load_outcome_catalog,
@@ -113,41 +114,43 @@ class PreviewSourceBuilder:
 
     def _short_name(
         self,
-        team_id: int,
+        tournament_team_id: int,
         name: str,
         database_short_name: str | None = None,
     ) -> str:
-        return self._catalog.resolve_identity(team_id, self._category).brief_name
+        return self._catalog.resolve_identity(
+            tournament_team_id, self._category
+        ).brief_name
 
     def _team_ref(
         self,
-        team_id: int,
+        tournament_team_id: int,
         name: str,
         short_name: str | None,
     ) -> TeamRef:
-        official = self._catalog.resolve_identity(team_id, self._category)
+        official = self._catalog.resolve_identity(tournament_team_id, self._category)
         clean_name = official.institution_name
         return TeamRef(
-            team_id=team_id,
+            tournament_team_id=tournament_team_id,
             name=clean_name,
-            short_name=self._short_name(team_id, clean_name, short_name),
+            short_name=self._short_name(tournament_team_id, clean_name, short_name),
         )
 
     def _played_match(
         self,
         game: GameSummary,
         *,
-        home_team_ids: Sequence[int] = (),
+        home_tournament_team_ids: Sequence[int] = (),
     ) -> PlayedMatch:
-        swap_sides = game.away_team_id in home_team_ids
+        swap_sides = game.away_tournament_team_id in home_tournament_team_ids
         if swap_sides:
             home = self._team_ref(
-                game.away_team_id,
+                game.away_tournament_team_id,
                 game.away_team_name,
                 game.away_team_brief_name,
             )
             away = self._team_ref(
-                game.home_team_id,
+                game.home_tournament_team_id,
                 game.home_team_name,
                 game.home_team_brief_name,
             )
@@ -155,12 +158,12 @@ class PreviewSourceBuilder:
             home_penalty, away_penalty = game.away_penalty, game.home_penalty
         else:
             home = self._team_ref(
-                game.home_team_id,
+                game.home_tournament_team_id,
                 game.home_team_name,
                 game.home_team_brief_name,
             )
             away = self._team_ref(
-                game.away_team_id,
+                game.away_tournament_team_id,
                 game.away_team_name,
                 game.away_team_brief_name,
             )
@@ -191,15 +194,15 @@ class PreviewSourceBuilder:
 
     async def _current_results(
         self,
-        team_id: int,
+        tournament_team_id: int,
         tournament_id: int,
         before: datetime,
     ) -> tuple[PlayedMatch, ...]:
-        key = (team_id, tournament_id)
+        key = (tournament_team_id, tournament_id)
         results = self._team_results.get(key)
         if results is None:
             results = await self._queries.query_team_matches(
-                team_id,
+                tournament_team_id,
                 tournament_id,
                 include_unfinished=False,
             )
@@ -217,13 +220,34 @@ class PreviewSourceBuilder:
         return tuple(
             self._played_match(
                 result.game,
-                home_team_ids=(team_id,),
+                home_tournament_team_ids=(tournament_team_id,),
             )
             for result in eligible
         )
 
-    async def _outcomes(self, team_id: int) -> tuple[SeasonOutcome, ...]:
-        identity = self._catalog.resolve_identity(team_id, self._category)
+    def _display_team_ids(self, tournament_team_id: int) -> tuple[int, ...]:
+        identity = self._catalog.resolve_identity(tournament_team_id, self._category)
+        current = tuple(
+            registration
+            for tid, registration in identity.tournament_teams.items()
+            if tid in self._config.current_tournament_ids
+        )
+        history = self._catalog.display_history_tournament_team_ids(
+            identity,
+            [
+                season.tournament_ids
+                for season in sorted(
+                    self._config.historical_seasons,
+                    key=lambda season: season.label,
+                    reverse=True,
+                )
+            ],
+        )
+        return current + history
+
+    async def _outcomes(self, tournament_team_id: int) -> tuple[SeasonOutcome, ...]:
+        identity = self._catalog.resolve_identity(tournament_team_id, self._category)
+        display_ids = set(self._display_team_ids(tournament_team_id))
         resolved: list[SeasonOutcome] = []
         for season in self._config.historical_seasons:
             outcomes = (
@@ -231,6 +255,14 @@ class PreviewSourceBuilder:
                 if season.outcomes_available
                 else ()
             )
+            outcomes = tuple(
+                item for item in outcomes if item.tournament_team_id in display_ids
+            )
+            if len(outcomes) > 1:
+                raise ConfigurationError(
+                    f"Multiple rankings for {identity.team_name} in {season.label}",
+                    stage="configuration",
+                )
             outcome = outcomes[0] if outcomes else None
             season_label = _season_label(season.label) or season.label
             if outcome is None:
@@ -254,27 +286,25 @@ class PreviewSourceBuilder:
 
     async def _meetings(
         self,
-        home_team_id: int,
-        away_team_id: int,
+        home_tournament_team_id: int,
+        away_tournament_team_id: int,
         before: datetime,
     ) -> tuple[PlayedMatch, ...]:
-        home_team_ids = self._catalog.history_ids(
-            self._catalog.resolve_identity(home_team_id, self._category)
+        scope = (
+            self._config.current_tournament_ids + self._config.historical_tournament_ids
         )
-        key = tuple(sorted((home_team_id, away_team_id)))
+        home_tournament_team_ids = self._display_team_ids(home_tournament_team_id)
+        key = tuple(sorted((home_tournament_team_id, away_tournament_team_id)))
         matches = self._head_to_head.get(key)
         if matches is None:
+            team_a = self._display_team_ids(key[0])
+            team_b = self._display_team_ids(key[1])
+            if not team_a or not team_b:
+                return ()
             history = await self._queries.query_team_sets_matches(
-                self._catalog.history_ids(
-                    self._catalog.resolve_identity(key[0], self._category)
-                ),
-                self._catalog.history_ids(
-                    self._catalog.resolve_identity(key[1], self._category)
-                ),
-                (
-                    self._config.current_tournament_ids
-                    + self._config.historical_tournament_ids
-                ),
+                team_a,
+                team_b,
+                scope,
                 include_unfinished=False,
             )
             matches = history.matches
@@ -289,26 +319,27 @@ class PreviewSourceBuilder:
             reverse=True,
         )
         return tuple(
-            self._played_match(game, home_team_ids=home_team_ids) for game in eligible
+            self._played_match(game, home_tournament_team_ids=home_tournament_team_ids)
+            for game in eligible
         )
 
     async def _preview_team(
         self,
         *,
-        team_id: int,
+        tournament_team_id: int,
         name: str,
         short_name: str | None,
         tournament_id: int,
         before: datetime,
     ) -> PreviewTeam:
-        resolved_short_name = self._short_name(team_id, name, short_name)
+        resolved_short_name = self._short_name(tournament_team_id, name, short_name)
         resolved_name = self._catalog.resolve_identity(
-            team_id, self._category
+            tournament_team_id, self._category
         ).institution_name
-        outcomes = await self._outcomes(team_id)
-        results = await self._current_results(team_id, tournament_id, before)
+        outcomes = await self._outcomes(tournament_team_id)
+        results = await self._current_results(tournament_team_id, tournament_id, before)
         return PreviewTeam(
-            team_id=team_id,
+            tournament_team_id=tournament_team_id,
             name=resolved_name,
             short_name=resolved_short_name,
             previous_outcomes=outcomes,
@@ -361,12 +392,12 @@ class PreviewSourceBuilder:
         # 在查询比赛资料前验证目标球队的配置身份。
         for game in eligible:
             self._short_name(
-                game.home_team_id,
+                game.home_tournament_team_id,
                 game.home_team_name,
                 game.home_team_brief_name,
             )
             self._short_name(
-                game.away_team_id,
+                game.away_tournament_team_id,
                 game.away_team_name,
                 game.away_team_brief_name,
             )
@@ -374,22 +405,22 @@ class PreviewSourceBuilder:
         preview_matches: list[PreviewMatch] = []
         for game in eligible:
             home = await self._preview_team(
-                team_id=game.home_team_id,
+                tournament_team_id=game.home_tournament_team_id,
                 name=game.home_team_name,
                 short_name=game.home_team_brief_name,
                 tournament_id=game.tournament_id,
                 before=game.kickoff_local,
             )
             away = await self._preview_team(
-                team_id=game.away_team_id,
+                tournament_team_id=game.away_tournament_team_id,
                 name=game.away_team_name,
                 short_name=game.away_team_brief_name,
                 tournament_id=game.tournament_id,
                 before=game.kickoff_local,
             )
             meetings = await self._meetings(
-                game.home_team_id,
-                game.away_team_id,
+                game.home_tournament_team_id,
+                game.away_tournament_team_id,
                 game.kickoff_local,
             )
             preview_matches.append(
@@ -446,7 +477,7 @@ def contains_placeholders(source: PreviewSourceData) -> bool:
 def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
     def team_ref(team: TeamRef) -> dict[str, object]:
         return {
-            "team_id": team.team_id,
+            "tournament_team_id": team.tournament_team_id,
             "name": team.name,
             "short_name": team.short_name,
         }
@@ -479,7 +510,7 @@ def preview_data_to_dict(source: PreviewSourceData) -> dict[str, object]:
 
     def preview_team(team: PreviewTeam) -> dict[str, object]:
         return {
-            "team_id": team.team_id,
+            "tournament_team_id": team.tournament_team_id,
             "name": team.name,
             "short_name": team.short_name,
             "previous_outcomes": [

@@ -70,10 +70,10 @@ def _game(
         stage=None,
         group_name=None,
         round=None,
-        home_tournament_team_id=game_id * 2,
+        home_tournament_team_id=tournament_id * 10000 + 1,
         home_team_id=90_000 + game_id * 2,
         home_team_name=home_name,
-        away_tournament_team_id=game_id * 2 + 1,
+        away_tournament_team_id=tournament_id * 10000 + 2,
         away_team_id=90_000 + game_id * 2 + 1,
         away_team_name=away_name,
         home_score=1 if status is GameStatus.FINISHED else None,
@@ -96,21 +96,21 @@ class FakeFootball:
         mixed_game_ids: set[int] | None = None,
     ) -> None:
         self.games_by_tournaments = games_by_tournaments
-        identities = {"A": set(), "B": set()}
+        identities = {"A": {}, "B": {}}
         for games in games_by_tournaments.values():
             for game in games:
-                identities.setdefault(game.home_team_name, set()).add(game.home_team_id)
-                identities.setdefault(game.away_team_name, set()).add(game.away_team_id)
+                for side in ("home", "away"):
+                    identities.setdefault(getattr(game, side + "_team_name"), {})[
+                        str(game.tournament_id)
+                    ] = getattr(game, side + "_tournament_team_id")
         self.outcome_catalog = build_outcome_catalog(
             [
                 {
                     "name": name,
                     "short_name": name,
-                    "male_team_ids": sorted(ids),
-                    "female_team_ids": sorted(ids),
-                    "futsal_team_ids": sorted(ids),
+                    "tournament_teams": {"male": mapping, "female": {}, "futsal": {}},
                 }
-                for name, ids in identities.items()
+                for name, mapping in identities.items()
             ],
             [],
         )

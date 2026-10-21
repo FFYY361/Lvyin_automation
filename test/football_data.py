@@ -18,9 +18,7 @@ def clone_football_data(source_engine: Engine, target_engine: Engine) -> None:
             {
                 "name": row.name,
                 "short_name": row.short_name,
-                "male_team_ids": list(row.male_team_ids),
-                "female_team_ids": list(row.female_team_ids),
-                "futsal_team_ids": list(row.futsal_team_ids),
+                "tournament_teams": deepcopy(row.tournament_teams),
                 "male_description": row.male_description,
                 "female_description": row.female_description,
                 "futsal_description": row.futsal_description,

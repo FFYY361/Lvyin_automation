@@ -27,7 +27,7 @@
       "kickoff": "2026-04-12T15:30:00+08:00",
       "venue": "紫荆操场",
       "home": {
-        "team_id": 254,
+        "tournament_team_id": null,
         "name": "社会科学学院-心理与认知科学系",
         "short_name": "社科-心理",
         "previous_outcomes": [
@@ -51,12 +51,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 254,
+              "tournament_team_id": null,
               "name": "社会科学学院-心理与认知科学系",
               "short_name": "社科-心理"
             },
             "away": {
-              "team_id": 45,
+              "tournament_team_id": null,
               "name": "工物-安全联队",
               "short_name": "工物-安全"
             },
@@ -66,12 +66,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 254,
+              "tournament_team_id": null,
               "name": "社会科学学院-心理与认知科学系",
               "short_name": "社科-心理"
             },
             "away": {
-              "team_id": 50,
+              "tournament_team_id": null,
               "name": "法学院",
               "short_name": "法学"
             },
@@ -81,12 +81,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 254,
+              "tournament_team_id": null,
               "name": "社会科学学院-心理与认知科学系",
               "short_name": "社科-心理"
             },
             "away": {
-              "team_id": 52,
+              "tournament_team_id": null,
               "name": "化学工程系",
               "short_name": "化工"
             },
@@ -96,12 +96,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 254,
+              "tournament_team_id": null,
               "name": "社会科学学院-心理与认知科学系",
               "short_name": "社科-心理"
             },
             "away": {
-              "team_id": 61,
+              "tournament_team_id": null,
               "name": "工业工程系-统计学研究中心联队",
               "short_name": "工工-统计"
             },
@@ -111,12 +111,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 254,
+              "tournament_team_id": null,
               "name": "社会科学学院-心理与认知科学系",
               "short_name": "社科-心理"
             },
             "away": {
-              "team_id": 48,
+              "tournament_team_id": null,
               "name": "车辆与运载学院",
               "short_name": "车辆"
             },
@@ -126,7 +126,7 @@
         ]
       },
       "away": {
-        "team_id": 44,
+        "tournament_team_id": null,
         "name": "经济管理学院-国际与地区研究院",
         "short_name": "经管-地研",
         "previous_outcomes": [
@@ -150,12 +150,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 44,
+              "tournament_team_id": null,
               "name": "经济管理学院-国际与地区研究院",
               "short_name": "经管-地研"
             },
             "away": {
-              "team_id": 38,
+              "tournament_team_id": null,
               "name": "材料学院",
               "short_name": "材料"
             },
@@ -165,12 +165,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 44,
+              "tournament_team_id": null,
               "name": "经济管理学院-国际与地区研究院",
               "short_name": "经管-地研"
             },
             "away": {
-              "team_id": 34,
+              "tournament_team_id": null,
               "name": "电子工程系",
               "short_name": "电子"
             },
@@ -180,12 +180,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 44,
+              "tournament_team_id": null,
               "name": "经济管理学院-国际与地区研究院",
               "short_name": "经管-地研"
             },
             "away": {
-              "team_id": 53,
+              "tournament_team_id": null,
               "name": "建筑学院",
               "short_name": "建筑"
             },
@@ -195,12 +195,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 44,
+              "tournament_team_id": null,
               "name": "经济管理学院-国际与地区研究院",
               "short_name": "经管-地研"
             },
             "away": {
-              "team_id": 33,
+              "tournament_team_id": null,
               "name": "计算机系-GIX联队",
               "short_name": "计算机-GIX"
             },
@@ -210,12 +210,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 44,
+              "tournament_team_id": null,
               "name": "经济管理学院-国际与地区研究院",
               "short_name": "经管-地研"
             },
             "away": {
-              "team_id": 163,
+              "tournament_team_id": null,
               "name": "未央书院",
               "short_name": "未央"
             },
@@ -228,12 +228,12 @@
         {
           "game_id": -1,
           "home": {
-            "team_id": 254,
+            "tournament_team_id": null,
             "name": "社会科学学院-心理与认知科学系",
             "short_name": "社科"
           },
           "away": {
-            "team_id": 44,
+            "tournament_team_id": null,
             "name": "经济管理学院-国际与地区研究院",
             "short_name": "经管-地研"
           },
@@ -252,7 +252,7 @@
       "kickoff": "2026-04-12T19:00:00+08:00",
       "venue": "紫荆操场",
       "home": {
-        "team_id": 47,
+        "tournament_team_id": null,
         "name": "土木工程系-建设管理系",
         "short_name": "土木-建管",
         "previous_outcomes": [
@@ -276,12 +276,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 47,
+              "tournament_team_id": null,
               "name": "土木工程系-建设管理系",
               "short_name": "土木-建管"
             },
             "away": {
-              "team_id": 48,
+              "tournament_team_id": null,
               "name": "车辆与运载学院",
               "short_name": "车辆"
             },
@@ -291,12 +291,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 47,
+              "tournament_team_id": null,
               "name": "土木工程系-建设管理系",
               "short_name": "土木-建管"
             },
             "away": {
-              "team_id": 41,
+              "tournament_team_id": null,
               "name": "能源与动力工程系",
               "short_name": "能动"
             },
@@ -306,12 +306,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 47,
+              "tournament_team_id": null,
               "name": "土木工程系-建设管理系",
               "short_name": "土木-建管"
             },
             "away": {
-              "team_id": 33,
+              "tournament_team_id": null,
               "name": "计算机系-GIX联队",
               "short_name": "计算机-GIX"
             },
@@ -321,12 +321,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 47,
+              "tournament_team_id": null,
               "name": "土木工程系-建设管理系",
               "short_name": "土木-建管"
             },
             "away": {
-              "team_id": 35,
+              "tournament_team_id": null,
               "name": "电机工程与应用电子技术系",
               "short_name": "电机"
             },
@@ -336,7 +336,7 @@
         ]
       },
       "away": {
-        "team_id": 38,
+        "tournament_team_id": null,
         "name": "材料学院",
         "short_name": "材料",
         "previous_outcomes": [
@@ -360,12 +360,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 38,
+              "tournament_team_id": null,
               "name": "材料学院",
               "short_name": "材料"
             },
             "away": {
-              "team_id": 44,
+              "tournament_team_id": null,
               "name": "经济管理学院-国际与地区研究院",
               "short_name": "经管-地研"
             },
@@ -375,12 +375,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 38,
+              "tournament_team_id": null,
               "name": "材料学院",
               "short_name": "材料"
             },
             "away": {
-              "team_id": 53,
+              "tournament_team_id": null,
               "name": "建筑学院",
               "short_name": "建筑"
             },
@@ -390,12 +390,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 38,
+              "tournament_team_id": null,
               "name": "材料学院",
               "short_name": "材料"
             },
             "away": {
-              "team_id": 34,
+              "tournament_team_id": null,
               "name": "电子工程系",
               "short_name": "电子"
             },
@@ -405,12 +405,12 @@
           {
             "game_id": -1,
             "home": {
-              "team_id": 38,
+              "tournament_team_id": null,
               "name": "材料学院",
               "short_name": "材料"
             },
             "away": {
-              "team_id": 52,
+              "tournament_team_id": null,
               "name": "化学工程系",
               "short_name": "化工"
             },
@@ -423,12 +423,12 @@
         {
           "game_id": -1,
           "home": {
-            "team_id": 47,
+            "tournament_team_id": null,
             "name": "土木工程系-建设管理系",
             "short_name": "土木-建管"
           },
           "away": {
-            "team_id": 38,
+            "tournament_team_id": null,
             "name": "材料学院",
             "short_name": "材料"
           },

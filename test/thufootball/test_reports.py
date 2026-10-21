@@ -50,9 +50,11 @@ def report_catalog(monkeypatch):
         {
             "name": name,
             "short_name": name,
-            "male_team_ids": [team_id],
-            "female_team_ids": [],
-            "futsal_team_ids": [],
+            "tournament_teams": {
+                "male": {"122": 1735 if team_id == 48 else 1745},
+                "female": {},
+                "futsal": {},
+            },
         }
         for name, team_id in (("车辆与运载学院", 48), ("未央书院", 163))
     ]
@@ -525,8 +527,8 @@ class ReportRendererTests(unittest.TestCase):
             detail,
             game=replace(
                 detail.game,
-                home_team_id=999_998,
-                away_team_id=999_999,
+                home_tournament_team_id=999_998,
+                away_tournament_team_id=999_999,
             ),
         )
         with self.assertRaises(ConfigurationError):

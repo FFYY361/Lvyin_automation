@@ -262,14 +262,14 @@ def _batch(
             ),
             venue="紫荆操场",
             home_snapshot={
-                "team_id": game_id * 2,
+                "tournament_team_id": game_id * 2,
                 "name": "主队",
                 "short_name": "主队",
                 "previous_outcomes": [],
                 "current_results": [],
             },
             away_snapshot={
-                "team_id": game_id * 2 + 1,
+                "tournament_team_id": game_id * 2 + 1,
                 "name": "客队",
                 "short_name": "客队",
                 "previous_outcomes": [],
@@ -1007,8 +1007,8 @@ def test_match_payload_fills_legacy_result_text_without_mutating_snapshot(
         assert match is not None
         legacy_result = {
             "game_id": 8001,
-            "home": {"team_id": 1, "name": "主队", "short_name": "主队"},
-            "away": {"team_id": 2, "name": "客队", "short_name": "客队"},
+            "home": {"tournament_team_id": 1, "name": "主队", "short_name": "主队"},
+            "away": {"tournament_team_id": 2, "name": "客队", "short_name": "客队"},
             "home_score": 1,
             "away_score": 1,
             "home_penalty": 5,
@@ -2816,6 +2816,57 @@ def test_title_uses_batch_snapshots_without_football_reads(session_factory, monk
         assert all(value in prompt for value in ("快照战绩 2:1", "快照交锋 3:2", "八强", match.body))
 
 
+def test_title_cache_migration_preserves_valid_and_stale_results(session_factory):
+    from backend.models import AITitleResult
+    from backend.tournament_identity_migration import (
+        rekey_title_cache,
+        title_prompt_hashes,
+    )
+
+    with session_factory.begin() as session:
+        session.add_all([PromptTemplate(key=key, content="Title rules")
+                         for key in ("title_system", "title_rules")])
+        batch = _batch(session, complete=True)
+        match = session.scalar(select(Match).where(Match.batch_id == batch.id))
+        for side, global_id in (("home", 10), ("away", 20)):
+            field = side + "_snapshot"
+            snapshot = dict(getattr(match, field))
+            snapshot.pop("tournament_team_id")
+            setattr(match, field, {**snapshot, "team_id": global_id})
+        session.flush()
+        session.expire_all()
+        old_hash = build_title_material(session, batch).prompt_hash
+        for profile, status, prompt_hash in (("valid", "succeeded", old_hash),
+                                              ("stale", "succeeded", "f" * 64),
+                                              ("failed", "failed", old_hash)):
+            session.add(AITitleResult(
+                batch_id=batch.id, model_profile=profile, prompt_hash=prompt_hash,
+                model_config_hash="a" * 64, request_token=uuid.uuid4(), status=status,
+                candidates=[{"title": "Preserve this candidate"}], requested_at=datetime.now(UTC),
+            ))
+        session.flush()
+        before = title_prompt_hashes(session.connection())
+        for side, registration in (("home", 777), ("away", 888)):
+            field = side + "_snapshot"
+            snapshot = dict(getattr(match, field))
+            snapshot.pop("team_id")
+            setattr(match, field, {**snapshot, "tournament_team_id": registration})
+        session.flush()
+        rekey_title_cache(session.connection(), before)
+        session.expire_all()
+        new_hash = build_title_material(session, batch).prompt_hash
+        assert new_hash != old_hash
+        results = {row.model_profile: row for row in session.scalars(select(AITitleResult))}
+        assert results["valid"].prompt_hash == new_hash
+        assert results["stale"].prompt_hash == "f" * 64
+        assert results["failed"].prompt_hash == old_hash
+        assert all(row.candidates == [{"title": "Preserve this candidate"}] for row in results.values())
+        results["valid"].status = "running"
+        session.flush()
+        with pytest.raises(ValueError, match="active AI title"):
+            title_prompt_hashes(session.connection())
+
+
 def test_current_prompt_and_manual_api_use_live_roster(session_factory, settings):
     with session_factory.begin() as session:
         session.add_all([PromptTemplate(key=key, content="标题测试规则")
@@ -2872,7 +2923,7 @@ def test_current_prompt_and_manual_api_use_live_roster(session_factory, settings
         # Title stays usable even when the football API is down.
         assert client.get(f"/api/batches/{batch_id}/ai-title-prompt").status_code == 200
     with session_factory() as session:
-        institution = FootballDataRepository(session).find_institution(target["home_team_id"], "male")
+        institution = FootballDataRepository(session).find_institution(target["home_tournament_team_id"], "male")
         assert "远端新报名" not in institution.player_descriptions
     assert set(calls) == {139, 140, 141}
 

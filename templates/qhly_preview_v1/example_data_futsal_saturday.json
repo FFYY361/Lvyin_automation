@@ -21,14 +21,14 @@
       "kickoff": "2026-04-11T19:00:00+08:00",
       "venue": "综合体育馆",
       "home": {
-        "team_id": 38,
+        "tournament_team_id": null,
         "name": "材料学院五人制",
         "short_name": "材料五人制",
         "previous_outcomes": [],
         "current_results": []
       },
       "away": {
-        "team_id": 48,
+        "tournament_team_id": null,
         "name": "车辆与运载学院五人制",
         "short_name": "车辆五人制",
         "previous_outcomes": [],

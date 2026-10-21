@@ -42,7 +42,11 @@ from thufootball.mappers import (
     map_game_summary,
     map_tournament_snapshot,
 )
-from thufootball.rankings import StaticOutcomeCatalog, load_outcome_catalog
+from thufootball.rankings import (
+    StaticOutcomeCatalog,
+    build_outcome_catalog,
+    load_outcome_catalog,
+)
 
 
 @cache
@@ -55,8 +59,8 @@ class _LiveSmokeConfig:
     tournament_ids: tuple[int, ...]
     game_id: int | None
     match_date: date | None
-    team_id: int | None
-    opponent_id: int | None
+    tournament_team_id: int | None
+    opponent_tournament_team_id: int | None
     include_unfinished: bool
     full_output: bool
     outcomes: bool
@@ -110,8 +114,8 @@ def _game(
     valid: int | None = 1,
     home_team_id: int = 101,
     away_team_id: int = 202,
-    home_tournament_team_id: int = 1101,
-    away_tournament_team_id: int = 1202,
+    home_tournament_team_id: int | None = None,
+    away_tournament_team_id: int | None = None,
     home_goal: object = 2,
     away_goal: object = 1,
     home_penalty: object = None,
@@ -119,6 +123,12 @@ def _game(
     home_abandon: object = None,
     away_abandon: object = None,
 ) -> dict[str, Any]:
+    home_tournament_team_id = (
+        home_tournament_team_id or tournament_id * 100 + home_team_id
+    )
+    away_tournament_team_id = (
+        away_tournament_team_id or tournament_id * 100 + away_team_id
+    )
     return {
         "id": game_id,
         "tourn_id": tournament_id,
@@ -279,11 +289,11 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.skipTest("真实冒烟仅在直接运行本文件时启用，离线发现测试不会访问 API")
 
         if config.outcomes:
-            assert config.team_id is not None
+            assert config.tournament_team_id is not None
             async with THUFootballClient(load_environment=False) as client:
                 service = THUFootballQueryService(client)
                 team_outcomes = await service.query_team_outcomes(
-                    config.team_id,
+                    config.tournament_team_id,
                     config.tournament_ids or None,
                 )
             if config.full_output:
@@ -291,7 +301,7 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                     "query": {
                         "scope": "static_team_outcomes",
                         "tournament_ids": config.tournament_ids,
-                        "team_id": config.team_id,
+                        "tournament_team_id": config.tournament_team_id,
                     },
                     "team_outcomes": team_outcomes,
                 }
@@ -299,7 +309,7 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                 output = {
                     "query_scope": "static_team_outcomes",
                     "query_tournament_ids": config.tournament_ids,
-                    "team_id": config.team_id,
+                    "tournament_team_id": config.tournament_team_id,
                     "outcome_team_names": list(
                         dict.fromkeys(outcome.team_name for outcome in team_outcomes)
                     ),
@@ -324,23 +334,23 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
             games = []
             team_matches = []
             team_to_team_matches = None
-            if config.team_id is None:
+            if config.tournament_team_id is None:
                 games = await service.query_games(
                     GameQuery(
                         tournament_ids=config.tournament_ids,
                         match_date=query_date,
                     )
                 )
-            elif config.opponent_id is None:
+            elif config.opponent_tournament_team_id is None:
                 team_matches = await service.query_team_matches(
-                    config.team_id,
+                    config.tournament_team_id,
                     (config.tournament_ids[0] if config.tournament_ids else None),
                     include_unfinished=config.include_unfinished,
                 )
             else:
                 team_to_team_matches = await service.query_team_to_team_matches(
-                    config.team_id,
-                    config.opponent_id,
+                    config.tournament_team_id,
+                    config.opponent_tournament_team_id,
                     config.tournament_ids or None,
                     include_unfinished=config.include_unfinished,
                 )
@@ -366,10 +376,10 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                     "tournament_ids": config.tournament_ids,
                     "game_id": config.game_id,
                     "match_date": query_date,
-                    "team_id": config.team_id,
-                    "opponent_id": config.opponent_id,
+                    "tournament_team_id": config.tournament_team_id,
+                    "opponent_tournament_team_id": config.opponent_tournament_team_id,
                     "include_unfinished": (
-                        True if config.team_id is None else config.include_unfinished
+                        True if config.tournament_team_id is None else config.include_unfinished
                     ),
                 },
                 "user_probe": probe,
@@ -396,8 +406,8 @@ class LiveSmokeTests(unittest.IsolatedAsyncioTestCase):
                 "query_tournament_ids": config.tournament_ids,
                 "query_match_date": query_date,
                 "query_game_count": len(games),
-                "team_id": config.team_id,
-                "opponent_id": config.opponent_id,
+                "tournament_team_id": config.tournament_team_id,
+                "opponent_tournament_team_id": config.opponent_tournament_team_id,
                 "team_match_count": len(team_matches),
                 "team_to_team_match_count": (
                     len(team_to_team_matches.matches)
@@ -841,7 +851,10 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             yield THUFootballQueryService(
                 client,
                 max_concurrency=max_concurrency,
-                outcome_catalog=_outcome_catalog(),
+                outcome_catalog=build_outcome_catalog([{
+                    "name": "Fixture", "short_name": "Fixture",
+                    "tournament_teams": {"male": {}, "female": {}, "futsal": {}},
+                }], []),
             )
 
     async def test_from_environment_owns_and_closes_transport(self) -> None:
@@ -880,83 +893,13 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0].url.params["history_bound"], "2026-07-13")
         self.assertEqual(seen[0].url.params["future_bound"], "2026-07-15")
 
-    async def test_omitted_tournaments_discover_all_accessible(self) -> None:
-        discovery_calls = 0
-        tournament_reads: list[int] = []
-        games_by_tournament = {
-            10: [
-                _game(
-                    1,
-                    10,
-                    kickoff="2026-07-14 08:00:00",
-                    started=True,
-                    ended=True,
-                    home_goal=2,
-                    away_goal=1,
-                )
-            ],
-            20: [
-                _game(
-                    2,
-                    20,
-                    kickoff="2026-07-14 09:00:00",
-                    started=True,
-                    ended=True,
-                    home_team_id=202,
-                    away_team_id=101,
-                    home_goal=1,
-                    away_goal=0,
-                )
-            ],
-        }
-
-        async def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal discovery_calls
-            if request.url.path.endswith("GetMyTournaments"):
-                discovery_calls += 1
-                return httpx.Response(
-                    200,
-                    json={
-                        "success": True,
-                        "tourns": [
-                            {
-                                "id": tournament_id,
-                                "name": f"赛事{tournament_id}",
-                                "brief_name": f"赛{tournament_id}",
-                                "season": "2025~2026",
-                                "begin": "2025-09-01",
-                                "end": "2026-08-01",
-                                "status": True,
-                                "visible": True,
-                            }
-                            for tournament_id in (6, 10, 28, 20)
-                        ],
-                    },
-                    request=request,
-                )
-            tournament_id = int(request.url.params["tourn_id"])
-            tournament_reads.append(tournament_id)
-            return httpx.Response(
-                200,
-                json=_tournament_payload(
-                    tournament_id, games_by_tournament[tournament_id]
-                ),
-                request=request,
-            )
+    async def test_omitted_scope_does_not_discover_all_remote_tournaments(self) -> None:
+        async def handler(request):
+            raise AssertionError("An unscoped query must not access the network")
 
         async with self._service(handler) as service:
-            games = await service.query_games(GameQuery())
-            team_matches = await service.query_team_matches(101)
-            history = await service.query_team_to_team_matches(101, 202)
-
-        self.assertEqual(discovery_calls, 3)
-        self.assertEqual(sorted(tournament_reads), [10, 20])
-        self.assertEqual([game.game_id for game in games], [1, 2])
-        self.assertEqual([match.game.game_id for match in team_matches], [2, 1])
-        self.assertEqual(history.tournament_ids, (10, 20))
-        self.assertEqual([game.game_id for game in history.matches], [2, 1])
-        self.assertEqual(history.summary.team_a_wins, 1)
-        self.assertEqual(history.summary.team_b_wins, 1)
+            with self.assertRaises(QueryValidationError):
+                await service.query_games(GameQuery())
 
     async def test_blacklisted_query_scope_is_rejected_without_request(
         self,
@@ -967,7 +910,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         async with self._service(handler) as service:
             calls = (
                 service.query_games(GameQuery(tournament_ids=(6,))),
-                service.query_team_matches(101, 28),
+                service.query_team_matches(1101, 28),
                 service.query_team_to_team_matches(101, 202, [10, 28]),
             )
             for call in calls:
@@ -990,7 +933,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
 
         async with self._service(handler) as service:
             with self.assertRaises(SchemaError) as team_error:
-                await service.query_team_matches(101, 10)
+                await service.query_team_matches(1101, 10)
             with self.assertRaises(SchemaError) as game_error:
                 await service.query_games(GameQuery(tournament_ids=(10,)))
 
@@ -1077,12 +1020,12 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
 
         async with self._service(handler) as service:
             any_result = await service.query_games(
-                GameQuery(tournament_ids=(10,), team_ids=(101,))
+                GameQuery(tournament_ids=(10,), tournament_team_ids=(1101,))
             )
             all_result = await service.query_games(
                 GameQuery(
                     tournament_ids=(10,),
-                    team_ids=(101, 202),
+                    tournament_team_ids=(1101, 1202),
                     team_match="all",
                     include_unfinished=False,
                 )
@@ -1124,10 +1067,10 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
 
         async with self._service(handler) as service:
             queried_games = await service.query_games(GameQuery(tournament_ids=(10,)))
-            team_matches = await service.query_team_matches(101, 10)
+            team_matches = await service.query_team_matches(1101, 10)
             head_to_head = await service.query_team_to_team_matches(
-                101,
-                202,
+                1101,
+                1202,
                 [10],
             )
             repeated_games = await service.query_games(GameQuery(tournament_ids=(10,)))
@@ -1166,7 +1109,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         async with self._service(handler, max_concurrency=2) as service:
             games, head_to_head = await asyncio.gather(
                 service.query_games(GameQuery(tournament_ids=(1, 2, 3))),
-                service.query_team_to_team_matches(101, 202, [2, 3, 4]),
+                service.query_team_sets_matches((1101,), (1202,), [2, 3, 4]),
             )
 
         self.assertEqual(games, [])
@@ -1245,14 +1188,18 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(BatchQueryError) as caught:
                 await service.query_games(GameQuery(tournament_ids=(1, 2, 3)))
             with self.assertRaises(BatchQueryError) as h2h_caught:
-                await service.query_team_to_team_matches(101, 202, [1, 2, 3])
+                await service.query_team_sets_matches((1101,), (1202,), [1, 2, 3])
 
         self.assertEqual(caught.exception.failed_tournament_ids, (2, 3))
         self.assertIsInstance(caught.exception.failures[2], AuthenticationError)
         self.assertIsInstance(caught.exception.failures[3], InvalidResponse)
-        self.assertEqual(str(caught.exception), "GetTournInfo rejected the current credentials")
+        self.assertEqual(
+            str(caught.exception), "GetTournInfo rejected the current credentials"
+        )
         self.assertEqual(h2h_caught.exception.failed_tournament_ids, (2, 3))
-        self.assertEqual(str(h2h_caught.exception), "GetTournInfo rejected the current credentials")
+        self.assertEqual(
+            str(h2h_caught.exception), "GetTournInfo rejected the current credentials"
+        )
 
     async def test_single_failure_is_not_wrapped(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -1266,7 +1213,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(InvalidResponse):
                 await service.query_games(GameQuery(tournament_ids=(1,)))
             with self.assertRaises(InvalidResponse):
-                await service.query_team_matches(101, 1)
+                await service.query_team_matches(1101, 1)
 
     async def test_conflicting_duplicate_game_ids_raise(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -1378,9 +1325,9 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async with self._service(handler) as service:
-            results = await service.query_team_matches(101, 10)
+            results = await service.query_team_matches(1101, 10)
             with_unfinished = await service.query_team_matches(
-                101, 10, include_unfinished=True
+                1101, 10, include_unfinished=True
             )
             no_matches = await service.query_team_matches(999, 10)
 
@@ -1447,7 +1394,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                     )
 
                 async with self._service(handler) as service:
-                    results = await service.query_team_matches(101, 10)
+                    results = await service.query_team_matches(1101, 10)
 
                 by_game_id = {item.game.game_id: item for item in results}
                 self.assertEqual(by_game_id[1].score_text, f"{awarded_goals}:0")
@@ -1523,13 +1470,13 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async with self._service(handler) as service:
-            history = await service.query_team_to_team_matches(
-                101,
-                202,
+            history = await service.query_team_sets_matches(
+                (1101, 2101),
+                (1202, 2202),
                 [10, 20, 30, 10],
                 include_unfinished=True,
             )
-            empty = await service.query_team_to_team_matches(101, 202, [30])
+            empty = await service.query_team_sets_matches((1101,), (1202,), [30])
 
         self.assertEqual(history.tournament_ids, (10, 20, 30))
         self.assertEqual(
@@ -1548,115 +1495,90 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty.summary.team_a_wins, 0)
         self.assertEqual(empty.by_tournament[30].draws, 0)
 
-    async def test_query_team_to_team_matches_expands_static_team_ids(self) -> None:
-        games = [
-            _game(
-                1,
-                10,
-                started=True,
-                ended=True,
-                home_team_id=254,
-                away_team_id=48,
-                home_goal=1,
-                away_goal=0,
-            ),
-            _game(
-                2,
-                10,
-                started=True,
-                ended=True,
-                home_team_id=48,
-                away_team_id=80,
-                home_goal=0,
-                away_goal=2,
-            ),
-            _game(
-                3,
-                10,
-                started=True,
-                ended=True,
-                home_team_id=101,
-                away_team_id=48,
-                home_goal=3,
-                away_goal=0,
-            ),
-        ]
+    async def test_registration_queries_are_exact_and_institution_history_is_explicit(
+        self,
+    ):
+        from thufootball.rankings import build_outcome_catalog
 
-        async def handler(request: httpx.Request) -> httpx.Response:
+        def institution(name, registrations):
+            return {
+                "name": name,
+                "short_name": name,
+                "tournament_teams": {"male": registrations, "female": {}, "futsal": {}},
+            }
+
+        catalog = build_outcome_catalog(
+            [
+                institution("交叉", {"10": 1060, "20": 2060}),
+                institution("车辆", {"10": 1048, "20": 2048}),
+            ],
+            [],
+        )
+
+        async def handler(request):
+            tid = int(request.url.params["tourn_id"])
             return httpx.Response(
                 200,
-                json=_tournament_payload(10, games),
+                json=_tournament_payload(
+                    tid,
+                    [
+                        _game(
+                            tid,
+                            tid,
+                            home_team_id=60,
+                            away_team_id=48,
+                            started=True,
+                            ended=True,
+                        )
+                    ],
+                ),
                 request=request,
             )
 
         async with self._service(handler) as service:
-            history = await service.query_team_to_team_matches(254, 48, [10])
-            exact = await service.query_team_sets_matches((254,), (48,), [10])
-            combined = await service.query_team_sets_matches((254, 80, 254), (48,), [10])
-
-        self.assertEqual(history.team_a_id, 254)
-        self.assertEqual(history.team_b_id, 48)
-        self.assertEqual([game.game_id for game in history.matches], [2, 1])
+            service._outcome_catalog = catalog
+            exact = await service.query_team_to_team_matches(1060, 1048)
+            self.assertEqual([game.game_id for game in exact.matches], [10])
+            service._outcome_catalog = None
+            with patch("thufootball.queries.load_outcome_catalog", return_value=catalog):
+                with self.assertRaises(QueryValidationError):
+                    await service.query_team_matches(1060, 20)
+            with self.assertRaises(QueryValidationError):
+                await service.query_team_matches(1060, 20)
+            with self.assertRaises(QueryValidationError):
+                await service.query_games(
+                    GameQuery(tournament_ids=(20,), tournament_team_ids=(1060,))
+                )
+            with self.assertRaises(QueryValidationError):
+                await service.query_institution_games("交叉")
+            games = await service.query_institution_games("交叉", competition="male")
+            history = await service.query_institution_head_to_head(
+                "交叉", "车辆", competition="male", tournament_ids=(10, 20)
+            )
+        self.assertEqual([game.game_id for game in games], [10, 20])
+        self.assertEqual([game.game_id for game in history.matches], [20, 10])
         self.assertEqual(history.summary.team_a_wins, 2)
-        self.assertEqual(history.summary.draws, 0)
-        self.assertEqual(history.summary.team_b_wins, 0)
-        self.assertEqual([game.game_id for game in exact.matches], [1])
-        self.assertEqual([game.game_id for game in combined.matches], [2, 1])
+        with self.assertRaises(TypeError):
+            GameQuery(team_ids=(60,))
 
-    async def test_query_team_outcomes_uses_static_alias_and_shared_id_data(
-        self,
-    ) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            raise AssertionError("static outcome queries must not make requests")
+    async def test_registration_outcome_is_only_its_own_tournament(self):
+        async def handler(request):
+            raise AssertionError("Final rankings must not access the network")
 
         async with self._service(handler) as service:
-            vehicle = await service.query_team_outcomes(48)
-            explicit = await service.query_team_outcomes(48, [128, 122, 128])
-            current_alias = await service.query_team_outcomes(132)
-            historical_alias = await service.query_team_outcomes(244)
-            shared_three_ways = await service.query_team_outcomes(253)
-            merged_news = await service.query_team_outcomes(2041, [101])
-            historical_news = await service.query_team_outcomes(253, [101])
-            historical_marxism = await service.query_team_outcomes(1944, [101])
-            non_participant = await service.query_team_outcomes(2051, [122])
-
+            service._outcome_catalog = _outcome_catalog()
+            catalog = service.outcome_catalog
+            vehicle = catalog.teams_by_name["车辆与运载学院男足"]
+            registration = vehicle.tournament_teams[122]
+            outcomes = await service.query_team_outcomes(registration)
+            explicit = await service.query_team_outcomes(registration, (122,))
+            with self.assertRaises(QueryValidationError):
+                await service.query_team_outcomes(registration, (128,))
+        self.assertEqual(outcomes, explicit)
         self.assertEqual(
-            [
-                (outcome.tournament_id, outcome.team_name, outcome.rank)
-                for outcome in vehicle
-            ],
-            [
-                (122, "车辆与运载学院男足", "冠军"),
-                (128, "车辆与运载学院五人制", "32强"),
-                (99, "车辆与运载学院男足", "冠军"),
-                (111, "车辆与运载学院五人制", "48强"),
-                (89, "车辆与运载学院男足", "八强"),
-                (93, "车辆与运载学院五人制", "32强"),
-            ],
+            [(item.tournament_id, item.rank) for item in outcomes], [(122, "冠军")]
         )
-        self.assertEqual(
-            [(outcome.tournament_id, outcome.team_name) for outcome in explicit],
-            [(128, "车辆与运载学院五人制"), (122, "车辆与运载学院男足")],
-        )
-        self.assertEqual(current_alias, historical_alias)
-        self.assertEqual(
-            {outcome.team_name for outcome in shared_three_ways},
-            {
-                "新闻与传播学院男足",
-                "新闻与传播学院女足",
-                "新闻与传播学院五人制",
-            },
-        )
-        self.assertEqual(merged_news, [])
-        self.assertEqual(
-            [(item.team_name, item.rank) for item in historical_news],
-            [("新闻与传播学院男足", "小组第三")],
-        )
-        self.assertEqual(
-            [(item.team_name, item.rank) for item in historical_marxism],
-            [("马克思主义学院男足", "小组第四")],
-        )
-        self.assertEqual(non_participant, [])
+        self.assertEqual(outcomes[0].tournament_team_id, registration)
 
     async def test_query_validation(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -1676,7 +1598,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 (
                     "overlapping aliases",
-                    lambda: service.query_team_to_team_matches(254, 80, [10]),
+                    lambda: service.query_team_sets_matches((1101,), (1101,), [10]),
                 ),
                 (
                     "empty tournament ids",
@@ -1716,7 +1638,7 @@ class QueryServiceTests(unittest.IsolatedAsyncioTestCase):
                 (
                     "too many game teams",
                     lambda: service.query_games(
-                        GameQuery(tournament_ids=(1,), team_ids=(1, 2, 3))
+                        GameQuery(tournament_ids=(1,), tournament_team_ids=(1, 2, 3))
                     ),
                 ),
                 (
@@ -1757,14 +1679,14 @@ def _argument_parser() -> argparse.ArgumentParser:
         help="按北京时间自然日过滤，格式为 YYYY-MM-DD",
     )
     parser.add_argument(
-        "--team-id",
+        "--tournament-team-id",
         type=_positive_cli_id,
         help="查询该全局球队 ID 的比赛",
     )
     parser.add_argument(
-        "--opponent-id",
+        "--opponent-tournament-team-id",
         type=_positive_cli_id,
-        help="与 --team-id 组合查询两队交锋",
+        help="与 --tournament-team-id 组合查询两队交锋",
     )
     parser.add_argument(
         "--include-unfinished",
@@ -1798,23 +1720,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if runner.run(suite).wasSuccessful() else 1
 
     tournament_ids = tuple(dict.fromkeys(args.tournament_id))
-    if args.opponent_id is not None and args.team_id is None:
-        parser.error("--opponent-id 必须与 --team-id 一起使用")
-    if args.outcomes and args.team_id is None:
-        parser.error("--outcomes 必须与 --team-id 一起使用")
+    if args.opponent_tournament_team_id is not None and args.tournament_team_id is None:
+        parser.error("--opponent-tournament-team-id 必须与 --tournament-team-id 一起使用")
+    if args.outcomes and args.tournament_team_id is None:
+        parser.error("--outcomes 必须与 --tournament-team-id 一起使用")
     if args.outcomes and (
-        args.opponent_id is not None
+        args.opponent_tournament_team_id is not None
         or args.match_date is not None
         or args.include_unfinished
         or args.game_id is not None
     ):
         parser.error(
-            "--outcomes 不能与 --opponent-id、--match-date、"
+            "--outcomes 不能与 --opponent-tournament-team-id、--match-date、"
             "--include-unfinished 或 --game-id 同时使用"
         )
-    if not args.outcomes and args.team_id is not None and args.match_date is not None:
+    if not args.outcomes and args.tournament_team_id is not None and args.match_date is not None:
         parser.error("球队比赛或交锋查询不能与 --match-date 同时使用")
-    if not args.outcomes and args.team_id is not None and args.opponent_id is None:
+    if not args.outcomes and args.tournament_team_id is not None and args.opponent_tournament_team_id is None:
         if len(tournament_ids) > 1:
             parser.error("球队比赛查询最多指定一个 --tournament-id")
 
@@ -1823,8 +1745,8 @@ def main(argv: list[str] | None = None) -> int:
         tournament_ids=tournament_ids,
         game_id=args.game_id,
         match_date=args.match_date,
-        team_id=args.team_id,
-        opponent_id=args.opponent_id,
+        tournament_team_id=args.tournament_team_id,
+        opponent_tournament_team_id=args.opponent_tournament_team_id,
         include_unfinished=args.include_unfinished,
         full_output=args.full_output,
         outcomes=args.outcomes,

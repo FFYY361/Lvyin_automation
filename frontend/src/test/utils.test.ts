@@ -34,8 +34,8 @@ describe("frontend workflow helpers", () => {
   it("displays backend result text and season outcomes", () => {
     const played = {
       game_id: 1,
-      home: { team_id: 1, name: "环境学院", short_name: "环境" },
-      away: { team_id: 2, name: "探微书院", short_name: "探微" },
+      home: { tournament_team_id: 1, name: "环境学院", short_name: "环境" },
+      away: { tournament_team_id: 2, name: "探微书院", short_name: "探微" },
       home_score: 2,
       away_score: 2,
       home_penalty: 5,
@@ -54,8 +54,8 @@ describe("frontend workflow helpers", () => {
   it("labels match completeness fields with teams and a safe fallback", () => {
     const matches = [{
       game_id: 4245,
-      home: { team_id: 1, name: "车辆与运载学院", short_name: "车辆" },
-      away: { team_id: 2, name: "未央书院", short_name: "未央" },
+      home: { tournament_team_id: 1, name: "车辆与运载学院", short_name: "车辆" },
+      away: { tournament_team_id: 2, name: "未央书院", short_name: "未央" },
     }];
     expect(labelMissingField("matches.4245.writers", matches)).toBe("车辆 vs 未央 · 作者");
     expect(labelMissingField("matches.4245.body", matches)).toBe("车辆 vs 未央 · 正文");

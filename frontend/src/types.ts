@@ -76,7 +76,7 @@ export interface Weather {
 }
 
 export interface TeamRefSnapshot {
-  team_id: number;
+  tournament_team_id: number | null;
   name: string;
   short_name: string;
 }
@@ -299,9 +299,7 @@ export interface AITitleContext {
 export interface InstitutionSummary {
   name: string;
   short_name: string;
-  male_team_ids: number[];
-  female_team_ids: number[];
-  futsal_team_ids: number[];
+  tournament_teams: Record<Competition, Record<string, number>>;
   team_descriptions_complete: Record<Competition, boolean>;
   player_description_count: number;
   player_count: number;
@@ -316,17 +314,13 @@ export interface InstitutionPlayer {
 export interface InstitutionPredecessor {
   name: string;
   short_name: string;
-  male_team_ids: number[];
-  female_team_ids: number[];
-  futsal_team_ids: number[];
+  tournament_teams: Record<Competition, Record<string, number>>;
 }
 
 export interface InstitutionDetail {
   name: string;
   short_name: string;
-  male_team_ids: number[];
-  female_team_ids: number[];
-  futsal_team_ids: number[];
+  tournament_teams: Record<Competition, Record<string, number>>;
   predecessors: InstitutionPredecessor[];
   male_description: string;
   female_description: string;

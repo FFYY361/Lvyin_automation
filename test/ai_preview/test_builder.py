@@ -181,18 +181,26 @@ class PromptBuilderTests(unittest.TestCase):
         for label in ("小组赛", "循环赛", "瑞士轮", "联赛阶段", "第一阶段"):
             self.assertEqual(new_rules.stage_label(label), "联赛阶段")
             self.assertEqual(old_rules.stage_label(label), label)
-            self.assertEqual(competition_rules("male", "2026-27").stage_label(label), label)
+            self.assertEqual(
+                competition_rules("male", "2026-27").stage_label(label), label
+            )
         for label in (None, "半决赛", "待确认"):
             self.assertEqual(new_rules.stage_label(label), label)
         self.assertIn(
             "test-section:competition_female_2026_2027",
-            build_system_message(competition_kind="女足", season="2026-27",
-                                 prompt_documents=PROMPT_DOCUMENTS)
+            build_system_message(
+                competition_kind="女足",
+                season="2026-27",
+                prompt_documents=PROMPT_DOCUMENTS,
+            ),
         )
         self.assertIn(
             "test-section:competition_female",
-            build_system_message(competition_kind="女足", season="2025-26",
-                                 prompt_documents=PROMPT_DOCUMENTS),
+            build_system_message(
+                competition_kind="女足",
+                season="2025-26",
+                prompt_documents=PROMPT_DOCUMENTS,
+            ),
         )
         target = _game(
             20, "2026-11-01T13:00:00+08:00", 1, 2, None, None, status="scheduled"
@@ -201,20 +209,24 @@ class PromptBuilderTests(unittest.TestCase):
         future = _game(11, target["kickoff_local"], 2, 3, 8, 0)
         tournament = {
             "registered_teams": [
-                {"team_id": team, "status": True} for team in (1, 2, 3)
+                {"tournament_team_id": team * 10, "status": True} for team in (1, 2, 3)
             ],
             "games": [played, future, target],
         }
-        standing = _league_phase_standing(tournament, target, 1, new_rules)
+        standing = _league_phase_standing(tournament, target, 10, new_rules)
         self.assertEqual(
             (standing["played"], standing["points"], standing["rank"]), (1, 3, 1)
         )
-        self.assertIsNone(_league_phase_standing(tournament, target, 3, new_rules)["rank"])
+        self.assertIsNone(
+            _league_phase_standing(tournament, target, 30, new_rules)["rank"]
+        )
         incomplete = dict(played, game_id=12, valid=None, status="scheduled")
         tournament["games"].append(incomplete)
-        self.assertIsNone(_league_phase_standing(tournament, target, 1, new_rules)["rank"])
         self.assertIsNone(
-            _league_phase_standing(tournament, dict(target, stage=None), 1, new_rules)
+            _league_phase_standing(tournament, target, 10, new_rules)["rank"]
+        )
+        self.assertIsNone(
+            _league_phase_standing(tournament, dict(target, stage=None), 10, new_rules)
         )
 
     def test_builds_context_and_normalizes_reversed_head_to_head(self) -> None:
@@ -341,7 +353,7 @@ class PromptBuilderTests(unittest.TestCase):
             data={"game": current_predecessor, "events": []}
         )
         same_season_game = dict(
-            _game(33, "2025-10-21T13:00:00+08:00", 1, 3, 1, 0), tournament_id=9
+            _game(33, "2025-10-21T13:00:00+08:00", 1, 2, 1, 0), tournament_id=9
         )
         self.repository.tournaments[9] = SimpleNamespace(
             id=9,
@@ -360,7 +372,7 @@ class PromptBuilderTests(unittest.TestCase):
             data={"game": same_season_game, "events": []}
         )
         same_season_game = dict(
-            _game(33, "2025-10-21T13:00:00+08:00", 1, 3, 1, 0), tournament_id=9
+            _game(33, "2025-10-21T13:00:00+08:00", 1, 2, 1, 0), tournament_id=9
         )
         self.repository.tournaments[9] = SimpleNamespace(
             id=9,
@@ -382,12 +394,17 @@ class PromptBuilderTests(unittest.TestCase):
         bundle = build_prompt_bundle(20, repository=self.repository)
         home = bundle.automatic_context["home_team"]
         groups = {item["short_name"]: item for item in home["history_teams"]}
-        self.assertEqual(home["season_outcomes"][0]["outcome"], "32强")
+        self.assertEqual(home["season_outcomes"][0]["outcome"], "未参赛")
+        self.assertEqual(
+            {item["rank"] for item in home["season_outcomes"][0]["sources"]},
+            {"32强", "16强", "八强"},
+        )
         self.assertEqual(groups["甲"]["past_seasons"][0]["wins"], 1)
         self.assertEqual(groups["甲旧"]["past_seasons"][0]["losses"], 1)
         self.assertEqual(groups["乙旧"]["past_seasons"][0]["wins"], 1)
         self.assertEqual(home["current_tournament"]["record_before_match"]["played"], 1)
         self.assertEqual(len(bundle.automatic_context["head_to_head"]), 1)
+        self.assertFalse(bundle.automatic_context["head_to_head"][0]["display_allowed"])
         self.assertNotIn(
             8,
             [
@@ -401,8 +418,8 @@ class PromptBuilderTests(unittest.TestCase):
         inherited = build_prompt_bundle(
             20, repository=self.repository
         ).automatic_context["home_team"]["season_outcomes"][0]
-        self.assertEqual(inherited["outcome"], "八强")
-        self.assertEqual(inherited["sources"][0]["name"], "乙旧")
+        self.assertEqual(inherited["outcome"], "未参赛")
+        self.assertEqual({item["name"] for item in inherited["sources"]}, {"甲旧", "乙旧"})
         historical_target = build_prompt_bundle(30, repository=self.repository)
         self.assertEqual(historical_target.match_context["home_team"], "甲旧学部")
         self.assertEqual(
@@ -421,6 +438,7 @@ class LivePromptSourceTests(unittest.TestCase):
         fixture.setUp()
         database = fixture.repository
         documents = {}
+        database.configured_tournaments = (139, 140, 141)
         for tournament_id in (139, 140, 141):
             document = deepcopy(database.tournament.data)
             document["tournament"].update(id=tournament_id, season="2026~2027")
@@ -444,7 +462,25 @@ class LivePromptSourceTests(unittest.TestCase):
         live["registered_players"].append(
             {"name": "新报名球员", "tournament_team_id": 10, "valid": True}
         )
-        # No current-season tournament or game exists locally.
+        old_direct = dict(
+            database.tournaments[8].data["games"][0], game_id=110, tournament_id=140
+        )
+        old_direct["away_team_id"] = 1
+        old_direct["kickoff_local"] = old_direct["kickoff_local"].replace(
+            "2025", "2026"
+        )
+        documents[140]["games"].append(old_direct)
+        for tid, document in documents.items():
+            for game in document["games"]:
+                for side in ("home", "away"):
+                    game[side + "_tournament_team_id"] = (
+                        tid * 100000 + game[side + "_team_id"]
+                    )
+            for player in document["registered_players"]:
+                player["tournament_team_id"] = (
+                    tid * 100000 + player["tournament_team_id"] // 10
+                )
+        # Registration configuration exists; current-season facts are read live.
         calls = []
 
         class Client:
@@ -533,6 +569,23 @@ class _FakeRepository:
     def __init__(self, tournament, games, institutions) -> None:
         self.tournament = tournament
         self.tournaments = {tournament.id: tournament}
+        alias_game = tournament.data["games"][0]
+        alias_game["tournament_id"] = 8
+        self.tournaments[8] = SimpleNamespace(
+            id=8,
+            competition="male",
+            final_rankings={},
+            data={
+                "tournament": {
+                    "id": 8,
+                    "name": "马杯男足乙级2025~2026",
+                    "season": "2025~2026",
+                },
+                "games": [alias_game],
+                "registered_players": [],
+            },
+        )
+        tournament.data["games"] = tournament.data["games"][1:]
         self.games = games
         self.institutions = institutions
 
@@ -573,6 +626,55 @@ class _FakeRepository:
             for record in self.tournaments.values()
             if record.final_rankings
         ]
+        # Use distinct registration IDs for each synthetic tournament and upstream team.
+        for tournament in self.tournaments.values():
+            roster_ids = {}
+            for game in tournament.data.get("games", []):
+                for side in ("home", "away"):
+                    registration = tournament.id * 100000 + game[side + "_team_id"]
+                    roster_ids[game[side + "_team_id"] * 10] = registration
+                    game[side + "_tournament_team_id"] = registration
+            for player in tournament.data.get("registered_players", []):
+                old = player.setdefault(
+                    "fixture_roster_id", player["tournament_team_id"]
+                )
+                player["tournament_team_id"] = roster_ids.get(old, old)
+        for institution in institutions:
+            for identity in [institution] + institution.get("predecessors", []):
+                ids = identity["male_team_ids"]
+                mapping = {}
+                for tournament in self.tournaments.values():
+                    registrations = {
+                        game[side + "_tournament_team_id"]
+                        for game in tournament.data.get("games", [])
+                        for side in ("home", "away")
+                        if game[side + "_team_id"] in ids
+                    }
+                    if len(registrations) > 1:
+                        raise AssertionError(
+                            "Fixture has multiple registrations for one identity"
+                        )
+                    if registrations:
+                        mapping[str(tournament.id)] = registrations.pop()
+                for tid in getattr(self, "configured_tournaments", ()):
+                    mapping[str(tid)] = tid * 100000 + ids[0]
+                identity["tournament_teams"] = {
+                    "male": mapping,
+                    "female": {},
+                    "futsal": {},
+                }
+        by_name = {
+            identity["name"] + "男足": identity
+            for institution in institutions
+            for identity in [institution] + institution.get("predecessors", [])
+        }
+        for tournament in tournaments:
+            tournament["final_rankings"] = {
+                str(
+                    by_name[name]["tournament_teams"]["male"][str(tournament["id"])]
+                ): rank
+                for name, rank in tournament["final_rankings"].items()
+            }
         return build_outcome_catalog(institutions, tournaments)
 
     def get_game(self, game_id: int):

@@ -314,7 +314,7 @@ export function MatchPage() {
       <Panel className="match-history-panel">
         <SectionTitle title="球队战绩与交锋" description="过往三届成绩、本届已完成比赛及两队近三届交锋。" />
         <div className="history-team-grid">
-          {[match.home, match.away].map((team) => <article className="history-team-card" key={team.team_id}><h3>{teamName(team)}</h3><div className="history-section"><strong>过往三届战绩</strong><HistoryList values={team.previous_outcomes} empty="暂无" render={(value) => formatSeasonOutcome(value as SeasonOutcomeSnapshot)} /></div><div className="history-section"><strong>本届赛果</strong><HistoryList values={team.current_results} empty="暂无" render={(value) => formatPlayedMatch(value as PlayedMatchSnapshot)} /></div></article>)}
+          {[match.home, match.away].map((team, index) => <article className="history-team-card" key={team.tournament_team_id ?? index}><h3>{teamName(team)}</h3><div className="history-section"><strong>过往三届战绩</strong><HistoryList values={team.previous_outcomes} empty="暂无" render={(value) => formatSeasonOutcome(value as SeasonOutcomeSnapshot)} /></div><div className="history-section"><strong>本届赛果</strong><HistoryList values={team.current_results} empty="暂无" render={(value) => formatPlayedMatch(value as PlayedMatchSnapshot)} /></div></article>)}
         </div>
         <div className="head-to-head-card"><strong>近三届交锋</strong><HistoryList values={match.head_to_head} empty="无" render={(value) => formatPlayedMatch(value as PlayedMatchSnapshot, true)} /></div>
       </Panel>

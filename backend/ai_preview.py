@@ -550,16 +550,24 @@ def match_manual_payload(
         ) from exc
     game = _require_object(game_record.data.get("game"), "game")
     tournament_data = tournament.data
-    home_team_id = _require_integer(game.get("home_team_id"), "game.home_team_id")
-    away_team_id = _require_integer(game.get("away_team_id"), "game.away_team_id")
+    home_tournament_team_id = _require_integer(
+        game.get("home_tournament_team_id"), "game.home_tournament_team_id"
+    )
+    away_tournament_team_id = _require_integer(
+        game.get("away_tournament_team_id"), "game.away_tournament_team_id"
+    )
     try:
-        home = repository.find_institution(home_team_id, tournament.competition)
-        away = repository.find_institution(away_team_id, tournament.competition)
+        home = repository.find_institution(
+            home_tournament_team_id, tournament.competition
+        )
+        away = repository.find_institution(
+            away_tournament_team_id, tournament.competition
+        )
         home_identity = repository.find_team_identity(
-            home_team_id, tournament.competition
+            home_tournament_team_id, tournament.competition
         )
         away_identity = repository.find_team_identity(
-            away_team_id, tournament.competition
+            away_tournament_team_id, tournament.competition
         )
     except ConfigurationError as exc:
         raise WorkflowError(
@@ -975,9 +983,7 @@ def institution_detail_payload(record: InstitutionRecord) -> dict[str, Any]:
     return {
         "name": record.name,
         "short_name": record.short_name,
-        "male_team_ids": record.male_team_ids,
-        "female_team_ids": record.female_team_ids,
-        "futsal_team_ids": record.futsal_team_ids,
+        "tournament_teams": record.tournament_teams,
         "predecessors": record.predecessors,
         "male_description": record.male_description,
         "female_description": record.female_description,
@@ -991,9 +997,7 @@ def institution_summary_payload(record: InstitutionRecord) -> dict[str, Any]:
     return {
         "name": record.name,
         "short_name": record.short_name,
-        "male_team_ids": record.male_team_ids,
-        "female_team_ids": record.female_team_ids,
-        "futsal_team_ids": record.futsal_team_ids,
+        "tournament_teams": record.tournament_teams,
         "team_descriptions_complete": {
             "male": record.male_description not in _PLACEHOLDERS,
             "female": record.female_description not in _PLACEHOLDERS,

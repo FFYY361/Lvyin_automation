@@ -367,6 +367,8 @@ class TemplateTests(unittest.TestCase):
         for match in raw["matches"]:
             match["head_to_head"] = []
         raw["matches"][0]["home"]["name"] = "<社科 & 心理>"
+        raw["matches"][0]["home"]["tournament_team_id"] = 254
+        raw["matches"][1]["home"]["tournament_team_id"] = 47
         source = _parse_source(raw)
         first = replace(
             source.matches[0],
@@ -385,7 +387,7 @@ class TemplateTests(unittest.TestCase):
               <p>{{paragraph}}</p>
               <!-- wx:endeach -->
               <!-- wx:endeach -->
-              <!-- wx:each source.matches as match --><span>{{match.home.team_id}}</span><!-- wx:endeach -->
+              <!-- wx:each source.matches as match --><span>{{match.home.tournament_team_id}}</span><!-- wx:endeach -->
             </section>
             """,
         )

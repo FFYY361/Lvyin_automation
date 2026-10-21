@@ -77,8 +77,8 @@ def transactional_factory(seeded_engine):
 def test_repository_and_data_baseline(football_engine) -> None:
     with Session(football_engine) as session:
         repository = FootballDataRepository(session)
-        assert repository.find_institution(48, "male").name == "车辆与运载学院"
-        assert repository.find_institution(48, "futsal").name == "车辆与运载学院"
+        assert repository.find_institution(1735, "male").name == "车辆与运载学院"
+        assert repository.find_institution(1816, "futsal").name == "车辆与运载学院"
         assert repository.get_game(4245).tournament_id == 122
         assert len(repository.list_games([122])) == 35
         assert [item.id for item in repository.list_tournaments()[:4]] == [
@@ -95,8 +95,35 @@ def test_repository_and_data_baseline(football_engine) -> None:
         )
         assert counts[:2] == (52, 18)
         assert counts[2] >= 666
-        assert session.scalar(select(func.count()).select_from(GameRecord).where(GameRecord.tournament_id < 139)) == 590
-        assert len(repository.load_outcome_catalog().tournaments_by_id) == 14
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(GameRecord)
+                .where(GameRecord.tournament_id < 139)
+            )
+            == 590
+        )
+        catalog = repository.load_outcome_catalog()
+        assert len(catalog.tournaments_by_id) == 14
+        for name in ("土木水利学院", "新闻与传播学院-马克思主义学院"):
+            assert len(repository.get_institution(name).predecessors) == 2
+        for registration, competition, name in (
+            (1025, "male", "土木水利学院"),
+            (1046, "female", "土木水利学院"),
+            (1652, "futsal", "新闻与传播学院-马克思主义学院"),
+            (1537, "male", "新闻与传播学院-马克思主义学院"),
+        ):
+            identity = repository.find_team_identity(registration, competition)
+            assert (identity.owner_name, identity.is_predecessor) == (name, True)
+        for registration, competition in ((988, "male"), (1630, "futsal")):
+            identity = repository.find_team_identity(registration, competition)
+            assert (
+                identity.institution_name,
+                identity.brief_name,
+                identity.is_predecessor,
+            ) == ("交叉信息研究院", "交叉", True)
+        assert not repository.find_team_identity(1749, "male").is_predecessor
+        assert not repository.find_team_identity(1829, "futsal").is_predecessor
 
 
 def test_schema_has_only_planned_columns_and_restricts_deletion(
@@ -106,9 +133,7 @@ def test_schema_has_only_planned_columns_and_restricts_deletion(
         "institutions": {
             "name",
             "short_name",
-            "male_team_ids",
-            "female_team_ids",
-            "futsal_team_ids",
+            "tournament_teams",
             "male_description",
             "female_description",
             "futsal_description",
@@ -127,7 +152,9 @@ def test_schema_has_only_planned_columns_and_restricts_deletion(
     }
     database_inspector = inspect(seeded_engine)
     for table, columns in expected.items():
-        assert {item["name"] for item in database_inspector.get_columns(table)} == columns
+        assert {
+            item["name"] for item in database_inspector.get_columns(table)
+        } == columns
 
     with Session(seeded_engine) as session, pytest.raises(IntegrityError):
         session.execute(delete(TournamentRecord).where(TournamentRecord.id == 122))

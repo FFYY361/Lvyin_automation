@@ -6,10 +6,17 @@ import { Alert, Badge, Button, Field, LoadingScreen, Modal, PageHeader, Panel, S
 import { competitionLabels, type Competition, type InstitutionDetail } from "../types";
 
 const teamFields = [
-  ["male", "male_description", "male_team_ids"],
-  ["female", "female_description", "female_team_ids"],
-  ["futsal", "futsal_description", "futsal_team_ids"],
+  ["male", "male_description"],
+  ["female", "female_description"],
+  ["futsal", "futsal_description"],
 ] as const;
+
+function registrationText(teams: Record<string, number>): string {
+  return Object.entries(teams)
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([tournament, registration]) => `${tournament} → ${registration}`)
+    .join("、");
+}
 
 export function InstitutionPage() {
   const { institutionName = "" } = useParams();
@@ -71,7 +78,7 @@ export function InstitutionPage() {
 
   return (
     <>
-      <PageHeader eyebrow={value.short_name} title={value.name} description="球队 ID、球员姓名和项目归属由数据库同步维护，本页只编辑人工描述。" actions={<><Link className="button button--quiet" to="/settings"><ArrowLeft size={16} />返回资料管理</Link><Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}><Save size={16} />保存全部资料</Button></>} />
+      <PageHeader eyebrow={value.short_name} title={value.name} description="赛事报名归属和球员姓名由数据库维护，本页只编辑人工描述。" actions={<><Link className="button button--quiet" to="/settings"><ArrowLeft size={16} />返回资料管理</Link><Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}><Save size={16} />保存全部资料</Button></>} />
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
 
@@ -79,7 +86,7 @@ export function InstitutionPage() {
         <SectionTitle title="前身球队" description="历史比赛保留前身身份，人工描述统一由本院系维护。" />
         {value.predecessors.map((predecessor) => <div key={predecessor.name}>
           <strong>{predecessor.name}（{predecessor.short_name}）</strong>
-          {teamFields.map(([competition, , idsField]) => <p key={competition}>{competitionLabels[competition]}：{predecessor[idsField].join("、") || "无球队 ID"}</p>)}
+          {teamFields.map(([competition]) => <p key={competition}>{competitionLabels[competition]}：{registrationText(predecessor.tournament_teams[competition]) || "无球队 ID"}</p>)}
         </div>)}
       </Panel> : null}
 
@@ -87,8 +94,8 @@ export function InstitutionPage() {
         <SectionTitle title="球队描述" description="维护该院系现有比赛项目的整体特点。" />
         <div className="institution-team-editor-grid">
           {teamFields
-            .filter(([, , idsField]) => value[idsField].length > 0 || value.predecessors?.some((item) => item[idsField].length > 0))
-            .map(([competition, descriptionField, idsField]) => <Field key={competition} label={competitionLabels[competition]} hint={`本体球队 ID：${value[idsField].join("、") || "尚未登记"}`}><textarea rows={8} value={value[descriptionField]} onChange={(event) => setValue({ ...value, [descriptionField]: event.target.value })} /></Field>)}
+            .filter(([competition]) => Object.keys(value.tournament_teams[competition]).length > 0 || value.predecessors?.some((item) => Object.keys(item.tournament_teams[competition]).length > 0))
+            .map(([competition, descriptionField]) => <Field key={competition} label={competitionLabels[competition]} hint={`本体赛事 → 报名 ID：${registrationText(value.tournament_teams[competition]) || "尚未登记"}`}><textarea rows={8} value={value[descriptionField]} onChange={(event) => setValue({ ...value, [descriptionField]: event.target.value })} /></Field>)}
         </div>
       </Panel>
 

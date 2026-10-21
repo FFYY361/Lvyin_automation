@@ -18,7 +18,7 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -41,14 +41,11 @@ class InstitutionRecord(FootballDataBase):
 
     name: Mapped[str] = mapped_column(Text, primary_key=True)
     short_name: Mapped[str] = mapped_column(Text, nullable=False)
-    male_team_ids: Mapped[list[int]] = mapped_column(
-        ARRAY(BigInteger), nullable=False, default=list, server_default="{}"
-    )
-    female_team_ids: Mapped[list[int]] = mapped_column(
-        ARRAY(BigInteger), nullable=False, default=list, server_default="{}"
-    )
-    futsal_team_ids: Mapped[list[int]] = mapped_column(
-        ARRAY(BigInteger), nullable=False, default=list, server_default="{}"
+    tournament_teams: Mapped[dict[str, dict[str, int]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: {"male": {}, "female": {}, "futsal": {}},
+        server_default='{"male":{},"female":{},"futsal":{}}',
     )
     male_description: Mapped[str] = mapped_column(Text, nullable=False)
     female_description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -136,12 +133,16 @@ class FootballDataRepository:
             )
         return record
 
-    def find_institution(self, team_id: int, competition: str) -> InstitutionRecord:
+    def find_institution(
+        self, tournament_team_id: int, competition: str
+    ) -> InstitutionRecord:
         return self.get_institution(
-            self.find_team_identity(team_id, competition).owner_name
+            self.find_team_identity(tournament_team_id, competition).owner_name
         )
 
-    def find_team_identity(self, team_id: int, competition: str) -> StaticTeamIdentity:
+    def find_team_identity(
+        self, tournament_team_id: int, competition: str
+    ) -> StaticTeamIdentity:
         category = {"male": "男足", "female": "女足", "futsal": "五人制"}.get(
             competition
         )
@@ -149,11 +150,12 @@ class FootballDataRepository:
         matches = [
             identity
             for identity in identities.values()
-            if identity.category == category and team_id in identity.team_ids
+            if identity.category == category
+            and tournament_team_id in identity.tournament_team_ids
         ]
         if len(matches) != 1:
             raise ConfigurationError(
-                f"team_id={team_id} does not resolve to one {competition} institution",
+                f"tournament_team_id={tournament_team_id} does not resolve to one {competition} institution",
                 stage="configuration",
             )
         return matches[0]
@@ -163,9 +165,7 @@ class FootballDataRepository:
             {
                 "name": record.name,
                 "short_name": record.short_name,
-                "male_team_ids": record.male_team_ids,
-                "female_team_ids": record.female_team_ids,
-                "futsal_team_ids": record.futsal_team_ids,
+                "tournament_teams": record.tournament_teams,
                 "predecessors": record.predecessors,
             }
             for record in self.list_institutions()
@@ -209,17 +209,22 @@ class FootballDataRepository:
 
     def load_outcome_catalog(self) -> StaticOutcomeCatalog:
         institutions = self.institution_configurations()
-        tournaments = [
+        documents = [
             {
                 "id": record.id,
                 "name": record.name,
+                "competition": record.competition,
                 "final_rankings": record.final_rankings,
                 "data": record.data,
+                "is_finalized": record.is_finalized,
             }
             for record in self.list_tournaments()
-            if record.is_finalized
         ]
-        return build_outcome_catalog(institutions, tournaments)
+        return build_outcome_catalog(
+            institutions,
+            [item for item in documents if item["is_finalized"]],
+            registration_tournaments=documents,
+        )
 
 
 def _season(record: TournamentRecord) -> str:

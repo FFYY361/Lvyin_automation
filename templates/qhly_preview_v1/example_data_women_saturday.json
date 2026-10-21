@@ -21,14 +21,14 @@
       "kickoff": "2026-04-11T15:30:00+08:00",
       "venue": "紫荆操场",
       "home": {
-        "team_id": 1990,
+        "tournament_team_id": null,
         "name": "社会科学学院-心理与认知科学系女足",
         "short_name": "社科-心理女足",
         "previous_outcomes": [],
         "current_results": []
       },
       "away": {
-        "team_id": 72,
+        "tournament_team_id": null,
         "name": "经济管理学院女足",
         "short_name": "经管女足",
         "previous_outcomes": [],

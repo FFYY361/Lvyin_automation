@@ -65,9 +65,9 @@
     "teamRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["team_id", "name", "short_name"],
+      "required": ["tournament_team_id", "name", "short_name"],
       "properties": {
-        "team_id": {"$ref": "#/$defs/positiveId"},
+        "tournament_team_id": {"anyOf": [{"$ref": "#/$defs/positiveId"}, {"type": "null"}]},
         "name": {"$ref": "#/$defs/nonEmptyString"},
         "short_name": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -107,9 +107,9 @@
     "previewTeam": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["team_id", "name", "short_name", "previous_outcomes", "current_results"],
+      "required": ["tournament_team_id", "name", "short_name", "previous_outcomes", "current_results"],
       "properties": {
-        "team_id": {"$ref": "#/$defs/positiveId"},
+        "tournament_team_id": {"anyOf": [{"$ref": "#/$defs/positiveId"}, {"type": "null"}]},
         "name": {"$ref": "#/$defs/nonEmptyString"},
         "short_name": {"$ref": "#/$defs/nonEmptyString"},
         "previous_outcomes": {
