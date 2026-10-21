@@ -391,17 +391,35 @@ class _BatchQueries(_FakeQueries):
 
 
 class SourceBuilderTests(unittest.IsolatedAsyncioTestCase):
-    async def test_new_female_season_keeps_upstream_stage(self) -> None:
+    async def test_stage_includes_available_group_and_round(self) -> None:
         queries = _FakeQueries()
-        queries.targets = [replace(game, stage="循环赛") for game in queries.targets]
         logger, _ = _logger()
         builder = PreviewSourceBuilder(
             queries,
             replace(competition_config(Competition.FEMALE), season="2026-2027"),
             logger=logger,
         )
-        source = await builder.build(date(2026, 4, 11))
-        self.assertEqual([game.stage for game in source.matches], ["循环赛"])
+        for stage, group, round_number, expected in (
+            ("小组赛", "K", 3, "小组赛 K组 第3轮"),
+            ("循环赛", None, 3, "循环赛 第3轮"),
+            ("小组赛", "K组", None, "小组赛 K组"),
+            ("小组赛", None, None, "小组赛"),
+            (None, "K", 3, "K组 第3轮"),
+            (None, None, 3, "第3轮"),
+            (None, None, None, "阶段待定"),
+            ("决赛", None, None, "决赛"),
+        ):
+            with self.subTest(stage=stage, group=group, round=round_number):
+                queries.targets = [
+                    replace(
+                        queries.target,
+                        stage=stage,
+                        group_name=group,
+                        round=round_number,
+                    )
+                ]
+                source = await builder.build(date(2026, 4, 11))
+                self.assertEqual([game.stage for game in source.matches], [expected])
 
     async def test_empty_current_scope_refuses_without_query(self) -> None:
         queries = _FakeQueries()

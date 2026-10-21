@@ -74,13 +74,14 @@ def _competition_label(name: str) -> str:
 
 
 def _stage(game: GameSummary) -> str:
-    if game.stage:
-        return game.stage
-    if game.group_name:
-        return game.group_name
+    parts = []
+    if stage := (game.stage or "").strip():
+        parts.append(stage)
+    if group := (game.group_name or "").strip():
+        parts.append(group if group.endswith("组") else f"{group}组")
     if game.round is not None:
-        return f"第{game.round}轮"
-    return "阶段待定"
+        parts.append(f"第{game.round}轮")
+    return " ".join(parts) or "阶段待定"
 
 
 class PreviewSourceBuilder:
