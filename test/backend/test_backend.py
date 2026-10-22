@@ -28,6 +28,7 @@ import backend.api as backend_api
 import thufootball.credentials as backend_credentials
 from ai_preview import build_prompt_bundle
 from ai_service import ChatResult, TokenUsage
+from auto_preview import NoGamesForDate
 from backend.ai_preview import (
     build_title_material,
     match_manual_payload,
@@ -682,6 +683,98 @@ def _weather_refresh_factory(values, calls, on_query=None) -> ExternalFactories:
     return ExternalFactories(weather=weather)
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "automatic", "automatic_manual", "refresh", "refresh_manual",
+        "refresh_no_games", "manual",
+    ],
+)
+def test_weather_cleanup_preserves_batch_refresh_behavior(
+    session_factory, settings, monkeypatch, operation,
+):
+    today = date(2026, 8, 8)
+    error_at = datetime(2026, 8, 7, tzinfo=UTC)
+    with session_factory.begin() as session:
+        batches = [
+            _batch(session, complete=True),
+            _batch(session, complete=True, competition="male", game_id=9002),
+            _batch(session, complete=True, competition="futsal", game_id=9003),
+            _batch(session, complete=True, target_date=today + timedelta(days=4), game_id=9004),
+        ]
+        for index, batch in enumerate(batches):
+            batch.last_error_code = "query_failed" if index == 0 else "weather_query_failed"
+            batch.last_error_message = "previous failure"
+            batch.last_error_at = error_at
+        batch_ids = [batch.id for batch in batches]
+        session.get(Weather, today).source = (
+            "manual" if operation in {"automatic_manual", "refresh_manual", "manual"} else "auto"
+        )
+        session.get(Match, 9001).tournament_id = 142
+        source = assemble_source(session, batches[0])
+
+    class Builder:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def query_current_games(self):
+            return [SimpleNamespace(
+                game_id=9001, tournament_id=142, tournament_name="马杯女足",
+                kickoff_local=source.matches[0].kickoff, status=GameStatus.SCHEDULED,
+            )]
+
+        async def build(self, *_args, **_kwargs):
+            if operation == "refresh_no_games":
+                raise NoGamesForDate("no games", stage="query")
+            return source
+
+    @asynccontextmanager
+    async def queries():
+        yield None
+
+    async def no_qr_cache(*_args):
+        pass
+
+    monkeypatch.setattr("backend.workflow.PreviewSourceBuilder", Builder)
+    monkeypatch.setattr("backend.workflow._cache_game_qr_codes", no_qr_cache)
+    factories = replace(
+        _weather_refresh_factory({today: _daily_weather(today, "晴")}, []),
+        queries=queries,
+    )
+    if operation.startswith("automatic"):
+        asyncio.run(refresh_weather(session_factory, settings, factories, today=today))
+    else:
+        with session_factory() as session:
+            if operation.startswith("refresh"):
+                asyncio.run(refresh_batch(
+                    session, session.get(Batch, batch_ids[0]), factories, settings,
+                ))
+            else:
+                set_manual_weather(
+                    session, today, condition="晴", low_c=20, high_c=30,
+                    wind_direction="南风", wind_level="2级",
+                )
+                session.commit()
+
+    with session_factory() as session:
+        errors = [
+            (batch.last_error_code, batch.last_error_message, batch.last_error_at)
+            for batch in (session.get(Batch, batch_id) for batch_id in batch_ids)
+        ]
+        expected_errors = [
+            ("query_failed", "previous failure", error_at),
+            (None, None, None),
+            (None, None, None),
+            ("weather_query_failed", "previous failure", error_at),
+        ]
+        if operation.startswith("refresh"):
+            expected_errors[0] = (None, None, None)
+            expected_errors[1] = expected_errors[2] = (
+                "weather_query_failed", "previous failure", error_at,
+            )
+        assert errors == expected_errors
+
+
 def test_weather_refresh_updates_all_competitions_and_preserves_tasks(
     session_factory, settings, monkeypatch,
 ) -> None:
@@ -748,6 +841,9 @@ def test_weather_refresh_preview_and_report_time_only_do_not_render(
     today = date(2026, 8, 8)
     with session_factory.begin() as session:
         batch = _batch(session, complete=True)
+        batch.last_error_code = "weather_query_failed"
+        batch.last_error_message = "previous failure"
+        batch.last_error_at = datetime(2026, 8, 7, tzinfo=UTC)
         weather = session.get(Weather, today)
         weather.source = "auto"
         weather.report_time = datetime(2026, 8, 7, 18, tzinfo=SHANGHAI)
@@ -766,6 +862,11 @@ def test_weather_refresh_preview_and_report_time_only_do_not_render(
     ))
     assert result["items"][0]["status"] == status
     with session_factory() as session:
+        batch = session.get(Batch, batch.id)
+        assert (batch.last_error_code, batch.last_error_message, batch.last_error_at) == (
+            ("weather_query_failed", "previous failure", datetime(2026, 8, 7, tzinfo=UTC))
+            if dry_run else (None, None, None)
+        )
         weather = session.get(Weather, today)
         assert weather.condition == "晴"
         assert weather.report_time == (old_report_time if dry_run else _daily_weather(today).report_time)
@@ -814,6 +915,10 @@ def test_weather_refresh_rolls_back_failed_date_and_continues(
             _batch(session, target_date=target_date, complete=True, game_id=game_id)
             for target_date, game_id in ((today, 9001), (tomorrow, 9002), (unavailable, 9003))
         ]
+        for batch in batches:
+            batch.last_error_code = "weather_query_failed"
+            batch.last_error_message = "previous failure"
+            batch.last_error_at = datetime(2026, 8, 7, tzinfo=UTC)
         for target_date in (today, tomorrow, unavailable):
             session.get(Weather, target_date).source = "auto"
         records = [render_batch(session, settings, batch)[0] for batch in batches]
@@ -839,6 +944,9 @@ def test_weather_refresh_rolls_back_failed_date_and_continues(
     assert [item["status"] for item in result["items"]] == ["failed", "updated", "unavailable"]
     assert result["summary"]["failed"] == 1
     with session_factory() as session:
+        assert [session.get(Batch, batch_id).last_error_code for batch_id in batch_ids] == [
+            "weather_query_failed", None, "weather_query_failed",
+        ]
         assert session.get(Weather, today).condition == "晴"
         assert session.get(Batch, batch_ids[0]).current_preview_article_id == first_id
         assert session.get(ArticleRecord, first_id).body_html == first_html

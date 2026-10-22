@@ -285,6 +285,14 @@ def _weather_content_changed(existing: Weather | None, values: dict[str, Any]) -
     )
 
 
+def _clear_weather_errors(session: Session, target_date: date) -> None:
+    for batch in session.scalars(select(Batch).where(Batch.batch_date == target_date)):
+        if batch.last_error_code == "weather_query_failed":
+            batch.last_error_code = None
+            batch.last_error_message = None
+            batch.last_error_at = None
+
+
 def upsert_automatic_weather(session: Session, value: DailyWeather) -> bool:
     existing = session.get(Weather, value.forecast_date)
     if existing is not None and existing.source == "manual":
@@ -345,6 +353,7 @@ def set_manual_weather(
                 setattr(existing, name, item)
     if content_changed:
         _invalidate_date(session, target_date)
+    _clear_weather_errors(session, target_date)
     session.flush()
     return existing
 
@@ -379,6 +388,9 @@ async def refresh_weather(
             "batch_ids": [],
         }
         if source == "manual":
+            if not dry_run:
+                with factory.begin() as session:
+                    _clear_weather_errors(session, target_date)
             items.append(item)
             continue
         try:
@@ -404,6 +416,7 @@ async def refresh_weather(
                         )
                 else:
                     changed = upsert_automatic_weather(session, value)
+                    _clear_weather_errors(session, target_date)
                     item["batch_ids"] = sorted(
                         session.info.get("preview_batches_to_render", ())
                     )
