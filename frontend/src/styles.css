@@ -254,6 +254,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 .history-empty { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
 .head-to-head-card { margin-top: 12px; background: #fff; }
 .ai-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 14px; }
+.ai-writing-panel .ai-controls { grid-template-columns: 100px minmax(0, 1fr) auto; }
+.ai-writing-panel .ai-controls > .field:first-child { width: 100px; }
 .headline-panel .ai-controls + .alert { margin-top: 14px; }
 .title-candidate-list { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
 .title-candidate { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--border); padding: 11px 0 3px; }
@@ -493,7 +495,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
   .form-grid, .conflict-grid { grid-template-columns: 1fr; }
   .panel { padding: 18px; }
   .headline-panel { padding: 20px 18px; }
-  .headline-form, .admin-settings__grid, .ai-controls, .institution-team-editor-grid, .prompt-editor-list { grid-template-columns: 1fr; }
+  .headline-form, .admin-settings__grid, .ai-controls, .ai-writing-panel .ai-controls, .institution-team-editor-grid, .prompt-editor-list { grid-template-columns: 1fr; }
   .headline-form .button { width: 100%; }
   .title-candidate { align-items: stretch; flex-direction: column; gap: 8px; }
   .title-candidate .button { width: 100%; }
