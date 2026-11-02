@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${WEBSITE_POSTGRES_USER:?set WEBSITE_POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${WEBSITE_POSTGRES_PASSWORD:?set WEBSITE_POSTGRES_PASSWORD in .env}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${WEBSITE_POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

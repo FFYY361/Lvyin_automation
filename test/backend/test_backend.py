@@ -445,6 +445,7 @@ def test_database_columns_and_indexes_match_plan(postgres_engine) -> None:
             "request_token", "status", "content", "error_code",
             "error_message", "requested_by_user_id", "requested_at",
             "started_at", "finished_at",
+            "mode", "revision_instruction", "source_body_version", "source_body_hash",
         },
     }
     for table, columns in expected.items():
@@ -3132,6 +3133,23 @@ def test_ai_preview_generation_cache_and_manual_context(
         assert reused.json()["reused"] is True
         assert calls == ["deepseek_v41_flash_thinking"]
 
+        revision_input = {"mode": "revise", "revision_instruction": "保留第一段", "expected_body_version": 0}
+        copied = client.post("/api/matches/4245/ai-preview-prompt", json=revision_input)
+        copied.raise_for_status()
+        assert "保留第一段" in copied.json()["copy_text"]
+        assert "<revision_context>" in copied.json()["copy_text"]
+        assert client.post("/api/matches/4245/ai-preview-prompt", json={**revision_input, "expected_body_version": 99}).status_code == 409
+        revised = client.post("/api/matches/4245/ai-preview-generations", json={**revision_input, "model_profile": "deepseek_v41_flash_thinking"})
+        assert revised.status_code == 202
+        for _ in range(30):
+            revision = client.get("/api/matches/4245/ai-preview-results/deepseek_v41_flash_thinking?mode=revise")
+            if revision.json()["status"] == "succeeded":
+                break
+            time.sleep(0.02)
+        assert revision.json()["status"] == "succeeded"
+        context = client.get("/api/matches/4245/ai-preview-context").json()
+        assert context["results"]["deepseek_v41_flash_thinking"]["mode"] == "create"
+        assert context["revision_results"]["deepseek_v41_flash_thinking"]["revision_instruction"] == "保留第一段"
         assert batch_id > 0
     with direct_factory.begin() as session:
         session.execute(
@@ -3244,7 +3262,7 @@ def test_ai_preview_slot_allows_only_one_concurrent_generation(
         with direct_factory() as session:
             result = session.get(
                 AIPreviewResult,
-                (4245, "deepseek_v41_flash_thinking"),
+                (4245, "deepseek_v41_flash_thinking", "create"),
             )
             assert result is not None
             assert result.status == "queued"
@@ -3257,3 +3275,77 @@ def test_ai_preview_slot_allows_only_one_concurrent_generation(
             session.execute(delete(Batch).where(Batch.id == batch_id))
             session.execute(delete(Weather).where(Weather.date == target_date))
             session.execute(delete(User).where(User.id == user_id))
+
+
+def test_ai_revision_preserves_saved_source_and_cache(session_factory, monkeypatch):
+    from backend.ai_preview import (
+        _canonical_hash,
+        ai_preview_context,
+        build_prompt_material,
+    )
+
+    monkeypatch.setenv("AI_SERVICE_DEEPSEEK_API_KEY", "test-key")
+    with session_factory() as session:
+        _batch(session, competition="male", complete=True, game_id=4245)
+        match = session.get(Match, 4245)
+        version = match.body_version
+        original = match.body
+        session.commit()
+        new_result, _ = prepare_generation(session, game_id=4245, model_profile="deepseek_v41_flash_thinking", requested_by_user_id=None)
+        result, material = prepare_generation(session, game_id=4245, model_profile="deepseek_v41_flash_thinking", requested_by_user_id=None,
+            mode="revise", revision_instruction="保留第一段", expected_body_version=version)
+        assert result.mode == "revise" and new_result.mode == "create"
+        assert json.loads(material.messages[1].content.split("<revision_context>\n")[1].split("\n</revision_context>")[0]) == {
+            "original_body": original, "revision_instruction": "保留第一段"}
+        assert material.messages[0].content.endswith("test-section:preview_revision_rules")
+        assert "revision_context" not in build_prompt_material(session, 4245).messages[1].content
+        result.status, result.content = "succeeded", "改进结果"
+        session.commit()
+        match.writers = ["新的署名"]
+        match.body_version += 1
+        session.commit()
+        reused, pending = prepare_generation(session, game_id=4245, model_profile=result.model_profile, requested_by_user_id=None,
+            mode="revise", revision_instruction="保留第一段", expected_body_version=match.body_version)
+        assert pending is None and reused.prompt_hash == material.prompt_hash
+        changed = build_prompt_material(session, 4245, mode="revise", revision_instruction="重写结尾")
+        assert changed.prompt_hash != material.prompt_hash
+        with pytest.raises(WorkflowError) as conflict:
+            build_prompt_material(session, 4245, mode="revise", expected_body_version=version)
+        assert conflict.value.status_code == 409
+        match.body = "新的已保存原稿"
+        session.commit()
+        context = ai_preview_context(session, 4245)
+        assert context["revision_results"][result.model_profile]["is_stale"]
+        assert result.source_body_hash == _canonical_hash(original)
+        match.body = "  "
+        session.commit()
+        with pytest.raises(WorkflowError) as empty:
+            build_prompt_material(session, 4245, mode="revise")
+        assert empty.value.status_code == 422
+
+
+def test_ai_cleanup_cutoff_and_active_tasks(session_factory):
+    from backend.ai_cleanup import cleanup_ai_results
+    from backend.models import AITitleResult
+
+    now = datetime(2026, 11, 2, 4, tzinfo=SHANGHAI)
+    cutoff = now - timedelta(days=7)
+    cases = [("succeeded", cutoff-timedelta(seconds=1)), ("failed", None),
+             ("succeeded", cutoff), ("failed", now), ("queued", cutoff-timedelta(days=1)),
+             ("running", cutoff-timedelta(days=1))]
+    with session_factory() as session:
+        batch = _batch(session, complete=True)
+        for i, (status, finished) in enumerate(cases):
+            values = dict(model_profile=f"cleanup_{i}", status=status, finished_at=finished,
+                requested_at=cutoff-timedelta(days=1), prompt_hash="a"*64, model_config_hash="b"*64, request_token=uuid.uuid4())
+            session.add(AIPreviewResult(game_id=9001, mode="revise" if i % 2 else "create", **values))
+            session.add(AITitleResult(batch_id=batch.id, **values))
+        session.flush()
+        before = session.scalar(select(func.count()).select_from(AIPreviewResult))
+        preview = cleanup_ai_results(session, dry_run=True, now=now)
+        assert preview["counts"] == {"ai_preview_results": 2, "ai_title_results": 2}
+        assert session.scalar(select(func.count()).select_from(AIPreviewResult)) == before
+        actual = cleanup_ai_results(session, now=now)
+        assert actual["counts"] == preview["counts"]
+        assert set(session.scalars(select(AIPreviewResult.model_profile))) == {f"cleanup_{i}" for i in range(2,6)}
+        assert session.get(Match, 9001).body

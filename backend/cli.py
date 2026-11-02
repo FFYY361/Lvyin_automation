@@ -16,6 +16,8 @@ from .database import create_database_engine, create_session_factory
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the lvyin website backend")
     commands = parser.add_subparsers(dest="command", required=True)
+    cleanup = commands.add_parser("cleanup-ai-results", help="remove completed AI results older than seven days")
+    cleanup.add_argument("--dry-run", action="store_true")
     init = commands.add_parser(
         "init-admin", help="create the first super administrator"
     )
@@ -34,6 +36,17 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "cleanup-ai-results":
+        from .ai_cleanup import cleanup_ai_results
+
+        engine = create_database_engine()
+        try:
+            with create_session_factory(engine).begin() as session:
+                result = cleanup_ai_results(session, dry_run=args.dry_run)
+            print(json.dumps(result, ensure_ascii=False))
+        finally:
+            engine.dispose()
+        return 0
     if args.command == "refresh-weather":
         from .workflow import ExternalFactories, refresh_weather
 

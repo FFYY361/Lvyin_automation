@@ -228,6 +228,10 @@ export interface AIPreviewModelOption {
 
 export interface AIPreviewResult {
   model_profile: string;
+  mode: "create" | "revise";
+  revision_instruction: string;
+  source_body_version: number | null;
+  source_body_hash: string | null;
   status: AIPreviewStatus;
   content: string | null;
   is_stale: boolean;
@@ -262,6 +266,7 @@ export interface AIPreviewContext {
     away_team: MatchManualTeam;
   };
   results: Record<string, AIPreviewResult>;
+  revision_results: Record<string, AIPreviewResult>;
 }
 
 export interface PromptTemplate {

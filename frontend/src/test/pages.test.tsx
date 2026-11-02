@@ -163,6 +163,7 @@ describe("batch and match pages", () => {
         away_team: { institution_name: "探微书院", institution_short_name: "探微", team_name: "探微书院", team_description: "客队描述", sort_basis: "kit_number", players: [{ name: "客队球员", kit_number: 1, minutes: null, description: "门将" }] },
       },
       results: {},
+      revision_results: {},
     };
     const generated = {
       model_profile: "deepseek_v41_flash_thinking", status: "succeeded", content: "这是 AI 生成的前瞻。", is_stale: false,
@@ -171,7 +172,10 @@ describe("batch and match pages", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith("/ai-preview-context")) return Promise.resolve(json(context));
-      if (path.endsWith("/ai-preview-generations")) return Promise.resolve(json(generated));
+      if (path.endsWith("/ai-preview-generations")) {
+        const request = JSON.parse(String(init?.body));
+        return Promise.resolve(json(request.mode === "revise" ? { ...generated, mode: "revise", revision_instruction: request.revision_instruction, source_body_version: 2, content: "这是改进后的前瞻。" } : generated));
+      }
       if (path.endsWith("/manual-descriptions") && init?.method === "PUT") return Promise.resolve(json(context.manual));
       return Promise.resolve(json(batch));
     });
@@ -186,6 +190,18 @@ describe("batch and match pages", () => {
     expect(screen.getByRole("option", { name: /DeepSeek V4.1 Flash Thinking · 约 45 秒 · 90.0 分 · 推荐/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成前瞻" }));
     expect(await screen.findByDisplayValue("这是 AI 生成的前瞻。")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("写作模式"), { target: { value: "revise" } });
+    fireEvent.change(screen.getByLabelText("本次修改要求（可选）"), { target: { value: "保留第一段" } });
+    fireEvent.click(screen.getByRole("button", { name: "改进前瞻" }));
+    expect(await screen.findByDisplayValue("这是改进后的前瞻。")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith("/ai-preview-generations") && JSON.parse(String(init?.body)).expected_body_version === 2)).toBe(true);
+    fireEvent.change(screen.getByLabelText("本次修改要求（可选）"), { target: { value: "重写结尾" } });
+    expect(screen.getByText(/当前结果尚未应用这些要求/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("前瞻正文"), { target: { value: "未保存的原稿" } });
+    expect(screen.getByRole("button", { name: "重新生成" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("写作模式"), { target: { value: "create" } });
+    expect(screen.getByDisplayValue("这是 AI 生成的前瞻。")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("主队球员的描述"), { target: { value: "速度快，前插积极" } });
     fireEvent.click(screen.getByRole("button", { name: "保存双方资料" }));

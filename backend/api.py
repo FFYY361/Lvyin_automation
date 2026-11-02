@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -33,6 +33,7 @@ from thufootball import (
 from thufootball.database import FootballDataRepository
 
 from .ai_preview import (
+    _canonical_hash,
     _title_prefix,
     ai_preview_context,
     build_title_material,
@@ -86,6 +87,7 @@ from .models import (
 )
 from .schemas import (
     AIPreviewGenerationRequest,
+    AIPreviewPromptRequest,
     AITitleGenerationRequest,
     AssignMatchRequest,
     BatchStatus,
@@ -1216,6 +1218,17 @@ def create_app(
         repository = await prepare_match_football(session, game_id)
         return prompt_copy_payload(session, game_id, repository=repository)
 
+    @app.post("/api/matches/{game_id}/ai-preview-prompt")
+    async def post_ai_preview_prompt(
+        game_id: int,
+        payload: AIPreviewPromptRequest,
+        user: User = Depends(require_user),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        require_match_access(session, game_id, user)
+        repository = await prepare_match_football(session, game_id)
+        return prompt_copy_payload(session, game_id, repository=repository, **payload.model_dump())
+
     @app.post("/api/matches/{game_id}/ai-preview-generations")
     async def create_ai_preview_generation(
         game_id: int,
@@ -1231,6 +1244,9 @@ def create_app(
             model_profile=payload.model_profile,
             requested_by_user_id=user.id,
             repository=repository,
+            mode=payload.mode,
+            revision_instruction=payload.revision_instruction,
+            expected_body_version=payload.expected_body_version,
         )
         if material is not None:
             config_hash = result.model_config_hash
@@ -1243,6 +1259,7 @@ def create_app(
                     material=material,
                     request_token=result.request_token,
                     config_hash=config_hash,
+                    mode=result.mode,
                 )
             )
             ai_tasks.add(task)
@@ -1251,7 +1268,7 @@ def create_app(
         return JSONResponse(
             status_code=status_code,
             content={
-                **result_payload(result),
+                **result_payload(result, current_body_hash=result.source_body_hash),
                 "reused": material is None,
             },
         )
@@ -1264,15 +1281,17 @@ def create_app(
         model_profile: str,
         user: User = Depends(require_user),
         session: Session = Depends(get_session),
+        mode: Literal["create", "revise"] = "create",
     ) -> dict[str, Any]:
         require_match_access(session, game_id, user)
         profile = configured_website_profile(model_profile)
-        result = session.get(AIPreviewResult, (game_id, model_profile))
+        result = session.get(AIPreviewResult, (game_id, model_profile, mode))
         if result is None:
             raise _not_found("AI preview result")
         return result_payload(
             result,
             current_config_hash=model_config_hash(profile),
+            current_body_hash=_canonical_hash(session.get(Match, game_id).body),
         )
 
     @app.get("/api/batches/{batch_id}/ai-title-context")

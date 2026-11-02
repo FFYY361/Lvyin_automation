@@ -78,6 +78,8 @@ export function MatchPage() {
   const [manual, setManual] = useState<AIPreviewContext["manual"] | null>(null);
   const [baseManual, setBaseManual] = useState<AIPreviewContext["manual"] | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedMode, setSelectedMode] = useState<"create" | "revise">("create");
+  const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
@@ -161,15 +163,21 @@ export function MatchPage() {
     return () => window.removeEventListener("beforeunload", guard);
   }, [dirty]);
 
-  const selectedResult = aiContext?.results[selectedModel];
+  useEffect(() => { setSelectedMode("create"); setRevisionDrafts({}); }, [gameId]);
+  const resultKey = selectedMode === "revise" ? "revision_results" : "results";
+  const selectedResult = aiContext?.[resultKey]?.[selectedModel];
+  const revisionInstruction = revisionDrafts[selectedModel] ?? selectedResult?.revision_instruction ?? "";
+  const instructionChanged = selectedMode === "revise" && Boolean(selectedResult) && revisionInstruction.trim() !== selectedResult?.revision_instruction;
+  const revisionBlocked = selectedMode === "revise" && (!baseBody.trim() || body !== baseBody);
+  const promptInput = { mode: selectedMode, revision_instruction: selectedMode === "revise" ? revisionInstruction : "", expected_body_version: selectedMode === "revise" ? version : undefined };
   useEffect(() => {
     if (!gameId || !selectedModel || !selectedResult || !["queued", "running"].includes(selectedResult.status)) return;
     let active = true;
     const poll = async () => {
       try {
-        const value = await api<AIPreviewResult>(`/api/matches/${gameId}/ai-preview-results/${encodeURIComponent(selectedModel)}`);
+        const value = await api<AIPreviewResult>(`/api/matches/${gameId}/ai-preview-results/${encodeURIComponent(selectedModel)}?mode=${selectedMode}`);
         if (!active) return;
-        setAIContext((current) => current ? { ...current, results: { ...current.results, [selectedModel]: value } } : current);
+        setAIContext((current) => current ? { ...current, [resultKey]: { ...current[resultKey], [selectedModel]: value } } : current);
         if (!["queued", "running"].includes(value.status)) await refreshAIContext(!manualDirty);
       } catch (value) {
         if (active) setError(errorMessage(value));
@@ -177,7 +185,7 @@ export function MatchPage() {
     };
     const timer = window.setInterval(() => { void poll(); }, 2500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [gameId, manualDirty, refreshAIContext, selectedModel, selectedResult]);
+  }, [gameId, manualDirty, refreshAIContext, selectedModel, selectedMode, resultKey, selectedResult]);
 
   const save = async () => {
     if (!match || !canEdit) return;
@@ -187,6 +195,7 @@ export function MatchPage() {
       setWriters(namesText(result.writers)); setBody(result.body); setBaseWriters(result.writers); setBaseBody(result.body); setVersion(result.body_version);
       setMatch({ ...match, writers: result.writers, body: result.body, body_version: result.body_version });
       setSuccess("正文与署名已保存。");
+      await refreshAIContext(false);
     } catch (value) {
       if (value instanceof ApiError && value.status === 409 && value.code === "body_version_conflict") {
         const details = value.details as unknown as ConflictValue;
@@ -200,11 +209,11 @@ export function MatchPage() {
   };
 
   const startGeneration = async () => {
-    if (!match || !canEdit || !selectedModel) return;
+    if (!match || !canEdit || !selectedModel || revisionBlocked) return;
     setStartingAI(true); setError(null); setSuccess(null); setCopied(false);
     try {
-      const result = await api<AIPreviewResult>(`/api/matches/${match.game_id}/ai-preview-generations`, { method: "POST", ...jsonBody({ model_profile: selectedModel }) });
-      setAIContext((current) => current ? { ...current, results: { ...current.results, [selectedModel]: result } } : current);
+      const result = await api<AIPreviewResult>(`/api/matches/${match.game_id}/ai-preview-generations`, { method: "POST", ...jsonBody({ model_profile: selectedModel, ...promptInput }) });
+      setAIContext((current) => current ? { ...current, [resultKey]: { ...current[resultKey], [selectedModel]: result } } : current);
       if (result.status === "succeeded") setSuccess(result.reused ? "已载入此前生成的前瞻。" : "AI 前瞻已生成。");
     } catch (value) {
       setError(errorMessage(value));
@@ -225,9 +234,9 @@ export function MatchPage() {
   };
 
   const copyPrompt = async () => {
-    if (!match) return;
+    if (!match || revisionBlocked) return;
     try {
-      const prompt = await api<{ copy_text: string }>(`/api/matches/${match.game_id}/ai-preview-prompt`);
+      const prompt = await api<{ copy_text: string }>(`/api/matches/${match.game_id}/ai-preview-prompt`, { method: "POST", ...jsonBody(promptInput) });
       await navigator.clipboard.writeText(prompt.copy_text);
       setPromptCopied(true); window.setTimeout(() => setPromptCopied(false), 1800);
     } catch { setError("无法复制 Prompt，请稍后重试。"); }
@@ -321,9 +330,10 @@ export function MatchPage() {
 
       {canEdit ? <>
         <Panel className="ai-writing-panel">
-          <SectionTitle title="AI 写作" description="根据当前比赛资料和人工描述生成一篇完整前瞻。" actions={<Sparkles size={20} />} />
+          <SectionTitle title="AI 写作" description="新写完整前瞻，或以已保存正文为基础进行改进。" actions={<Sparkles size={20} />} />
           {aiContext ? <>
-            <div className="ai-controls"><Field label="生成模型" htmlFor="ai-model"><select id="ai-model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setCopied(false); }}>{aiContext.models.map((model) => <option key={model.profile} value={model.profile} disabled={!model.available}>{model.label} · 约 {model.estimated_seconds} 秒 · {model.score.toFixed(1)} 分{model.recommended ? " · 推荐" : ""}{model.available ? "" : " · 未配置"}</option>)}</select></Field><div className="button-row"><Button variant="primary" loading={startingAI} disabled={!selectedModelOption?.available || aiRunning} onClick={() => void startGeneration()}><Sparkles size={16} />{selectedResult?.status === "failed" || selectedResult?.is_stale ? "重新生成" : "生成前瞻"}</Button><Button onClick={() => void copyPrompt()}><Copy size={16} />{promptCopied ? "Prompt 已复制" : "复制 Prompt"}</Button></div></div>
+            <div className="ai-controls"><Field label="写作模式" htmlFor="ai-mode"><select id="ai-mode" value={selectedMode} onChange={(event) => { setSelectedMode(event.target.value as "create" | "revise"); setCopied(false); setPromptCopied(false); }}><option value="create">新写</option><option value="revise">改进</option></select></Field><Field label="生成模型" htmlFor="ai-model"><select id="ai-model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setCopied(false); }}>{aiContext.models.map((model) => <option key={model.profile} value={model.profile} disabled={!model.available}>{model.label} · 约 {model.estimated_seconds} 秒 · {model.score.toFixed(1)} 分{model.recommended ? " · 推荐" : ""}{model.available ? "" : " · 未配置"}</option>)}</select></Field><div className="button-row"><Button variant="primary" loading={startingAI} disabled={!selectedModelOption?.available || aiRunning || revisionBlocked} onClick={() => void startGeneration()}><Sparkles size={16} />{selectedResult?.status === "failed" || selectedResult?.is_stale || instructionChanged ? "重新生成" : selectedMode === "revise" ? "改进前瞻" : "生成前瞻"}</Button><Button disabled={revisionBlocked} onClick={() => void copyPrompt()}><Copy size={16} />{promptCopied ? "Prompt 已复制" : "复制 Prompt"}</Button></div></div>
+            {selectedMode === "revise" ? <><Field label="本次修改要求（可选）" htmlFor="ai-revision-instruction"><textarea id="ai-revision-instruction" rows={3} maxLength={2000} value={revisionInstruction} onChange={(event) => { setRevisionDrafts((current) => ({ ...current, [selectedModel]: event.target.value })); setPromptCopied(false); }} placeholder="例如：保留第一段，补充首轮表现，减少重复表达……" /></Field><p className="ai-model-note">以已保存正文为基础，信任并保留原稿事实，按规则改善表达并按需补充。</p>{revisionBlocked ? <Alert tone="info">{!baseBody.trim() ? "请先填写并保存本场正文，再使用改进模式。" : "正文有未保存修改，请先保存再改进。"}</Alert> : null}{instructionChanged ? <Alert tone="info">修改要求已改变，当前结果尚未应用这些要求，请重新生成。</Alert> : null}</> : null}
             {selectedModelOption ? <p className="ai-model-note">{selectedModelOption.label}：评测 {selectedModelOption.score.toFixed(1)} 分，通常约需 {selectedModelOption.estimated_seconds} 秒，实际耗时会随文章和服务负载变化。</p> : null}
             <Alert tone="warning">
               <strong>AI 内容必须人工复核</strong>
@@ -332,7 +342,7 @@ export function MatchPage() {
             </Alert>
             {aiRunning ? <Alert tone="info">AI 正在后台生成。可以关闭或切换页面，稍后返回继续查看。</Alert> : null}
             {selectedResult?.error ? <Alert tone="danger">{selectedResult.error.message}</Alert> : null}
-            {selectedResult?.content ? <div className="ai-result"><div className="ai-result__heading"><div><strong>生成正文</strong>{selectedResult.is_stale ? <Badge tone="warning">资料已变化，结果可能过期</Badge> : <Badge tone="success">当前资料</Badge>}</div><Button onClick={() => void copyResult()}><Copy size={16} />{copied ? "已复制" : "复制正文"}</Button></div><textarea readOnly aria-label="AI生成正文" rows={18} value={selectedResult.content} /></div> : null}
+            {selectedResult?.content ? <div className="ai-result"><div className="ai-result__heading"><div><strong>{selectedMode === "revise" ? "改进正文" : "生成正文"}</strong>{selectedResult.source_body_version != null ? <span>基于保存序号 #{selectedResult.source_body_version}</span> : null}{selectedResult.is_stale ? <Badge tone="warning">资料或原稿已变化，结果可能过期</Badge> : <Badge tone="success">当前资料</Badge>}</div><Button onClick={() => void copyResult()}><Copy size={16} />{copied ? "已复制" : "复制正文"}</Button></div><textarea readOnly aria-label="AI生成正文" rows={18} value={selectedResult.content} /></div> : null}
           </> : <LoadingScreen label="正在读取 AI 写作资料" />}
         </Panel>
 

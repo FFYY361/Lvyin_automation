@@ -10,6 +10,15 @@ User message 包含 `match_context`、`manual_context` 和 `automatic_context`�
 标题使用 `title_system` 和 `title_rules`，并以整批比赛快照和正文组成 User message。
 输出保持六条 `idiom_1` / `idiom_2` JSON 候选。
 
+网站支持“新写／改进”。改进在现有 System message 最后追加数据库中的
+`preview_revision_rules`，User message 使用改进任务开场，并以 `revision_context` JSON
+提供已保存的 `original_body` 和可选 `revision_instruction`。固定规则正文不保存在 Git。
+原稿为空或保存序号冲突时不提交改进；只输出完整正文，作者自行审阅、复制和保存。
+新写不会携带原稿或改进规则。
+
+结果按比赛、模型、模式各保留最新一条；相同输入复用成功结果。原稿及修改要求进入 Prompt
+哈希，保存序号仅用于并发校验和追溯；仅修改署名不会使改进结果过期。
+
 网站和命令行均读取数据库规则；Python 调用可显式传入 `prompt_documents` 用于组装。
 缺失或空白的必要分区会报错，不回退到文件或内置正文。规则在网站管理页编辑，组装器不调用模型。
 

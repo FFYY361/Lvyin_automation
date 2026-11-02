@@ -88,12 +88,15 @@ _WEBSITE_MODELS_BY_PROFILE = {item.profile: item for item in WEBSITE_PREVIEW_MOD
 class PromptMaterial:
     messages: tuple[ChatMessage, ChatMessage]
     prompt_hash: str
+    source_body_version: int | None = None
+    source_body_hash: str | None = None
 
 
 _PROMPT_LABELS = {
     "preview_system": "正文系统规则",
     "preview_writing_rules": "正文写作规则",
     "preview_data_rules": "正文资料规则",
+    "preview_revision_rules": "正文改进规则",
     "competition_male": "男足赛制规则",
     "competition_female": "女足赛制规则（2025–2026 及以前）",
     "competition_female_2026_2027": "女足赛制规则（2026–2027 起）",
@@ -119,8 +122,20 @@ def _canonical_hash(value: object) -> str:
 
 
 def build_prompt_material(
-    session: Session, game_id: int, *, repository=None
+    session: Session, game_id: int, *, repository=None, mode: str = "create",
+    revision_instruction: str = "", expected_body_version: int | None = None,
 ) -> PromptMaterial:
+    original = None
+    if mode not in {"create", "revise"}:
+        raise WorkflowError(422, "ai_mode_invalid", "无效的 AI 写作模式。")
+    if mode == "revise":
+        original = session.get(Match, game_id, populate_existing=True)
+        if original is None:
+            raise WorkflowError(404, "match_not_found", "比赛不存在。")
+        if expected_body_version is not None and original.body_version != expected_body_version:
+            raise WorkflowError(409, "ai_revision_body_conflict", "已保存正文发生变化，请刷新后再改进。")
+        if not original.body.strip():
+            raise WorkflowError(422, "ai_revision_body_empty", "请先保存本场正文，再使用改进模式。")
     try:
         prompt_documents = {
             item.key: item.content for item in session.scalars(select(PromptTemplate))
@@ -136,14 +151,27 @@ def build_prompt_material(
             "ai_preview_context_invalid",
             "AI 前瞻资料不完整，暂时无法组装 Prompt。",
         ) from exc
-    messages = (
-        ChatMessage(role="system", content=bundle.system_message),
-        ChatMessage(role="user", content=bundle.render_user_message()),
-    )
+    system_message = bundle.system_message
+    task = None
+    if original is not None:
+        rules = prompt_documents.get("preview_revision_rules", "").strip()
+        if not rules:
+            raise WorkflowError(500, "ai_revision_rules_missing", "正文改进规则尚未配置。")
+        system_message += "\n\n" + rules
+        task = "请以以下已保存原稿为基础，结合本场比赛资料和本次修改要求，\n按照前瞻写作规则及改进规则，输出完整的前瞻改进稿。"
+    user_message = bundle.render_user_message(task=task)
+    if original is not None:
+        context = json.dumps({"original_body": original.body, "revision_instruction": revision_instruction}, ensure_ascii=False, indent=2)
+        user_message += "\n\n<revision_context>\n" + context + "\n</revision_context>"
+    messages = (ChatMessage(role="system", content=system_message), ChatMessage(role="user", content=user_message))
     prompt_hash = _canonical_hash(
         [{"role": message.role, "content": message.content} for message in messages]
     )
-    return PromptMaterial(messages=messages, prompt_hash=prompt_hash)
+    return PromptMaterial(
+        messages=messages, prompt_hash=prompt_hash,
+        source_body_version=original.body_version if original is not None else None,
+        source_body_hash=_canonical_hash(original.body) if original is not None else None,
+    )
 
 
 def prompt_templates_payload(session: Session) -> dict[str, Any]:
@@ -166,9 +194,9 @@ def prompt_templates_payload(session: Session) -> dict[str, Any]:
 
 
 def prompt_copy_payload(
-    session: Session, game_id: int, *, repository=None
+    session: Session, game_id: int, *, repository=None, **options
 ) -> dict[str, Any]:
-    material = build_prompt_material(session, game_id, repository=repository)
+    material = build_prompt_material(session, game_id, repository=repository, **options)
     copy_text = "\n\n".join(
         f"【{message.role}】\n{message.content}" for message in material.messages
     )
@@ -601,6 +629,7 @@ def result_payload(
     *,
     current_prompt_hash: str | None = None,
     current_config_hash: str | None = None,
+    current_body_hash: str | None = None,
 ) -> dict[str, Any]:
     stale = result.content is not None and (
         result.status != "succeeded"
@@ -612,9 +641,14 @@ def result_payload(
             current_config_hash is not None
             and result.model_config_hash != current_config_hash
         )
+        or (result.mode == "revise" and current_body_hash is not None and result.source_body_hash != current_body_hash)
     )
     return {
         "model_profile": result.model_profile,
+        "mode": result.mode,
+        "revision_instruction": result.revision_instruction,
+        "source_body_version": result.source_body_version,
+        "source_body_hash": result.source_body_hash,
         "status": result.status,
         "content": result.content,
         "is_stale": stale,
@@ -636,26 +670,29 @@ def ai_preview_context(
 ) -> dict[str, Any]:
     prompt = build_prompt_material(session, game_id, repository=repository)
     models, config_hashes = model_options_payload()
-    results = {
-        result.model_profile: result_payload(
-            result,
-            current_prompt_hash=prompt.prompt_hash,
-            current_config_hash=config_hashes.get(result.model_profile),
-        )
-        for result in session.scalars(
-            select(AIPreviewResult).where(AIPreviewResult.game_id == game_id)
-        )
-        if result.model_profile in _WEBSITE_MODELS_BY_PROFILE
-    }
+    results = {}
+    revision_results = {}
+    match = session.get(Match, game_id)
+    body_hash = _canonical_hash(match.body)
+    for result in session.scalars(select(AIPreviewResult).where(AIPreviewResult.game_id == game_id)):
+        if result.model_profile not in _WEBSITE_MODELS_BY_PROFILE:
+            continue
+        material = prompt
+        if result.mode == "revise":
+            material = build_prompt_material(session, game_id, repository=repository, mode="revise", revision_instruction=result.revision_instruction) if match.body.strip() else None
+        value = result_payload(result, current_prompt_hash=material.prompt_hash if material else None,
+                               current_config_hash=config_hashes.get(result.model_profile), current_body_hash=body_hash)
+        (revision_results if result.mode == "revise" else results)[result.model_profile] = value
     return {
         "models": models,
         "manual": match_manual_payload(session, game_id, repository=repository),
         "results": results,
+        "revision_results": revision_results,
     }
 
 
-def _advisory_key(game_id: int, profile: str) -> int:
-    digest = hashlib.sha256(f"ai-preview:{game_id}:{profile}".encode()).digest()
+def _advisory_key(game_id: int, profile: str, mode: str = "create") -> int:
+    digest = hashlib.sha256(f"ai-preview:{game_id}:{profile}:{mode}".encode()).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
@@ -666,6 +703,9 @@ def prepare_generation(
     model_profile: str,
     requested_by_user_id: int,
     repository=None,
+    mode: str = "create",
+    revision_instruction: str = "",
+    expected_body_version: int | None = None,
 ) -> tuple[AIPreviewResult, PromptMaterial | None]:
     profile = configured_website_profile(model_profile)
     if not _profile_available(profile):
@@ -674,14 +714,15 @@ def prepare_generation(
             "ai_model_key_missing",
             "该模型尚未配置 API Key，请联系管理员。",
         )
-    material = build_prompt_material(session, game_id, repository=repository)
+    material = build_prompt_material(session, game_id, repository=repository, mode=mode,
+                                    revision_instruction=revision_instruction, expected_body_version=expected_body_version)
     config_hash = model_config_hash(profile)
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         session.execute(
             text("SELECT pg_advisory_xact_lock(:key)"),
-            {"key": _advisory_key(game_id, model_profile)},
+            {"key": _advisory_key(game_id, model_profile, mode)},
         )
-    result = session.get(AIPreviewResult, (game_id, model_profile))
+    result = session.get(AIPreviewResult, (game_id, model_profile, mode), populate_existing=True)
     if result is not None and result.status in _ACTIVE_STATUSES:
         if (
             result.prompt_hash == material.prompt_hash
@@ -707,6 +748,7 @@ def prepare_generation(
         result = AIPreviewResult(
             game_id=game_id,
             model_profile=model_profile,
+            mode=mode,
             prompt_hash=material.prompt_hash,
             model_config_hash=config_hash,
             request_token=request_token,
@@ -726,6 +768,9 @@ def prepare_generation(
         result.requested_at = requested_at
         result.started_at = None
         result.finished_at = None
+    result.revision_instruction = revision_instruction if mode == "revise" else ""
+    result.source_body_version = material.source_body_version
+    result.source_body_hash = material.source_body_hash
     session.commit()
     session.refresh(result)
     return result, material
@@ -755,6 +800,7 @@ def _finish_generation(
     prompt_hash: str,
     config_hash: str,
     request_token: uuid.UUID,
+    mode: str = "create",
     content: str | None = None,
     error: tuple[str, str] | None = None,
 ) -> None:
@@ -778,6 +824,7 @@ def _finish_generation(
             .where(
                 AIPreviewResult.game_id == game_id,
                 AIPreviewResult.model_profile == model_profile,
+                AIPreviewResult.mode == mode,
                 AIPreviewResult.prompt_hash == prompt_hash,
                 AIPreviewResult.model_config_hash == config_hash,
                 AIPreviewResult.request_token == request_token,
@@ -796,6 +843,7 @@ async def run_generation(
     material: PromptMaterial,
     request_token: uuid.UUID,
     config_hash: str,
+    mode: str = "create",
 ) -> None:
     with session_factory.begin() as session:
         started = session.execute(
@@ -803,6 +851,7 @@ async def run_generation(
             .where(
                 AIPreviewResult.game_id == game_id,
                 AIPreviewResult.model_profile == model_profile,
+                AIPreviewResult.mode == mode,
                 AIPreviewResult.prompt_hash == material.prompt_hash,
                 AIPreviewResult.model_config_hash == config_hash,
                 AIPreviewResult.request_token == request_token,
@@ -823,6 +872,7 @@ async def run_generation(
             prompt_hash=material.prompt_hash,
             config_hash=config_hash,
             request_token=request_token,
+            mode=mode,
             error=("service_stopped", "网站服务已重启，请手动重新生成。"),
         )
         raise
@@ -836,6 +886,7 @@ async def run_generation(
             prompt_hash=material.prompt_hash,
             config_hash=config_hash,
             request_token=request_token,
+            mode=mode,
             error=_safe_ai_error(exc),
         )
         return
@@ -846,6 +897,7 @@ async def run_generation(
         prompt_hash=material.prompt_hash,
         config_hash=config_hash,
         request_token=request_token,
+        mode=mode,
         content=generated.content,
     )
 

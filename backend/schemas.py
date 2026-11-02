@@ -145,9 +145,28 @@ def _description(value: str, *, maximum: int) -> str:
     return normalized
 
 
-class AIPreviewGenerationRequest(BaseModel):
+class AIPreviewPromptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    mode: Literal["create", "revise"] = "create"
+    revision_instruction: str = Field(default="", max_length=2_000)
+    expected_body_version: int | None = Field(default=None, ge=0)
+
+    @field_validator("revision_instruction")
+    @classmethod
+    def normalize_instruction(cls, value: str) -> str:
+        return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode == "revise" and self.expected_body_version is None:
+            raise ValueError("改进模式需要正文保存序号")
+        if self.mode == "create" and self.revision_instruction:
+            raise ValueError("本次修改要求仅用于改进模式")
+        return self
+
+
+class AIPreviewGenerationRequest(AIPreviewPromptRequest):
     model_profile: str = Field(min_length=1, max_length=64)
 
 

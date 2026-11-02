@@ -204,3 +204,20 @@ Linux 战报使用 Pillow 渲染，必须配置 `THUFOOTBALL_FONT_DIR`。生产�
 - 前瞻、AI、成绩和网站回归 143 项及 7 项子测试通过；最终 AI 上下文调整另通过 15 项及 3 项子测试。
   三项目真实配置只读核验通过：土水往季不继承，新闻-马院男足／五人制从 2024～2025 起截断，
   女足单前身继续继承，交叉-AI 单前身继续继承。新建或刷新批次时生效，未批量重写已有文章或草稿。
+
+## 6. 2026-11-02 正文 Prompt 更新
+
+- 按确认稿同步本地和线上 `preview_system`、`preview_writing_rules`；写作规则分为任务与结构、
+  事实与分析、选材与叙述、语言与成稿，前两段各 150–300 字、第三段 50–200 字。
+- 两端均先备份旧值再事务更新，修改人置空；回读摘要与确认稿一致，线上健康接口正常。
+  本次仅更新规则数据，线上 Git 标签及安装包仍为 `1.5.2`，后续生成直接读取新规则。
+- 本地旧值：`var/ai_prompt_update/20261102/local-before.json`；线上旧值：
+  `/home/xfy/lvyin_media/ops/prompt-update-20261102/before-20261102T064212992262Z.json`。
+  回退时恢复上述两个分区的内容并刷新更新时间；已有正文未自动重写。
+- 本地 Docker 启动时遇到失效运行时套接字，旧 `Docker/run` 目录改名保留为
+  `C:/Users/XueFeiYang/AppData/Local/Docker/run.stale-20261102` 后恢复启动。
+  本地更新通过现有 PostgreSQL 容器内连接完成，数据库卷未重建。
+- 同日补充男足及两个赛季女足赛制分区：男足常规 40+40 分钟，淘汰赛打平加时 15+15 分钟；
+  女足常规 30+30 分钟，淘汰赛打平无加时。两端备份后事务更新，三个分区回读摘要一致。
+  本地旧值为 `var/ai_prompt_update/20261102/competition-local-before.json`，线上旧值为
+  `/home/xfy/lvyin_media/ops/prompt-update-20261102/competition-before-20261102T065100615992Z.json`。

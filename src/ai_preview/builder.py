@@ -38,7 +38,7 @@ class PromptBundle:
     manual_context: dict[str, object]
     automatic_context: dict[str, object]
 
-    def render_user_message(self) -> str:
+    def render_user_message(self, *, task: str | None = None) -> str:
         match = self.match_context
         match_lines = [
             f"赛事：{match['competition']}",
@@ -60,7 +60,7 @@ class PromptBundle:
         manual = json.dumps(self.manual_context, ensure_ascii=False, indent=2)
         automatic = json.dumps(self.automatic_context, ensure_ascii=False, indent=2)
         return (
-            "请根据以下资料，撰写一篇完整的比赛前瞻正文。\n\n"
+            (task or "请根据以下资料，撰写一篇完整的比赛前瞻正文。") + "\n\n"
             "<match_context>\n" + "\n".join(match_lines) + "\n</match_context>\n\n"
             "<manual_context>\n```json\n" + manual + "\n```\n</manual_context>\n\n"
             "<automatic_context>\n```json\n" + automatic + "\n```\n</automatic_context>"

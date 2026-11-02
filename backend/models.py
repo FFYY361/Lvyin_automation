@@ -210,6 +210,7 @@ class AIPreviewResult(Base):
             "status IN ('queued', 'running', 'succeeded', 'failed')",
             name="ck_ai_preview_results_status",
         ),
+        CheckConstraint("mode IN ('create', 'revise')", name="ck_ai_preview_results_mode"),
     )
 
     game_id: Mapped[int] = mapped_column(
@@ -219,6 +220,10 @@ class AIPreviewResult(Base):
         autoincrement=False,
     )
     model_profile: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(8), primary_key=True, default="create", server_default="create")
+    revision_instruction: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    source_body_version: Mapped[int | None] = mapped_column(Integer)
+    source_body_hash: Mapped[str | None] = mapped_column(CHAR(64))
     prompt_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     model_config_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     request_token: Mapped[uuid.UUID] = mapped_column(
