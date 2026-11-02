@@ -221,3 +221,15 @@ Linux 战报使用 Pillow 渲染，必须配置 `THUFOOTBALL_FONT_DIR`。生产�
   女足常规 30+30 分钟，淘汰赛打平无加时。两端备份后事务更新，三个分区回读摘要一致。
   本地旧值为 `var/ai_prompt_update/20261102/competition-local-before.json`，线上旧值为
   `/home/xfy/lvyin_media/ops/prompt-update-20261102/competition-before-20261102T065100615992Z.json`。
+
+## 7. AI 改进与每周清理（1.6.0）
+
+- 比赛页选择新写／改进；改进需先保存正文，可填写本次修改要求。结果由作者审阅后自行复制、保存。
+  规则在管理页的 `preview_revision_rules` 中维护；结果按比赛、模型、模式各保留最新一条。
+- `python -m backend cleanup-ai-results --dry-run` 预览；移除 `--dry-run` 后事务删除已结束且
+  `finished_at`（缺失则 `requested_at`）严格早于七日前的正文和标题结果，保留运行中任务。
+- 生产 `ops/backup.sh` 在天气刷新之后加载 `scripts/cleanup_ai_after_backup.sh`，仅周一执行，
+  复用原 04:00 调度与备份锁。日志位于 `logs/ai-cleanup.log`，清理失败不影响备份或天气刷新。
+  周度执行意味着记录实际约保留 7–14 天；停用时删除 `BEGIN weekly AI cleanup` 标记块。
+- 生产备份及回退见 `RELEASES.md`。本地数据库因 Windows 保留 5432 端口改用 55432，
+  `.env` 的 `WEBSITE_POSTGRES_PORT` 与数据库 URL 端口一致；沿用原 PostgreSQL 数据卷。
