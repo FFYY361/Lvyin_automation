@@ -128,7 +128,9 @@ export function ReportsPage() {
 
   const renderBatch = (batch: PreviewBatch) => {
     const detail = details[batch.id];
-    const matches = (detail?.matches ?? []).filter((match) => match.active && (showUnfinished || match.status === "finished"));
+    const matches = (detail?.matches ?? [])
+      .filter((match) => match.active && (showUnfinished || match.status === "finished"))
+      .sort((left, right) => Date.parse(left.kickoff) - Date.parse(right.kickoff) || left.game_id - right.game_id);
     const status = articleStatus(batch);
     const feedback = renderFeedback[batch.id];
     return (

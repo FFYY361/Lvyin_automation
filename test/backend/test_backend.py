@@ -2071,13 +2071,18 @@ def test_preview_creation_and_data_refresh_render_automatically(
         kickoff_local=source.matches[0].kickoff,
         status=GameStatus.SCHEDULED,
     )
+    finished_game = SimpleNamespace(
+        **(vars(game) | {"game_id": 9982, "status": GameStatus.FINISHED})
+    )
+    finished_match = replace(source.matches[0], game_id=9982, venue="完赛场地")
+    source = replace(source, matches=(*source.matches, finished_match))
 
     class Builder:
         def __init__(self, *_args, **_kwargs):
             pass
 
         async def query_current_games(self):
-            return [game]
+            return [game, finished_game]
 
         async def build(self, *_args, **_kwargs):
             return source
@@ -2102,14 +2107,31 @@ def test_preview_creation_and_data_refresh_render_automatically(
     with session_factory() as session:
         batch = session.get(Batch, results[0]["batch_id"])
         article_id = batch.current_preview_article_id
-        assert article_id is not None
-        source = replace(source, matches=(replace(source.matches[0], venue="新场地"),))
+        article = session.get(ArticleRecord, article_id)
+        finished = match_payload(session.get(Match, finished_game.game_id))
+        assert finished["active"] and not finished["preview_active"]
+        assert "完赛场地" not in article.body_html
+
+        source = replace(
+            source, matches=(replace(source.matches[0], venue="新场地"), finished_match)
+        )
         asyncio.run(refresh_batch(session, batch, factories, settings))
         article = session.get(ArticleRecord, article_id)
         assert batch.current_preview_article_id == article_id
         assert "新场地" in article.body_html
         assert article.version_number == 1
-    assert qr_calls == [9981]
+
+        match = session.get(Match, game.game_id)
+        match.task_open = True
+        match.body = "已填写的前瞻正文"
+        session.commit()
+        game.status = GameStatus.FINISHED
+        asyncio.run(refresh_batch(session, batch, factories, settings))
+        assert match.active and not match.preview_active and not match.task_open
+        assert match.body == "已填写的前瞻正文"
+        assert "赛程待补充" in article.body_html
+        assert "matches" in article.missing_fields
+    assert sorted(qr_calls) == [9981, 9982]
     assert (settings.qr_cache_root / "9981.img").is_file()
 
 

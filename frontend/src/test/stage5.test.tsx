@@ -15,7 +15,7 @@ const task: TaskMatch = {
   kickoff: "2026-08-08T15:30:00+08:00", venue: "紫荆足球场",
   home: { tournament_team_id: 1, name: "环境学院", short_name: "环境", previous_outcomes: [], current_results: [] },
   away: { tournament_team_id: 2, name: "探微书院", short_name: "探微", previous_outcomes: [], current_results: [] },
-  head_to_head: [], active: true, task_open: true, claimed_by_user_id: 2, writers: ["成员甲"], body: "已经填写", body_version: 3, updated_at: "2026-08-01T00:00:00Z",
+  head_to_head: [], active: true, preview_active: true, task_open: true, claimed_by_user_id: 2, writers: ["成员甲"], body: "已经填写", body_version: 3, updated_at: "2026-08-01T00:00:00Z",
   status: "scheduled", report: { available: false, content_sha256: null, rendered_at: null },
 };
 
@@ -71,7 +71,7 @@ describe("stage 5 task center", () => {
     const mine = [
       namedTask(21, "未开放较新", "2026-09-01T10:00:00+08:00", { task_open: false }),
       namedTask(22, "我的开放较旧", "2026-08-08T10:00:00+08:00"),
-      namedTask(23, "失效较旧", "2026-08-20T10:00:00+08:00", { active: false }),
+      namedTask(23, "失效较旧", "2026-08-20T10:00:00+08:00", { active: false, preview_active: false }),
       namedTask(24, "我的开放较新", "2026-08-10T10:00:00+08:00"),
     ];
     const waiting = [

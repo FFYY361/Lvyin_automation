@@ -63,9 +63,9 @@ describe("frontend workflow helpers", () => {
   });
 
   it("maps all match task states with inactive taking precedence", () => {
-    expect(matchTaskStatus({ active: false, task_open: true, claimed_by_user_id: 8 }).label).toBe("已失效");
-    expect(matchTaskStatus({ active: true, task_open: false, claimed_by_user_id: null }).label).toBe("未开放");
-    expect(matchTaskStatus({ active: true, task_open: true, claimed_by_user_id: null }).label).toBe("开放 · 未领取");
-    expect(matchTaskStatus({ active: true, task_open: true, claimed_by_user_id: 8 }).label).toBe("开放 · 已领取");
+    expect(matchTaskStatus({ preview_active: false, task_open: true, claimed_by_user_id: 8 }).label).toBe("已失效");
+    expect(matchTaskStatus({ preview_active: true, task_open: false, claimed_by_user_id: null }).label).toBe("未开放");
+    expect(matchTaskStatus({ preview_active: true, task_open: true, claimed_by_user_id: null }).label).toBe("开放 · 未领取");
+    expect(matchTaskStatus({ preview_active: true, task_open: true, claimed_by_user_id: 8 }).label).toBe("开放 · 已领取");
   });
 });

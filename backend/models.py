@@ -26,7 +26,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import ColumnElement
 
 from .database import Base
 
@@ -201,6 +203,16 @@ class Match(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    @hybrid_property
+    def preview_active(self) -> bool:
+        """Whether this match can appear in a preview or accept a preview task."""
+        return self.active and self.status != "finished"
+
+    @preview_active.inplace.expression
+    @classmethod
+    def _preview_active_expression(cls) -> ColumnElement[bool]:
+        return cls.active.is_(True) & (cls.status != "finished")
 
 
 class AIPreviewResult(Base):

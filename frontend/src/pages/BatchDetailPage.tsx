@@ -166,7 +166,7 @@ export function BatchDetailPage() {
   if (loading && !batch) return <LoadingScreen label="正在读取批次详情" />;
   if (!batch) return <><PageHeader title="批次详情" /><Alert tone="danger">{error || "批次不存在"}</Alert></>;
   const matches = batch.matches ?? [];
-  const activeMatches = matches.filter((match) => match.active);
+  const activeMatches = matches.filter((match) => match.preview_active);
   const openCount = activeMatches.filter((match) => match.task_open).length;
   return (
     <>

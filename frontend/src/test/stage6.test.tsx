@@ -29,6 +29,7 @@ function match(gameId: number, status: PreviewMatch["status"], away: string): Pr
     away: { tournament_team_id: 2, name: `${away}学院`, short_name: away, previous_outcomes: [], current_results: [] },
     head_to_head: [],
     active: true,
+    preview_active: status !== "finished",
     task_open: false,
     claimed_by_user_id: null,
     writers: [],

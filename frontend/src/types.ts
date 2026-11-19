@@ -119,6 +119,7 @@ export interface PreviewMatch {
   away: TeamSnapshot;
   head_to_head: PlayedMatchSnapshot[];
   active: boolean;
+  preview_active: boolean;
   task_open: boolean;
   claimed_by_user_id: number | null;
   writers: string[];

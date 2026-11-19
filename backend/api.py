@@ -911,7 +911,7 @@ def create_app(
             session.scalars(
                 select(Match).where(
                     Match.batch_id == batch_id,
-                    Match.active.is_(True),
+                    Match.preview_active,
                 )
             )
         )
@@ -939,7 +939,7 @@ def create_app(
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            Match.active.is_(True),
+            Match.preview_active,
             Match.task_open.is_(True),
         )
         return {
@@ -959,7 +959,7 @@ def create_app(
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            Match.active.is_(True),
+            Match.preview_active,
             Match.task_open.is_(True),
         )
         return {"items": [_task_payload(match, batch) for match, batch in rows]}
@@ -971,7 +971,7 @@ def create_app(
     ) -> dict[str, Any]:
         rows = _task_rows(
             session,
-            Match.active.is_(True),
+            Match.preview_active,
             Match.task_open.is_(True),
             Match.claimed_by_user_id.is_(None),
         )
@@ -1003,7 +1003,7 @@ def create_app(
                 "reused": True,
                 "match": _task_payload(current, batch),
             }
-        if not current.active or not current.task_open:
+        if not current.preview_active or not current.task_open:
             raise WorkflowError(
                 409,
                 "task_unavailable",
@@ -1013,7 +1013,7 @@ def create_app(
             update(Match)
             .where(
                 Match.game_id == game_id,
-                Match.active.is_(True),
+                Match.preview_active,
                 Match.task_open.is_(True),
                 Match.claimed_by_user_id.is_(None),
             )

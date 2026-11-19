@@ -242,7 +242,7 @@ def close_batch_tasks(session: Session, batch_ids: list[int]) -> list[int]:
             select(Match)
             .where(
                 Match.batch_id.in_(resolved_ids),
-                Match.active.is_(True),
+                Match.preview_active,
             )
             .order_by(Match.kickoff, Match.game_id)
         )
@@ -479,6 +479,7 @@ def upsert_source(
 
     for game_id, payload in payloads.items():
         game = games_by_id[game_id]
+        status = game.status.value
         values = {
             "batch_id": batch.id,
             "tournament_id": game.tournament_id,
@@ -494,7 +495,7 @@ def upsert_source(
         }
         record = session.get(Match, game_id)
         if record is None:
-            session.add(Match(game_id=game_id, status=game.status.value, **values))
+            session.add(Match(game_id=game_id, status=status, **values))
             changed = True
             continue
         record_changed = any(getattr(record, name) != item for name, item in values.items())
@@ -504,16 +505,19 @@ def upsert_source(
                 invalidate_preview(old_batch)
             record.task_open = False
             record_changed = True
+        if status == "finished" and record.task_open:
+            record.task_open = False
+            record_changed = True
         if record_changed:
             for name, item in values.items():
                 setattr(record, name, item)
             record.updated_at = _now()
             changed = True
-        if record.status != game.status.value:
-            record.status = game.status.value
+        if record.status != status:
+            if "finished" in (record.status, status):
+                changed = True
+            record.status = status
             record.updated_at = _now()
-    if changed:
-        invalidate_preview(batch)
     session.flush()
     report_order_after = [
         tuple(row)
@@ -527,6 +531,9 @@ def upsert_source(
             .order_by(Match.kickoff, Match.game_id)
         )
     ]
+    # Refresh previews saved before finished matches were excluded.
+    if changed or report_order_after:
+        invalidate_preview(batch)
     if report_order_before != report_order_after:
         batch.current_report_article_id = None
         batch.updated_at = _now()
@@ -892,7 +899,7 @@ def completeness(session: Session, batch: Batch) -> list[str]:
             select(Match)
             .where(
                 Match.batch_id == batch.id,
-                Match.active.is_(True),
+                Match.preview_active,
             )
             .order_by(Match.kickoff, Match.game_id)
         )
@@ -987,7 +994,7 @@ def assemble_source(session: Session, batch: Batch) -> PreviewSourceData:
         select(Match)
         .where(
             Match.batch_id == batch.id,
-            Match.active.is_(True),
+            Match.preview_active,
         )
         .order_by(Match.kickoff, Match.game_id)
     ):
@@ -1710,6 +1717,7 @@ def match_payload(value: Match) -> dict[str, Any]:
             played_payload(result) for result in value.head_to_head_snapshot
         ],
         "active": value.active,
+        "preview_active": value.preview_active,
         "task_open": value.task_open,
         "claimed_by_user_id": value.claimed_by_user_id,
         "writers": value.writers,
@@ -1788,7 +1796,7 @@ def batch_payload(session: Session, batch: Batch, *, detail: bool) -> dict[str, 
                 select(Match)
                 .where(Match.batch_id == batch.id)
                 .order_by(
-                    Match.active.desc(),
+                    Match.preview_active.desc(),
                     Match.kickoff,
                     Match.game_id,
                 )

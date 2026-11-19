@@ -10,7 +10,7 @@ import { competitionLabels, type AdminUser, type Competition, type TaskMatch } f
 import { formatDateTime, matchTaskStatus, teamName } from "../utils";
 
 function isCurrentlyOpen(match: TaskMatch) {
-  return match.active && match.task_open;
+  return match.preview_active && match.task_open;
 }
 
 function byKickoffDescending(left: TaskMatch, right: TaskMatch) {

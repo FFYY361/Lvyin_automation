@@ -230,7 +230,7 @@ def build_title_material(session: Session, batch: Batch) -> PromptMaterial:
     ]
     matches = session.scalars(
         select(Match)
-        .where(Match.batch_id == batch.id, Match.active.is_(True))
+        .where(Match.batch_id == batch.id, Match.preview_active)
         .order_by(Match.kickoff, Match.game_id)
     )
     for index, match in enumerate(matches, 1):

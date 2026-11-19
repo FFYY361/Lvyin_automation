@@ -54,6 +54,7 @@ const batch: PreviewBatch = {
     },
     head_to_head: [],
     active: true,
+    preview_active: true,
     task_open: true,
     claimed_by_user_id: null,
     writers: ["作者"],

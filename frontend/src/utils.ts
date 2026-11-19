@@ -104,8 +104,8 @@ export function formatSeasonOutcome(value: SeasonOutcomeSnapshot): string {
   return `${value.season}${competition}｜${value.outcome}`;
 }
 
-export function matchTaskStatus(match: Pick<PreviewMatch, "active" | "task_open" | "claimed_by_user_id">): { label: string; tone: string } {
-  if (!match.active) return { label: "已失效", tone: "neutral" };
+export function matchTaskStatus(match: Pick<PreviewMatch, "preview_active" | "task_open" | "claimed_by_user_id">): { label: string; tone: string } {
+  if (!match.preview_active) return { label: "已失效", tone: "neutral" };
   if (!match.task_open) return { label: "未开放", tone: "neutral" };
   if (match.claimed_by_user_id !== null) return { label: "开放 · 已领取", tone: "success" };
   return { label: "开放 · 未领取", tone: "info" };
