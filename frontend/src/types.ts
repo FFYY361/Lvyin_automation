@@ -50,12 +50,6 @@ export interface ReportContent {
   text: { media_type: "text/plain; charset=utf-8"; content: string } | null;
 }
 
-export interface BatchError {
-  code: string;
-  message: string | null;
-  at: string | null;
-}
-
 export interface Cover {
   kind: "file" | "media_id";
   storage_key: string;
@@ -153,7 +147,6 @@ export interface Batch {
   current_report_article_id: number | null;
   latest_report_article_id: number | null;
   missing_fields: string[];
-  last_error: BatchError | null;
   created_at: string;
   updated_at: string;
   weather?: Weather | null;

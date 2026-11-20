@@ -178,7 +178,6 @@ export function BatchDetailPage() {
         <div><span>有效比赛</span><strong>{activeMatches.length}</strong></div>
         <div><span>开放任务</span><strong>{openCount}/{activeMatches.length}</strong></div>
       </div>
-      {batch.last_error ? <Alert tone="warning"><strong>{batch.last_error.code}</strong>{batch.last_error.message}<span>{formatDateTime(batch.last_error.at)}</span></Alert> : null}
       {batch.preview_status !== "completed" && (
         batch.missing_fields.length ? (
           <Panel className="missing-panel">

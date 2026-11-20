@@ -254,7 +254,7 @@ PostgreSQL 保存业务数据、当前前瞻 Article、战报 Article 版本和�
 - 409 `cover_changed` 或 `cover_missing`：恢复对应上传封面，或为 Batch 设置新
   封面并重新 render。
 - 409 `article_incomplete`：根据 `missing_fields` 补齐业务内容后重新 render。
-- 502 `query_failed`、`weather_query_failed` 或 `wechat_failed`：检查对应凭据、
+- 502 `query_failed` 或 `wechat_failed`：检查对应凭据、
   网络、上游额度或微信 IP 白名单，然后明确重试。
 - 502 `batch_queries_failed`：本次 create 的所有缺失组合都查询失败；逐项
   错误位于 `error.details.results`。

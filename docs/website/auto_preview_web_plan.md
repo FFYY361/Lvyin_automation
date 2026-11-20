@@ -132,9 +132,6 @@
 | `cover_storage_key` | `TEXT` NOT NULL，文件 key 或微信 media ID |
 | `cover_content_type` | `VARCHAR(64)` NULL |
 | `current_preview_article_id` | `BIGINT` NULL FK → `articles.id` |
-| `last_error_code` | `VARCHAR(64)` NULL |
-| `last_error_message` | `TEXT` NULL |
-| `last_error_at` | `TIMESTAMPTZ` NULL |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` NOT NULL |
 
 `(batch_date, competition)` 唯一。文件封面 key 为
@@ -301,7 +298,7 @@ Stage 2 的全部操作。
    - 勾选 male、female、futsal；
    - 提交前展示即将创建的日期赛事笛卡尔积；
    - 一次批量创建前瞻任务。
-3. 批次列表页：显示日期、赛事、当前状态、最近错误和重新查询入口。
+3. 批次列表页显示日期、赛事、当前状态和重新查询入口。
 4. 批次详情页：
    - 查看只读比赛数据；
    - 发布或关闭待领取任务；

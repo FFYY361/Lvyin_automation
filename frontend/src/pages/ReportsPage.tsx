@@ -39,7 +39,7 @@ export function ReportsPage() {
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
-    setError(null);
+    if (!silent) setError(null);
     const query = new URLSearchParams();
     if (date) query.set("batch_date", date);
     if (competition) query.set("competition", competition);
@@ -75,7 +75,8 @@ export function ReportsPage() {
     setRefreshing((current) => new Set(current).add(batchId));
     setError(null);
     try {
-      const value = await api<PreviewBatch>(`/api/batches/${batchId}/refresh-data`, { method: "POST" });
+      const value = await api<PreviewBatch & { warning?: string }>(`/api/batches/${batchId}/refresh-data`, { method: "POST" });
+      if (value.warning) setError(`赛程已刷新，天气更新失败：${value.warning}`);
       setDetails((current) => ({ ...current, [batchId]: value }));
       await load(true);
     } catch (value) {

@@ -285,14 +285,6 @@ def _weather_content_changed(existing: Weather | None, values: dict[str, Any]) -
     )
 
 
-def _clear_weather_errors(session: Session, target_date: date) -> None:
-    for batch in session.scalars(select(Batch).where(Batch.batch_date == target_date)):
-        if batch.last_error_code == "weather_query_failed":
-            batch.last_error_code = None
-            batch.last_error_message = None
-            batch.last_error_at = None
-
-
 def upsert_automatic_weather(session: Session, value: DailyWeather) -> bool:
     existing = session.get(Weather, value.forecast_date)
     if existing is not None and existing.source == "manual":
@@ -353,7 +345,6 @@ def set_manual_weather(
                 setattr(existing, name, item)
     if content_changed:
         _invalidate_date(session, target_date)
-    _clear_weather_errors(session, target_date)
     session.flush()
     return existing
 
@@ -388,9 +379,6 @@ async def refresh_weather(
             "batch_ids": [],
         }
         if source == "manual":
-            if not dry_run:
-                with factory.begin() as session:
-                    _clear_weather_errors(session, target_date)
             items.append(item)
             continue
         try:
@@ -416,7 +404,6 @@ async def refresh_weather(
                         )
                 else:
                     changed = upsert_automatic_weather(session, value)
-                    _clear_weather_errors(session, target_date)
                     item["batch_ids"] = sorted(
                         session.info.get("preview_batches_to_render", ())
                     )
@@ -537,9 +524,6 @@ def upsert_source(
     if report_order_before != report_order_after:
         batch.current_report_article_id = None
         batch.updated_at = _now()
-    batch.last_error_code = None
-    batch.last_error_message = None
-    batch.last_error_at = None
     session.flush()
     return changed
 
@@ -583,6 +567,10 @@ async def _query_weather(
 ) -> tuple[dict[date, DailyWeather], dict[date, str]]:
     values: dict[date, DailyWeather] = {}
     warnings: dict[date, str] = {}
+    today = _now().astimezone(SHANGHAI).date()
+    dates = [day for day in dates if day >= today]
+    if not dates:
+        return values, warnings
     try:
         async with factories.weather() as service:
             for target_date in dates:
@@ -793,7 +781,7 @@ async def refresh_batch(
     batch: Batch,
     factories: ExternalFactories,
     settings: WebsiteSettings,
-) -> None:
+) -> str | None:
     config = competition_config(Competition(batch.competition))
     tournament_ids = set(
         session.scalars(select(Match.tournament_id).where(Match.batch_id == batch.id))
@@ -804,6 +792,7 @@ async def refresh_batch(
             "historical_batch_refresh_not_allowed",
             "批次不属于当前配置赛事，不能刷新；已有内容仍可查看和编辑。",
         )
+    warning = None
     try:
         async with factories.queries() as queries:
             builder = PreviewSourceBuilder(
@@ -822,26 +811,16 @@ async def refresh_batch(
         )
         if source is None:
             _deactivate_active_matches(session, batch)
-            batch.last_error_code = None
-            batch.last_error_message = None
-            batch.last_error_at = None
         else:
             upsert_source(session, batch, source, games_by_id)
         current_weather = session.get(Weather, batch.batch_date)
         if current_weather is None or current_weather.source != "manual":
-            try:
-                async with factories.weather() as service:
-                    value = await service.get_weather(HAIDIAN_ADCODE, batch.batch_date)
-                upsert_automatic_weather(session, value)
-            except Exception as exc:
-                batch.last_error_code = "weather_query_failed"
-                batch.last_error_message = str(exc)
-                batch.last_error_at = _now()
+            forecasts, warnings = await _query_weather([batch.batch_date], factories)
+            if batch.batch_date in forecasts:
+                upsert_automatic_weather(session, forecasts[batch.batch_date])
+            warning = warnings.get(batch.batch_date)
     except Exception as exc:
-        batch.last_error_code = "query_failed"
-        batch.last_error_message = str(exc)
-        batch.last_error_at = _now()
-        session.commit()
+        session.rollback()
         raise WorkflowError(502, "query_failed", str(exc)) from exc
     refresh_preview_articles(session, settings)
     session.commit()
@@ -855,6 +834,7 @@ async def refresh_batch(
         )
     )
     await _cache_game_qr_codes(game_ids, factories, settings)
+    return warning
 
 
 async def _cache_game_qr_codes(
@@ -1778,15 +1758,6 @@ def batch_payload(session: Session, batch: Batch, *, detail: bool) -> dict[str, 
         "current_report_article_id": batch.current_report_article_id,
         "latest_report_article_id": latest_report_article_id,
         "missing_fields": missing,
-        "last_error": (
-            None
-            if batch.last_error_code is None
-            else {
-                "code": batch.last_error_code,
-                "message": batch.last_error_message,
-                "at": batch.last_error_at.isoformat() if batch.last_error_at else None,
-            }
-        ),
         "created_at": batch.created_at.isoformat(),
         "updated_at": batch.updated_at.isoformat(),
     }

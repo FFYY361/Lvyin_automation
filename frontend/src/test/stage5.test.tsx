@@ -161,7 +161,7 @@ describe("stage 5 match permissions", () => {
   it("uses the body-only endpoint for an owning normal user", async () => {
     const batch: PreviewBatch = {
       id: 5, batch_date: "2026-08-08", competition: "male", preview_status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
-      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_preview_article_id: null, latest_preview_article_id: null, current_report_article_id: null, latest_report_article_id: null, missing_fields: [], last_error: null,
+      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_preview_article_id: null, latest_preview_article_id: null, current_report_article_id: null, latest_report_article_id: null, missing_fields: [],
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z", matches: [task],
     };
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -195,7 +195,7 @@ describe("stage 5 batch permissions", () => {
     const other = { ...task, game_id: 12, claimed_by_user_id: 9 };
     const batch = {
       id: 5, batch_date: "2026-08-08", competition: "male", preview_status: "incomplete", headline: "前瞻", editors: [], reviewers: [], approvers: [],
-      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_preview_article_id: null, latest_preview_article_id: null, current_report_article_id: null, latest_report_article_id: null, missing_fields: [], last_error: null,
+      cover: { kind: "media_id", storage_key: "cover", content_type: null }, current_preview_article_id: null, latest_preview_article_id: null, current_report_article_id: null, latest_report_article_id: null, missing_fields: [],
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z", matches: [task, other],
     } satisfies PreviewBatch;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(json(String(input).includes("/api/admin/users/9") ? { id: 9, display_name: "成员乙" } : batch))));

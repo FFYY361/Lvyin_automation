@@ -22,7 +22,7 @@ export function BatchesPage() {
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
-    setError(null);
+    if (!silent) setError(null);
     const query = new URLSearchParams();
     if (date) query.set("batch_date", date);
     if (competition) query.set("competition", competition);
@@ -43,7 +43,8 @@ export function BatchesPage() {
     setRefreshing((current) => new Set(current).add(id));
     setError(null);
     try {
-      await api(`/api/batches/${id}/refresh-data`, { method: "POST" });
+      const result = await api<{ warning?: string }>(`/api/batches/${id}/refresh-data`, { method: "POST" });
+      if (result.warning) setError(`赛程已刷新，天气更新失败：${result.warning}`);
       await load(true);
     } catch (value) {
       setError(errorMessage(value));

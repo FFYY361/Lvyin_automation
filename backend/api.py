@@ -828,9 +828,12 @@ def create_app(
         batch = session.get(Batch, batch_id)
         if batch is None:
             raise _not_found("batch")
-        await refresh_batch(session, batch, resolved_factories, resolved_settings)
+        warning = await refresh_batch(session, batch, resolved_factories, resolved_settings)
         session.refresh(batch)
-        return batch_payload(session, batch, detail=True)
+        result = batch_payload(session, batch, detail=True)
+        if warning:
+            result["warning"] = warning
+        return result
 
     @app.patch("/api/batches/{batch_id}")
     def update_batch(
