@@ -4,12 +4,8 @@ import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api";
 import { useAuth } from "../auth";
 import { Alert, Badge, BatchGroupDivider, Button, EmptyState, LoadingScreen, PageHeader, Panel } from "../components";
-import { competitionLabels, labelMissingField, statusLabels, type BatchStatus, type Competition, type PreviewBatch } from "../types";
+import { competitionLabels, labelMissingField, statusLabels, statusTones, type BatchStatus, type Competition, type PreviewBatch } from "../types";
 import { formatDate, formatDateTime, groupBatchesByDate, hasAdminRole } from "../utils";
-
-function statusTone(status: BatchStatus): string {
-  return status === "ready" ? "success" : status === "drafted" ? "info" : "warning";
-}
 
 export function BatchesPage() {
   const { user } = useAuth();
@@ -67,8 +63,12 @@ export function BatchesPage() {
     <tr key={batch.id}>
       <td data-label="日期"><strong>{formatDate(batch.batch_date)}</strong><small>#{batch.id}</small></td>
       <td data-label="赛事">{competitionLabels[batch.competition]}</td>
-      <td data-label="状态"><Badge tone={statusTone(batch.preview_status)}>{statusLabels[batch.preview_status]}</Badge></td>
-      <td data-label="缺项">{batch.missing_fields.length ? <span title={batch.missing_fields.map((item) => labelMissingField(item)).join("、")}>{batch.missing_fields.length} 项待补充</span> : <span className="success-text">完整</span>}</td>
+      <td data-label="状态"><Badge tone={statusTones[batch.preview_status]}>{statusLabels[batch.preview_status]}</Badge></td>
+      <td data-label="缺项">
+        {batch.preview_status === "completed" ? "—" : batch.missing_fields.length ? (
+          <span title={batch.missing_fields.map((item) => labelMissingField(item)).join("、")}>{batch.missing_fields.length} 项待补充</span>
+        ) : <span className="success-text">完整</span>}
+      </td>
       <td data-label="更新时间">{formatDateTime(batch.updated_at)}</td>
       <td data-label="操作"><div className="row-actions">{isAdmin ? <><Button variant="quiet" loading={refreshing.has(batch.id)} onClick={() => void refresh(batch.id)} title="重新查询"><RefreshCw size={16} /></Button></> : null}<Link className="icon-link" to={`/previews/${batch.id}`} aria-label="打开批次"><ArrowRight size={17} /></Link></div></td>
     </tr>
@@ -80,7 +80,7 @@ export function BatchesPage() {
       <Panel className="filter-bar batch-filter">
         <label><span>日期</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
         <label><span>赛事</span><select value={competition} onChange={(event) => setCompetition(event.target.value as Competition | "")}><option value="">全部赛事</option><option value="male">男足</option><option value="female">女足</option><option value="futsal">五人制</option></select></label>
-        <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value as BatchStatus | "")}><option value="">全部状态</option><option value="incomplete">待完善</option><option value="ready">可发布</option><option value="drafted">已建草稿</option></select></label>
+        <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value as BatchStatus | "")}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="filter-checkbox"><input type="checkbox" checked={showFutsal} onChange={(event) => setShowFutsal(event.target.checked)} /><span>显示五人制批次</span></label>
         <Button onClick={() => void load()}><Search size={16} />查询</Button>
       </Panel>

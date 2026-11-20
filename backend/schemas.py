@@ -19,6 +19,7 @@ class BatchStatus(StrEnum):
     INCOMPLETE = "incomplete"
     READY = "ready"
     DRAFTED = "drafted"
+    COMPLETED = "completed"
 
 
 def validate_username(value: str) -> str:

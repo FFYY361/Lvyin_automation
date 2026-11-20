@@ -6,7 +6,7 @@ import { api, errorMessage, jsonBody } from "../api";
 import { useAuth } from "../auth";
 import { useClaimantNames } from "../claimants";
 import { Alert, Badge, Button, EmptyState, Field, LoadingScreen, NameInput, PageHeader, Panel, SectionTitle } from "../components";
-import { competitionLabels, labelMissingField, statusLabels, type AITitleContext, type AITitleResult, type PreviewBatch, type PreviewMatch, type Weather } from "../types";
+import { competitionLabels, labelMissingField, statusLabels, statusTones, type AITitleContext, type AITitleResult, type PreviewBatch, type PreviewMatch, type Weather } from "../types";
 import { formatDateTime, matchTaskStatus, namesText, parseNames, teamName } from "../utils";
 
 function MatchCard({ batchId, match, claimantName }: { batchId: number; match: PreviewMatch; claimantName: string }) {
@@ -174,12 +174,19 @@ export function BatchDetailPage() {
       {error ? <Alert tone="danger" onDismiss={() => setError(null)}>{error}</Alert> : null}
       {success ? <Alert tone="success" onDismiss={() => setSuccess(null)}>{success}</Alert> : null}
       <div className="batch-summary">
-        <div><span>当前状态</span><Badge tone={batch.preview_status === "ready" ? "success" : batch.preview_status === "drafted" ? "info" : "warning"}>{statusLabels[batch.preview_status]}</Badge></div>
+        <div><span>当前状态</span><Badge tone={statusTones[batch.preview_status]}>{statusLabels[batch.preview_status]}</Badge></div>
         <div><span>有效比赛</span><strong>{activeMatches.length}</strong></div>
         <div><span>开放任务</span><strong>{openCount}/{activeMatches.length}</strong></div>
       </div>
       {batch.last_error ? <Alert tone="warning"><strong>{batch.last_error.code}</strong>{batch.last_error.message}<span>{formatDateTime(batch.last_error.at)}</span></Alert> : null}
-      {batch.missing_fields.length ? <Panel className="missing-panel"><SectionTitle title="完整性缺项" description="这些状态由后端实时计算。" /><div className="chip-list">{batch.missing_fields.map((item) => <Badge tone="warning" key={item}>{labelMissingField(item, batch.matches ?? [])}</Badge>)}</div></Panel> : <Alert tone="success">{isAdmin ? "当前内容完整，可以渲染并加入微信草稿。" : "当前批次内容完整。"}</Alert>}
+      {batch.preview_status !== "completed" && (
+        batch.missing_fields.length ? (
+          <Panel className="missing-panel">
+            <SectionTitle title="完整性缺项" description="这些状态由后端实时计算。" />
+            <div className="chip-list">{batch.missing_fields.map((item) => <Badge tone="warning" key={item}>{labelMissingField(item, batch.matches ?? [])}</Badge>)}</div>
+          </Panel>
+        ) : <Alert tone="success">{isAdmin ? "当前内容完整，可以渲染并加入微信草稿。" : "当前批次内容完整。"}</Alert>
+      )}
 
       {isAdmin ? <Panel className="headline-panel">
         <SectionTitle title="文章标题" description="标题是文章的主要信息，修改后需要重新渲染文章。" actions={<FileText size={20} />} />

@@ -6,7 +6,7 @@ import sys
 import tempfile
 import uuid
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +50,7 @@ class _FakeWechat:
 
 
 def _seed(factory, default_cover_media_id: str) -> tuple[int, int]:
-    target_date = date(2026, 8, 8)
+    target_date = datetime.now(SHANGHAI).date() + timedelta(days=1)
     with factory.begin() as session:
         user = User(
             username="smoke-admin",
@@ -94,7 +94,7 @@ def _seed(factory, default_cover_media_id: str) -> tuple[int, int]:
                 tournament_name="Smoke Tournament",
                 competition_name="女足",
                 stage="测试",
-                kickoff=datetime(2026, 8, 8, 15, tzinfo=SHANGHAI),
+                kickoff=datetime.combine(target_date, time(15), tzinfo=SHANGHAI),
                 venue="紫荆操场",
                 home_snapshot={
                     "tournament_team_id": 990001,

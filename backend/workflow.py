@@ -915,6 +915,8 @@ def completeness(session: Session, batch: Batch) -> list[str]:
 
 
 def batch_status(session: Session, batch: Batch) -> str:
+    if batch.batch_date < _now().astimezone(SHANGHAI).date():
+        return "completed"
     if completeness(session, batch):
         return "incomplete"
     if batch.current_preview_article_id is not None:

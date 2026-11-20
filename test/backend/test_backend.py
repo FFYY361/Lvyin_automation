@@ -561,7 +561,9 @@ class _FailingWechat(_FakeWechat):
 def test_default_media_id_draft_is_ordered_and_idempotent(
     session_factory,
     settings: WebsiteSettings,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr("backend.workflow._now", lambda: datetime(2026, 8, 8, tzinfo=UTC))
     fake = _FakeWechat()
     factories = ExternalFactories(wechat=lambda: fake)
     with session_factory.begin() as session:
@@ -780,6 +782,7 @@ def test_weather_refresh_updates_all_competitions_and_preserves_tasks(
     session_factory, settings, monkeypatch,
 ) -> None:
     today = date(2026, 8, 8)
+    monkeypatch.setattr("backend.workflow._now", lambda: datetime(2026, 8, 7, 16, 30, tzinfo=UTC))
     with session_factory.begin() as session:
         first = _batch(session, complete=True)
         second = _batch(session, complete=True, competition="male", game_id=9002)
@@ -809,7 +812,6 @@ def test_weather_refresh_updates_all_competitions_and_preserves_tasks(
         batch_ids = [first.id, second.id]
         assert batch_status(session, first) == "drafted"
 
-    monkeypatch.setattr("backend.workflow._now", lambda: datetime(2026, 8, 7, 16, 30, tzinfo=UTC))
     calls = []
     result = asyncio.run(refresh_weather(
         session_factory, settings,
@@ -1050,6 +1052,37 @@ def test_article_media_id_sha_is_checked(
         article.cover_storage_key = "changed-after-render"
         with pytest.raises(WorkflowError, match="fingerprint"):
             article_domain(settings, article)
+
+
+def test_completed_preview_status_at_beijing_midnight(session_factory, settings, monkeypatch):
+    now = datetime(2026, 8, 8, 15, 59, tzinfo=UTC)
+    monkeypatch.setattr("backend.workflow._now", lambda: now)
+    with session_factory.begin() as session:
+        session.add(User(username="reader", display_name="读者", role="user",
+                         password_hash=hash_password("password-123")))
+        finished = _batch(session, complete=True)
+        session.get(Match, 9001).status = "finished"
+        ready = _batch(session, complete=True, competition="male", game_id=9002)
+        drafted = _batch(session, complete=True, competition="futsal", game_id=9003)
+        tomorrow = _batch(session, complete=False, target_date=date(2026, 8, 9))
+        article, _ = render_batch(session, settings, drafted)
+        asyncio.run(create_wechat_draft(session, settings, ExternalFactories(wechat=_FakeWechat),
+                                        [article.id], confirm=True))
+
+    app = create_app(settings=settings, session_factory=session_factory)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "reader", "password": "password-123"}).raise_for_status()
+        before = client.get("/api/batches").json()["items"]
+        assert {row["id"]: row["preview_status"] for row in before} == {
+            finished.id: "incomplete", ready.id: "ready", drafted.id: "drafted", tomorrow.id: "incomplete",
+        }
+        completed_url = "/api/batches?preview_status=completed"
+        assert client.get(completed_url).json()["items"] == []
+        now += timedelta(minutes=1)
+        historical_ids = {finished.id, ready.id, drafted.id}
+        assert {row["id"] for row in client.get(completed_url).json()["items"]} == historical_ids
+        for batch_id in historical_ids:
+            assert client.get(f"/api/batches/{batch_id}").json()["preview_status"] == "completed"
 
 
 def test_batch_updates_existing_preview_and_renders_missing_article(

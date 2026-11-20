@@ -112,6 +112,25 @@ describe("batch and match pages", () => {
     expect(screen.queryByLabelText("前瞻正文")).not.toBeInTheDocument();
   });
 
+  it("shows a dash for completed batches in the history list", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json({
+      items: [{ ...batch, batch_date: "2000-01-01", preview_status: "completed" }],
+    }))));
+    renderRoute("/previews", "/previews", <BatchesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /历史批次/ }));
+    expect(screen.getByRole("option", { name: "已完成" })).toHaveValue("completed");
+    const row = screen.getByRole("row", { name: /已完成/ });
+    expect(within(row).getByRole("cell", { name: "—" })).toBeInTheDocument();
+  });
+
+  it.each([{ missing_fields: ["matches"] }, { missing_fields: [] }])("hides completed batch notices with $missing_fields", async ({ missing_fields }) => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json({ ...batch, preview_status: "completed", missing_fields }))));
+    renderRoute("/previews/1", "/previews/:batchId", <BatchDetailPage />);
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
+    expect(screen.queryByText("完整性缺项")).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前内容完整/)).not.toBeInTheDocument();
+  });
+
   it("saves the headline and personnel as separate batch patches", async () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => Promise.resolve(json(batch)));
     vi.stubGlobal("fetch", fetchMock);

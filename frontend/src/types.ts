@@ -1,5 +1,5 @@
 export type Competition = "male" | "female" | "futsal";
-export type BatchStatus = "incomplete" | "ready" | "drafted";
+export type BatchStatus = "incomplete" | "ready" | "drafted" | "completed";
 
 export interface User {
   id: number;
@@ -367,6 +367,14 @@ export const statusLabels: Record<BatchStatus, string> = {
   incomplete: "待完善",
   ready: "可发布",
   drafted: "已建草稿",
+  completed: "已完成",
+};
+
+export const statusTones: Record<BatchStatus, string> = {
+  incomplete: "warning",
+  ready: "success",
+  drafted: "info",
+  completed: "neutral",
 };
 
 export const missingFieldLabels: Record<string, string> = {
